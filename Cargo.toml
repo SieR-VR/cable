@@ -1,0 +1,9 @@
+[workspace]
+resolver = "3"
+members = ["crates/tauri", "crates/driver", "crates/common"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
