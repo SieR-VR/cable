@@ -1,0 +1,26 @@
+[package]
+name = "cable-driver"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.wdk.driver-model]
+driver-type = "WDM"
+
+[lib]
+crate-type = ["cdylib"]
+
+[build-dependencies]
+wdk-build = { version = "0.5.1" }
+
+[dependencies]
+wdk-alloc = { version = "0.4.1" }
+wdk = { version = "0.4.1" }
+wdk-panic = { version = "0.4.1" }
+wdk-sys = { version = "0.5.1" }
+common = { path = "../common" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
