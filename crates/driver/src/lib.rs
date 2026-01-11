@@ -5,7 +5,6 @@ extern crate alloc;
 #[cfg(not(test))]
 extern crate wdk_panic;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use common::{
   AudioFormat, DeviceControlPayload, IoctlRequest, IOCTL_CREATE_VIRTUAL_DEVICE,
@@ -14,15 +13,24 @@ use common::{
 use wdk_alloc::WdkAllocator;
 use wdk_sys::{
   ntddk::{
-    IoCreateDevice, IoCreateSymbolicLink, IoDeleteDevice, IoDeleteSymbolicLink,
-    IoGetCurrentIrpStackLocation, IofCompleteRequest,
+    IoCreateDevice, IoCreateSymbolicLink, IoDeleteDevice, IoDeleteSymbolicLink, IofCompleteRequest,
   },
-  DEVICE_OBJECT, DO_BUFFERED_IO, DRIVER_OBJECT, FILE_DEVICE_SECURE_OPEN, FILE_DEVICE_UNKNOWN, IRP,
-  IRP_MJ_CLOSE, IRP_MJ_CREATE, IRP_MJ_DEVICE_CONTROL, IRP_MJ_PNP, IRP_MN_REMOVE_DEVICE,
-  IRP_MN_START_DEVICE, IRP_MN_STOP_DEVICE, NTSTATUS, OBJ_CASE_INSENSITIVE, OBJ_KERNEL_HANDLE,
-  STATUS_INVALID_DEVICE_REQUEST, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, UNICODE_STRING,
-  _DEVICE_OBJECT,
+  DEVICE_OBJECT, DO_BUFFERED_IO, DRIVER_OBJECT, FILE_DEVICE_SECURE_OPEN, FILE_DEVICE_UNKNOWN,
+  IO_STACK_LOCATION, IRP, IRP_MJ_CLOSE, IRP_MJ_CREATE, IRP_MJ_DEVICE_CONTROL, IRP_MJ_PNP,
+  IRP_MN_REMOVE_DEVICE, IRP_MN_START_DEVICE, NTSTATUS, STATUS_INVALID_DEVICE_REQUEST,
+  STATUS_SUCCESS, UNICODE_STRING,
 };
+
+/// Get the current IRP stack location
+unsafe fn io_get_current_irp_stack_location(irp: *mut IRP) -> *mut IO_STACK_LOCATION {
+  let irp_ref = &*irp;
+  irp_ref
+    .Tail
+    .Overlay
+    .__bindgen_anon_2
+    .__bindgen_anon_1
+    .CurrentStackLocation
+}
 
 #[cfg(not(test))]
 #[global_allocator]
@@ -85,12 +93,12 @@ pub unsafe extern "system" fn driver_entry(
 }
 
 /// Unload Callback
-unsafe extern "system" fn driver_unload(_driver_object: *mut DRIVER_OBJECT) {
+unsafe extern "C" fn driver_unload(_driver_object: *mut DRIVER_OBJECT) {
   wdk::println!("CableAudioBus: Driver Unload");
 }
 
 /// AddDevice Callback (PnP)
-unsafe extern "system" fn add_device(
+unsafe extern "C" fn add_device(
   driver_object: *mut DRIVER_OBJECT,
   _physical_device_object: *mut DEVICE_OBJECT,
 ) -> NTSTATUS {
@@ -141,28 +149,25 @@ unsafe extern "system" fn add_device(
 }
 
 /// Create/Close Dispatch
-unsafe extern "system" fn dispatch_create_close(
+unsafe extern "C" fn dispatch_create_close(
   _device_object: *mut DEVICE_OBJECT,
   irp: *mut IRP,
 ) -> NTSTATUS {
   (*irp).IoStatus.Information = 0;
-  (*irp).IoStatus.Status = STATUS_SUCCESS;
+  (*irp).IoStatus.__bindgen_anon_1.Status = STATUS_SUCCESS;
   IofCompleteRequest(irp, 0);
   STATUS_SUCCESS
 }
 
 /// PnP Dispatch
-unsafe extern "system" fn dispatch_pnp(
-  device_object: *mut DEVICE_OBJECT,
-  irp: *mut IRP,
-) -> NTSTATUS {
-  let stack = IoGetCurrentIrpStackLocation(irp);
+unsafe extern "C" fn dispatch_pnp(device_object: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+  let stack = io_get_current_irp_stack_location(irp);
   let minor_function = (*stack).MinorFunction;
 
   match minor_function as u32 {
     IRP_MN_START_DEVICE => {
       wdk::println!("CableAudioBus: PnP Start Device");
-      (*irp).IoStatus.Status = STATUS_SUCCESS;
+      (*irp).IoStatus.__bindgen_anon_1.Status = STATUS_SUCCESS;
     }
     IRP_MN_REMOVE_DEVICE => {
       wdk::println!("CableAudioBus: PnP Remove Device");
@@ -171,25 +176,25 @@ unsafe extern "system" fn dispatch_pnp(
       let mut link_us = link_wrapper.unicode_string;
       IoDeleteSymbolicLink(&mut link_us);
       IoDeleteDevice(device_object);
-      (*irp).IoStatus.Status = STATUS_SUCCESS;
+      (*irp).IoStatus.__bindgen_anon_1.Status = STATUS_SUCCESS;
     }
     _ => {
       // 다른 PnP 요청은 기본 성공 처리
-      (*irp).IoStatus.Status = STATUS_SUCCESS;
+      (*irp).IoStatus.__bindgen_anon_1.Status = STATUS_SUCCESS;
     }
   }
 
-  let status = (*irp).IoStatus.Status;
+  let status = (*irp).IoStatus.__bindgen_anon_1.Status;
   IofCompleteRequest(irp, 0);
   status
 }
 
 /// Device Control Dispatch (IOCTL Handler)
-unsafe extern "system" fn dispatch_device_control(
+unsafe extern "C" fn dispatch_device_control(
   _device_object: *mut DEVICE_OBJECT,
   irp: *mut IRP,
 ) -> NTSTATUS {
-  let stack = IoGetCurrentIrpStackLocation(irp);
+  let stack = io_get_current_irp_stack_location(irp);
   let io_control_code = (*stack).Parameters.DeviceIoControl.IoControlCode;
   let input_len = (*stack).Parameters.DeviceIoControl.InputBufferLength;
 
@@ -241,7 +246,7 @@ unsafe extern "system" fn dispatch_device_control(
   };
 
   (*irp).IoStatus.Information = 0;
-  (*irp).IoStatus.Status = status;
+  (*irp).IoStatus.__bindgen_anon_1.Status = status;
   IofCompleteRequest(irp, 0);
   status
 }

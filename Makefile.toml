@@ -1,0 +1,2 @@
+[env]
+CARGO_MAKE_WORKSPACE_SKIP_MEMBERS = ["crates/tauri"]
