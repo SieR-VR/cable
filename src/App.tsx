@@ -1,80 +1,85 @@
-import { useCallback, useState } from "react";
+import { MouseEvent, useCallback, useEffect } from "react";
 import {
   ReactFlow,
-  applyEdgeChanges,
-  applyNodeChanges,
   addEdge,
   Background,
   BackgroundVariant,
-  MiniMap,
-  Position,
-  Panel,
+  Connection,
+  useNodesState,
+  useEdgesState,
 } from "@xyflow/react";
-
-import { invoke } from "@tauri-apps/api/core";
 
 import "@xyflow/react/dist/style.css";
 
+import Menu from "./components/Menu";
+import { initializeApp, setContextMenuOpen, useAppState } from "./state";
+import { ContextMenu } from "./components/ContextMenu";
+import { nodeTypes } from "./types";
+
 const initialNodes = [
   {
-    id: "n1",
-    position: { x: 0, y: 0 },
-    data: { label: "Node 1" },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
+    id: "node-1",
+    type: "audioInputDevice",
+    dragHandle: ".drag-handle__custom",
+    position: { x: 100, y: 0 },
+    data: {},
   },
   {
-    id: "n2",
-    position: { x: 0, y: 100 },
-    data: { label: "Node 2" },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
+    id: "node-2",
+    type: "audioOutputDevice",
+    dragHandle: ".drag-handle__custom",
+    position: { x: 500, y: 0 },
+    data: {},
   },
 ];
-const initialEdges = [{ id: "n1-n2", source: "n1", target: "n2" }];
 
 function App() {
-  const [nodes, setNodes] = useState(initialNodes);
-  const [edges, setEdges] = useState(initialEdges);
+  const { contextMenuOpen } = useAppState();
 
-  const onNodesChange = useCallback(
-    (changes) =>
-      setNodes((nodesSnapshot) => applyNodeChanges(changes, nodesSnapshot)),
-    [],
-  );
-  const onEdgesChange = useCallback(
-    (changes) =>
-      setEdges((edgesSnapshot) => applyEdgeChanges(changes, edgesSnapshot)),
-    [],
-  );
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+
   const onConnect = useCallback(
-    (params) => setEdges((edgesSnapshot) => addEdge(params, edgesSnapshot)),
+    (connection: Connection) =>
+      setEdges((edgesSnapshot) => addEdge(connection, edgesSnapshot)),
     [],
   );
+
+  const onContextMenu = useCallback((event: MouseEvent) => {
+    event.preventDefault();
+
+    setContextMenuOpen(true, { x: event.clientX, y: event.clientY });
+  }, []);
+
+  const onClick = useCallback(() => {
+    if (contextMenuOpen) {
+      setContextMenuOpen(false);
+    }
+  }, [contextMenuOpen]);
+
+  useEffect(() => {
+    document.title = "Cable";
+    initializeApp();
+  }, []);
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      fitView
-    >
-      <Background color="black" variant={BackgroundVariant.Dots} />
-      <MiniMap nodeColor={() => "blue"} nodeStrokeWidth={3} zoomable pannable />
-      <Panel position="bottom-center">
-        <button
-          onClick={() => {
-            console.log("fetching audio devices...");
-            invoke("get_audio_devices").then((devices) => console.log(devices));
-          }}
-          className="border left-5 top-5 z-10"
-        >
-          Get Audio Devices
-        </button>
-      </Panel>
-    </ReactFlow>
+    <div className="h-full w-full">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        fitView
+        onContextMenu={onContextMenu}
+        onClick={onClick}
+      >
+        <Background color="black" variant={BackgroundVariant.Dots} />
+      </ReactFlow>
+      <Menu />
+      <ContextMenu />
+    </div>
   );
 }
 
