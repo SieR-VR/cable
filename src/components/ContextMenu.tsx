@@ -1,7 +1,7 @@
-import { useAppState } from "@/state";
+import { useAppStore } from "@/state";
 
 export function ContextMenu() {
-  const { contextMenuOpen, contextMenuPosition } = useAppState();
+  const { contextMenuOpen, contextMenuPosition } = useAppStore();
   if (!contextMenuOpen) {
     return null;
   }

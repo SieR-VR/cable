@@ -1,3 +1,4 @@
+import { NodeTypes } from "@xyflow/react";
 import AudioInputDeviceNode from "./nodes/AudioInputDevice";
 import AudioOutputDeviceNode from "./nodes/AudioOutputDevice";
 
@@ -10,4 +11,4 @@ export interface AudioDevice {
 export const nodeTypes = {
   audioInputDevice: AudioInputDeviceNode,
   audioOutputDevice: AudioOutputDeviceNode,
-};
+} satisfies NodeTypes;

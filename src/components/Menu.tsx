@@ -1,10 +1,16 @@
 import { MenuIcon, XIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { setMenuOpen, setSelectedHost, useAppState } from "@/state";
+import { useAppStore } from "@/state";
 
 export default function Menu() {
-  const { menuOpen, availableAudioHosts, selectedAudioHost } = useAppState();
+  const {
+    menuOpen,
+    availableAudioHosts,
+    selectedAudioHost,
+    setMenuOpen,
+    setSelectedAudioHost,
+  } = useAppStore();
 
   return (
     <>
@@ -28,7 +34,7 @@ export default function Menu() {
           className="border border-black rounded text-black"
           onChange={(e) => {
             console.log("selected host:", e.target.value);
-            setSelectedHost(e.target.value);
+            setSelectedAudioHost(e.target.value);
           }}
           value={selectedAudioHost ?? ""}
         >

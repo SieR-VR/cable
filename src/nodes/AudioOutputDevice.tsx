@@ -1,8 +1,8 @@
-import { useAppState } from "@/state";
+import { useAppStore } from "@/state";
 import { Handle, Position } from "@xyflow/react";
 
 export default function AudioOutputDevice() {
-  const { availableAudioOutputDevices } = useAppState();
+  const { availableAudioOutputDevices } = useAppStore();
 
   return (
     <div className="h-32 bg-gray-700 rounded-lg flex flex-col items-center text-white">

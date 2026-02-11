@@ -1,9 +1,37 @@
+import { createWithEqualityFn } from "zustand/traditional";
 import { invoke } from "@tauri-apps/api/core";
-import { Edge, Node, XYPosition } from "@xyflow/react";
-import { proxy, useSnapshot } from "valtio";
+import {
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+  Connection,
+  Edge,
+  EdgeChange,
+  Node,
+  NodeChange,
+  XYPosition,
+} from "@xyflow/react";
+
 import { AudioDevice } from "./types";
 
-interface AppState {
+const initialNodes = [
+  {
+    id: "node-1",
+    type: "audioInputDevice",
+    dragHandle: ".drag-handle__custom",
+    position: { x: 100, y: 0 },
+    data: {},
+  },
+  {
+    id: "node-2",
+    type: "audioOutputDevice",
+    dragHandle: ".drag-handle__custom",
+    position: { x: 500, y: 0 },
+    data: {},
+  },
+];
+
+export interface AppState {
   menuOpen: boolean;
 
   contextMenuOpen: boolean;
@@ -12,11 +40,27 @@ interface AppState {
   availableAudioHosts: string[] | null;
   selectedAudioHost: string | null;
 
-  availableAudioInputDevices?: AudioDevice[] | null;
-  availableAudioOutputDevices?: AudioDevice[] | null;
+  availableAudioInputDevices: AudioDevice[] | null;
+  availableAudioOutputDevices: AudioDevice[] | null;
+
+  nodes: Node[];
+  edges: Edge[];
+
+  setMenuOpen: (open: boolean) => void;
+
+  setContextMenuOpen: (open: boolean, position?: XYPosition) => void;
+
+  setSelectedAudioHost: (host: string) => void;
+
+  initializeApp: () => Promise<void>;
+
+  onNodesChange: (changes: NodeChange[]) => void;
+  onEdgesChange: (changes: EdgeChange[]) => void;
+  onConnect: (connection: Connection) => void;
+  updateNode: (id: string, data: any) => void;
 }
 
-export const appState = proxy<AppState>({
+export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   menuOpen: false,
 
   contextMenuOpen: false,
@@ -27,47 +71,66 @@ export const appState = proxy<AppState>({
 
   availableAudioInputDevices: null,
   availableAudioOutputDevices: null,
-});
 
-export const useAppState = () => useSnapshot(appState);
+  nodes: initialNodes,
+  edges: [],
 
-export function setMenuOpen(open: boolean) {
-  appState.menuOpen = open;
-}
+  setMenuOpen: (open: boolean) => set({ menuOpen: open }),
 
-export function setSelectedHost(host: string) {
-  appState.selectedAudioHost = host;
-}
+  setContextMenuOpen: (open: boolean, position: XYPosition = { x: 0, y: 0 }) =>
+    set({ contextMenuOpen: open, contextMenuPosition: position }),
 
-export function initializeApp() {
-  async function initHosts() {
-    const hosts = await invoke("get_audio_hosts");
-    appState.availableAudioHosts = hosts;
-    appState.selectedAudioHost = hosts[0] || null;
+  setSelectedAudioHost: (host: string) => set({ selectedAudioHost: host }),
 
-    return hosts[0] || null;
-  }
+  initializeApp: async () => {
+    async function initHosts() {
+      const hosts = await invoke("get_audio_hosts");
+      set({ availableAudioHosts: hosts, selectedAudioHost: hosts[0] || null });
 
-  async function initDevices(host: string | null) {
-    if (!host) {
-      appState.availableAudioInputDevices = null;
-      return;
+      return hosts[0] || null;
     }
 
-    const [inputDevices, outputDevices] = await invoke("get_audio_devices", {
-      host,
+    async function initDevices(host: string | null) {
+      if (!host) {
+        set({ availableAudioInputDevices: null });
+        return;
+      }
+
+      const [inputDevices, outputDevices] = await invoke("get_audio_devices", {
+        host,
+      });
+      set({
+        availableAudioInputDevices: inputDevices,
+        availableAudioOutputDevices: outputDevices,
+      });
+    }
+
+    const host = await initHosts();
+    await initDevices(host);
+  },
+
+  onNodesChange: (changes) => {
+    set({
+      nodes: applyNodeChanges(changes, get().nodes),
     });
-    appState.availableAudioInputDevices = inputDevices;
-    appState.availableAudioOutputDevices = outputDevices;
-  }
+  },
 
-  initHosts().then(initDevices);
-}
+  onEdgesChange: (changes) => {
+    set({
+      edges: applyEdgeChanges(changes, get().edges),
+    });
+  },
 
-export function setContextMenuOpen(
-  open: boolean,
-  position: XYPosition = { x: 0, y: 0 },
-) {
-  appState.contextMenuOpen = open;
-  appState.contextMenuPosition = position;
-}
+  onConnect: (connection) => {
+    set({
+      edges: addEdge(connection, get().edges),
+    });
+  },
+
+  updateNode: (id: string, data: any) =>
+    set({
+      nodes: get().nodes.map((node) =>
+        node.id === id ? { ...node, data: { ...node.data, ...data } } : node,
+      ),
+    }),
+}));

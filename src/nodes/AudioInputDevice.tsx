@@ -1,8 +1,13 @@
-import { useAppState } from "@/state";
-import { Handle, Position } from "@xyflow/react";
+import { Handle, NodeProps, Position } from "@xyflow/react";
+import { AppState, useAppStore } from "@/state";
 
-export default function AudioInputDevice() {
-  const { availableAudioInputDevices } = useAppState();
+const selector = (id: string) => (store: AppState) => ({
+  setDeviceId: (deviceId: string) => store.updateNode(id, { deviceId }),
+});
+
+export default function AudioInputDevice({ id }: NodeProps) {
+  const { availableAudioInputDevices } = useAppStore();
+  const { setDeviceId } = useAppStore(selector(id));
 
   return (
     <div className="h-32 bg-gray-700 rounded-lg flex flex-col items-center text-white">
@@ -11,7 +16,10 @@ export default function AudioInputDevice() {
         Audio input device
       </div>
       <div className="w-full flex flex-col p-2">
-        <select className="w-full p-1 rounded bg-gray-500">
+        <select
+          className="w-full p-1 rounded bg-gray-500"
+          onChange={(e) => setDeviceId(e.target.value)}
+        >
           {availableAudioInputDevices ? (
             availableAudioInputDevices.map((device) => (
               <option key={device.id} value={device.id}>
