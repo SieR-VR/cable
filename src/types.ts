@@ -6,6 +6,10 @@ export interface AudioDevice {
   id: string;
   readable_name: string;
   descriptions: string[] | null;
+
+  frequency: number;
+  channels: number;
+  bits_per_sample: number;
 }
 
 export const nodeTypes = {

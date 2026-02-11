@@ -1,13 +1,41 @@
 use cpal::traits::{DeviceTrait, HostTrait};
+use serde::{Deserialize, Serialize};
 use tauri::Builder;
 
 struct AppData {}
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AudioDevice {
   id: String,
   readable_name: String,
+
+  frequency: u32,
+  channels: u16,
+  bits_per_sample: usize,
+
   descriptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AudioGraph {
+  nodes: Vec<AudioNode>,
+  edges: Vec<AudioEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum AudioNode {
+  AudioInputDevice(AudioDevice),
+  AudioOutputDevice(AudioDevice),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AudioEdge {
+  from: String,
+  to: String,
+
+  freqency: Option<u32>,
+  channels: Option<u16>,
+  bits_per_sample: Option<usize>,
 }
 
 #[tauri::command]
@@ -34,11 +62,15 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
     .unwrap()
     .map(|d| {
       let description = d.description().unwrap();
+      let interface_type = d.default_input_config().unwrap();
 
       AudioDevice {
         id: d.id().unwrap().to_string(),
         readable_name: description.name().to_string(),
         descriptions: description.extended().to_vec(),
+        frequency: interface_type.sample_rate(),
+        channels: interface_type.channels(),
+        bits_per_sample: interface_type.sample_format().sample_size(),
       }
     })
     .collect();
@@ -47,11 +79,15 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
     .unwrap()
     .map(|d| {
       let description = d.description().unwrap();
+      let interface_type = d.default_output_config().unwrap();
 
       AudioDevice {
         id: d.id().unwrap().to_string(),
         readable_name: description.name().to_string(),
         descriptions: description.extended().to_vec(),
+        frequency: interface_type.sample_rate(),
+        channels: interface_type.channels(),
+        bits_per_sample: interface_type.sample_format().sample_size(),
       }
     })
     .collect();
