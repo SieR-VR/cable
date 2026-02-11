@@ -2,10 +2,20 @@ import { Handle, NodeProps, Position } from "@xyflow/react";
 import { AppState, useAppStore } from "@/state";
 
 import { AudioDevice } from "@/types";
-import { formatAudioEdgeId } from "@/lib/utils";
+import { formatAudioEdgeType } from "@/lib/utils";
 
 const selector = (id: string) => (store: AppState) => ({
-  setDevice: (device: AudioDevice | null) => store.updateNode(id, { device }),
+  setDevice: (device: AudioDevice | null) => {
+    const edgeType =
+      device &&
+      formatAudioEdgeType(
+        device.frequency,
+        device.channels,
+        device.bits_per_sample,
+      );
+
+    store.updateNode(id, { device, edgeType });
+  },
 });
 
 export default function AudioInputDevice({ id, data }: NodeProps) {
@@ -13,14 +23,6 @@ export default function AudioInputDevice({ id, data }: NodeProps) {
 
   const { setDevice } = useAppStore(selector(id));
   const selectedDevice = data.device as AudioDevice | null;
-
-  const edgeId =
-    selectedDevice &&
-    formatAudioEdgeId(
-      selectedDevice.frequency,
-      selectedDevice.channels,
-      selectedDevice.bits_per_sample,
-    );
 
   return (
     <div className="bg-gray-700 rounded-lg flex flex-col text-white">
@@ -67,7 +69,7 @@ export default function AudioInputDevice({ id, data }: NodeProps) {
         <Handle
           type="source"
           position={Position.Right}
-          id={edgeId}
+          id="AudioInputDevice-source"
           className="w-4 h-4 bg-green-500 rounded-full"
         />
       </div>

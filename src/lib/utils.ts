@@ -5,7 +5,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatAudioEdgeId(
+export function formatAudioEdgeType(
   freqency: number,
   channels: number,
   bitsPerSample: number,

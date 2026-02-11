@@ -122,6 +122,20 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   },
 
   onConnect: (connection) => {
+    const nodes = get().nodes;
+
+    const fromType = nodes.find((node) => node.id === connection.source)?.data
+      .edgeType;
+    const toType = nodes.find((node) => node.id === connection.target)?.data
+      .edgeType;
+
+    if (fromType && toType && fromType !== toType) {
+      console.warn(
+        `Cannot connect nodes with different audio formats: ${fromType} -> ${toType}`,
+      );
+      return;
+    }
+
     set({
       edges: addEdge(connection, get().edges),
     });
