@@ -1,0 +1,29 @@
+#line 1 "E:\\GitHub\\Windows-driver-samples\\audio\\virtualaudiodriver\\Source\\Main\\VirtualAudioDriver.rc"
+#line 1
+/*++
+#line 3
+Copyright (c) Microsoft Corporation All Rights Reserved
+#line 5
+Module Name:
+#line 7
+VirtualAudioDriver.rc
+#line 9
+Abstract:
+#line 11
+--*/
+#line 13
+#include <windows.h>
+#line 15
+#include <ntverp.h>
+#line 17
+#define VER_FILETYPE VFT_DRV
+#define VER_FILESUBTYPE VFT2_DRV_SOUND
+#define VER_FILEDESCRIPTION_STR "Microsoft Virtual Simple Audio Sample Driver"
+#define VER_INTERNALNAME_STR "VirtualAudioDriver.sys"
+#define VER_ORIGINALFILENAME_STR "VirtualAudioDriver.sys"
+#line 23
+#define VER_LEGALCOPYRIGHT_YEARS "2013"
+#define VER_LEGALCOPYRIGHT_STR                                                 \
+  "Copyright (C) Microsoft Corp." VER_LEGALCOPYRIGHT_YEARS
+#line 26
+#include "common.ver"

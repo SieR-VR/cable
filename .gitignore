@@ -1,4 +1,5 @@
 /target
+/dist
 
-.vagrant
+.vm
 node_modules

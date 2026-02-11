@@ -1,0 +1,8 @@
+{
+  "files.associations": {
+    "*.inx": "driver-information"
+  },
+  "[driver-information]": {
+    "files.encoding": "utf16le"
+  }
+}

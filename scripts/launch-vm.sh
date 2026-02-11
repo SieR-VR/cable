@@ -1,0 +1,11 @@
+qemu-system-x86_64 \
+  -accel kvm \
+  -cpu host \
+  -smp 4 \
+  -m 4G \
+  -drive file=./.vm/tiny11-snapshot.img \
+  -vga virtio \
+  -display gtk,grab-on-hover=on \
+  -usb -device usb-tablet \
+  -netdev tap,id=net0,ifname=tap0,script=no,downscript=no \
+  -device virtio-net-pci,netdev=net0 
