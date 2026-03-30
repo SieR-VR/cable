@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 
 use cpal::{
-  traits::{DeviceTrait, HostTrait, StreamTrait},
   BufferSize, Stream, StreamConfig,
+  traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use ringbuf::{
-  traits::{Consumer, Producer, Split},
   HeapCons, HeapRb,
+  traits::{Consumer, Observer, Producer, Split},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
+  AudioDevice,
   nodes::NodeTrait,
   runtime::{Runtime, RuntimeState},
-  AudioDevice,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -57,7 +57,7 @@ impl NodeTrait for AudioInputDeviceNode {
 
     let config = StreamConfig {
       channels: self.device.channels,
-      sample_rate: cpal::SampleRate(self.device.frequency),
+      sample_rate: self.device.frequency,
       buffer_size: BufferSize::Fixed(runtime.buffer_size),
     };
 
