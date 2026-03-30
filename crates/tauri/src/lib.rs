@@ -1,3 +1,8 @@
+use std::sync::{
+  atomic::{AtomicBool, Ordering},
+  Arc,
+};
+
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
 use tauri::{async_runtime::Mutex, Builder, State};
@@ -11,6 +16,7 @@ use nodes::audio_output_device::AudioOutputDeviceNode;
 struct AppData {
   runtime: Option<runtime::Runtime>,
   runtime_thread: Option<std::thread::JoinHandle<()>>,
+  runtime_running: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,13 +32,13 @@ struct AudioDevice {
   descriptions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct AudioGraph {
   nodes: Vec<AudioNode>,
   edges: Vec<AudioEdge>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub(crate) enum AudioNode {
   AudioInputDevice(AudioInputDeviceNode),
@@ -40,6 +46,7 @@ pub(crate) enum AudioNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AudioEdge {
   id: String,
 
@@ -129,17 +136,26 @@ async fn setup_runtime(
   };
   let audio_host = cpal::host_from_id(host_id).unwrap();
 
+  // 그래프에서 대표 sample_rate 추출 (첫 번째 엣지의 frequency, 기본 48000)
+  let sample_rate = graph
+    .edges
+    .first()
+    .and_then(|e| e.frequency)
+    .unwrap_or(48000);
+
   println!(
-    "Creating runtime with buffer size: {}, host: {:?}",
-    buffer_size, host_id
+    "Creating runtime with buffer size: {}, sample_rate: {}, host: {:?}",
+    buffer_size, sample_rate, host_id
   );
+
+  let mut runtime =
+    runtime::Runtime::new(buffer_size, sample_rate, graph.nodes, graph.edges, audio_host);
+
+  // 모든 노드를 초기화
+  runtime.init_nodes()?;
+
   let mut state = state.lock().await;
-  state.runtime = Some(runtime::Runtime::new(
-    buffer_size,
-    graph.nodes,
-    graph.edges,
-    audio_host,
-  ));
+  state.runtime = Some(runtime);
 
   Ok(())
 }
@@ -147,12 +163,32 @@ async fn setup_runtime(
 #[tauri::command]
 async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
-  if let Some(runtime) = state.runtime.take() {
-    let handle = std::thread::spawn(move || loop {
-      if let Err(e) = runtime.process() {
-        eprintln!("Error processing audio graph: {}", e);
+  if let Some(mut runtime) = state.runtime.take() {
+    let running = Arc::new(AtomicBool::new(true));
+    let running_clone = running.clone();
+
+    let sleep_duration = runtime.buffer_duration();
+    println!(
+      "Enabling runtime with sleep duration: {:?}",
+      sleep_duration
+    );
+
+    let handle = std::thread::spawn(move || {
+      while running_clone.load(Ordering::Relaxed) {
+        if let Err(e) = runtime.process() {
+          eprintln!("Error processing audio graph: {}", e);
+        }
+        std::thread::sleep(sleep_duration);
       }
+
+      // 루프 종료 시 노드 정리
+      if let Err(e) = runtime.dispose_nodes() {
+        eprintln!("Error disposing nodes: {}", e);
+      }
+      println!("Runtime thread stopped.");
     });
+
+    state.runtime_running = Some(running);
     state.runtime_thread = Some(handle);
   }
   Ok(())
@@ -161,10 +197,20 @@ async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> 
 #[tauri::command]
 async fn disable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
-  if let Some(handle) = state.runtime_thread.take() {
-    // In a real application, you'd want a more graceful shutdown mechanism
-    handle.thread().unpark();
+
+  // AtomicBool을 false로 설정하여 루프 종료 시그널
+  if let Some(running) = state.runtime_running.take() {
+    running.store(false, Ordering::Relaxed);
   }
+
+  // 스레드가 종료될 때까지 대기
+  if let Some(handle) = state.runtime_thread.take() {
+    handle
+      .join()
+      .map_err(|_| "Failed to join runtime thread".to_string())?;
+  }
+
+  println!("Runtime disabled.");
   Ok(())
 }
 
@@ -175,6 +221,7 @@ pub fn run() {
     .manage(Mutex::new(AppData {
       runtime: None,
       runtime_thread: None,
+      runtime_running: None,
     }))
     .invoke_handler(tauri::generate_handler![
       get_audio_hosts,

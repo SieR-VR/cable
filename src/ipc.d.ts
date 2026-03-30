@@ -14,6 +14,7 @@ declare module "@tauri-apps/api/core" {
     cmd: "setup_runtime",
     args: {
       graph: AudioGraph;
+      host: string;
       buffer_size: number;
     },
   ): Promise<void>;

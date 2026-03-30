@@ -11,7 +11,7 @@ pub(crate) trait NodeTrait {
   fn dispose(&mut self, runtime: &Runtime) -> Result<(), String>;
 
   fn process(
-    &self,
+    &mut self,
     runtime: &Runtime,
     state: &RuntimeState,
   ) -> Result<BTreeMap<String, Vec<f32>>, String>;

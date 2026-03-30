@@ -14,6 +14,7 @@ function App() {
     contextMenuOpen,
     setContextMenuOpen,
     initializeApp,
+    selectedAudioHost,
     nodes,
     edges,
     onNodesChange,
@@ -56,7 +57,7 @@ function App() {
 
     console.log(graph);
 
-    invoke("setup_runtime", { graph, bufferSize: 512 });
+    invoke("setup_runtime", { graph, host: selectedAudioHost, bufferSize: 512 });
   }, [nodes, edges]);
 
   useEffect(() => {
