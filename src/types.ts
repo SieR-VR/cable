@@ -1,18 +1,45 @@
-import { NodeTypes } from "@xyflow/react";
-import AudioInputDeviceNode from "./nodes/AudioInputDevice";
-import AudioOutputDeviceNode from "./nodes/AudioOutputDevice";
+import { Edge, NodeTypes } from "@xyflow/react";
+import AudioInputDevice, {
+  AudioInputDeviceNode,
+} from "./nodes/AudioInputDevice";
+import AudioOutputDevice, {
+  AudioOutputDeviceNode,
+} from "./nodes/AudioOutputDevice";
 
 export interface AudioDevice {
   id: string;
-  readable_name: string;
+  readableName: string;
   descriptions: string[] | null;
 
   frequency: number;
   channels: number;
-  bits_per_sample: number;
+  bitsPerSample: number;
 }
 
 export const nodeTypes = {
-  audioInputDevice: AudioInputDeviceNode,
-  audioOutputDevice: AudioOutputDeviceNode,
+  audioInputDevice: AudioInputDevice,
+  audioOutputDevice: AudioOutputDevice,
 } satisfies NodeTypes;
+
+export type NodeType = AudioInputDeviceNode | AudioOutputDeviceNode;
+
+export type EdgeType = Edge<AudioEdge>;
+
+export interface AudioGraph {
+  nodes: AudioNode[];
+  edges: AudioEdge[];
+}
+
+export type AudioNode = {
+  type: "audioInputDevice" | "audioOutputDevice";
+  data: { device: AudioDevice | null; id: string };
+};
+
+export type AudioEdge = {
+  from: string;
+  to: string;
+
+  frequency?: number;
+  channels?: number;
+  bitsPerSample?: number;
+};

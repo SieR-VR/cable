@@ -1,8 +1,18 @@
-import { Handle, NodeProps, Position } from "@xyflow/react";
+import { Handle, Node, NodeProps, Position } from "@xyflow/react";
 import { AppState, useAppStore } from "@/state";
 
 import { AudioDevice } from "@/types";
 import { formatAudioEdgeType } from "@/lib/utils";
+
+export type AudioInputDeviceNodeData = {
+  device: AudioDevice | null;
+  edgeType: string | null;
+};
+
+export type AudioInputDeviceNode = Node<
+  AudioInputDeviceNodeData,
+  "audioInputDevice"
+>;
 
 const selector = (id: string) => (store: AppState) => ({
   setDevice: (device: AudioDevice | null) => {
@@ -11,18 +21,21 @@ const selector = (id: string) => (store: AppState) => ({
       formatAudioEdgeType(
         device.frequency,
         device.channels,
-        device.bits_per_sample,
+        device.bitsPerSample,
       );
 
     store.updateNode(id, { device, edgeType });
   },
 });
 
-export default function AudioInputDevice({ id, data }: NodeProps) {
+export default function AudioInputDevice({
+  id,
+  data,
+}: NodeProps<AudioInputDeviceNode>) {
   const { availableAudioInputDevices } = useAppStore();
 
   const { setDevice } = useAppStore(selector(id));
-  const selectedDevice = data.device as AudioDevice | null;
+  const selectedDevice = data.device;
 
   return (
     <div className="bg-gray-700 rounded-lg flex flex-col text-white">
@@ -63,7 +76,7 @@ export default function AudioInputDevice({ id, data }: NodeProps) {
           <div className="flex flex-row gap-2 items-center">
             <span className="rounded-md text-xs bg-amber-200 p-1">{`${selectedDevice.frequency}Hz`}</span>
             <span className="rounded-md text-xs bg-blue-200 p-1">{`${selectedDevice.channels}ch`}</span>
-            <span className="rounded-md text-xs bg-lime-200 p-1">{`${selectedDevice.bits_per_sample}bit`}</span>
+            <span className="rounded-md text-xs bg-lime-200 p-1">{`${selectedDevice.bitsPerSample}bit`}</span>
           </div>
         )}
         <Handle

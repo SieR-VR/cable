@@ -1,10 +1,20 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
-use tauri::Builder;
+use tauri::{async_runtime::Mutex, Builder, State};
 
-struct AppData {}
+pub mod nodes;
+mod runtime;
+
+use nodes::audio_input_device::AudioInputDeviceNode;
+use nodes::audio_output_device::AudioOutputDeviceNode;
+
+struct AppData {
+  runtime: Option<runtime::Runtime>,
+  runtime_thread: Option<std::thread::JoinHandle<()>>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AudioDevice {
   id: String,
   readable_name: String,
@@ -23,17 +33,20 @@ struct AudioGraph {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum AudioNode {
-  AudioInputDevice(AudioDevice),
-  AudioOutputDevice(AudioDevice),
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+pub(crate) enum AudioNode {
+  AudioInputDevice(AudioInputDeviceNode),
+  AudioOutputDevice(AudioOutputDeviceNode),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AudioEdge {
+  id: String,
+
   from: String,
   to: String,
 
-  freqency: Option<u32>,
+  frequency: Option<u32>,
   channels: Option<u16>,
   bits_per_sample: Option<usize>,
 }
@@ -99,12 +112,77 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
   (input_devices, output_devices)
 }
 
+#[tauri::command]
+async fn setup_runtime(
+  state: State<'_, Mutex<AppData>>,
+  graph: AudioGraph,
+  host: String,
+  buffer_size: u32,
+) -> Result<(), String> {
+  println!("Setting up audio graph: {:?}", graph);
+  let host_id = match cpal::available_hosts()
+    .into_iter()
+    .find(|h| format!("{:?}", h) == host)
+  {
+    Some(h) => h,
+    None => return Err(format!("Audio host not found: {}", host)),
+  };
+  let audio_host = cpal::host_from_id(host_id).unwrap();
+
+  println!(
+    "Creating runtime with buffer size: {}, host: {:?}",
+    buffer_size, host_id
+  );
+  let mut state = state.lock().await;
+  state.runtime = Some(runtime::Runtime::new(
+    buffer_size,
+    graph.nodes,
+    graph.edges,
+    audio_host,
+  ));
+
+  Ok(())
+}
+
+#[tauri::command]
+async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
+  let mut state = state.lock().await;
+  if let Some(runtime) = state.runtime.take() {
+    let handle = std::thread::spawn(move || loop {
+      if let Err(e) = runtime.process() {
+        eprintln!("Error processing audio graph: {}", e);
+      }
+    });
+    state.runtime_thread = Some(handle);
+  }
+  Ok(())
+}
+
+#[tauri::command]
+async fn disable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
+  let mut state = state.lock().await;
+  if let Some(handle) = state.runtime_thread.take() {
+    // In a real application, you'd want a more graceful shutdown mechanism
+    handle.thread().unpark();
+  }
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   Builder::default()
     .plugin(tauri_plugin_opener::init())
-    .manage(AppData {})
-    .invoke_handler(tauri::generate_handler![get_audio_hosts, get_audio_devices])
+    .manage(Mutex::new(AppData {
+      runtime: None,
+      runtime_thread: None,
+    }))
+    .invoke_handler(tauri::generate_handler![
+      get_audio_hosts,
+      get_audio_devices,
+      setup_runtime,
+      enable_runtime,
+      disable_runtime,
+    ])
     .run(tauri::generate_context!())
     .unwrap();
 }

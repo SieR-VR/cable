@@ -5,29 +5,33 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   Connection,
-  Edge,
   EdgeChange,
-  Node,
   NodeChange,
   XYPosition,
 } from "@xyflow/react";
 
-import { AudioDevice } from "./types";
+import { AudioDevice, EdgeType, NodeType } from "./types";
 
-const initialNodes = [
+const initialNodes: NodeType[] = [
   {
     id: "node-1",
     type: "audioInputDevice",
     dragHandle: ".drag-handle__custom",
     position: { x: 100, y: 0 },
-    data: {},
+    data: {
+      device: null,
+      edgeType: null,
+    },
   },
   {
     id: "node-2",
     type: "audioOutputDevice",
     dragHandle: ".drag-handle__custom",
     position: { x: 500, y: 0 },
-    data: {},
+    data: {
+      device: null,
+      edgeType: null,
+    },
   },
 ];
 
@@ -43,8 +47,8 @@ export interface AppState {
   availableAudioInputDevices: AudioDevice[] | null;
   availableAudioOutputDevices: AudioDevice[] | null;
 
-  nodes: Node[];
-  edges: Edge[];
+  nodes: NodeType[];
+  edges: EdgeType[];
 
   setMenuOpen: (open: boolean) => void;
 
@@ -54,8 +58,8 @@ export interface AppState {
 
   initializeApp: () => Promise<void>;
 
-  onNodesChange: (changes: NodeChange[]) => void;
-  onEdgesChange: (changes: EdgeChange[]) => void;
+  onNodesChange: (changes: NodeChange<NodeType>[]) => void;
+  onEdgesChange: (changes: EdgeChange<EdgeType>[]) => void;
   onConnect: (connection: Connection) => void;
   updateNode: (id: string, data: any) => void;
 }
@@ -111,13 +115,13 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
   onNodesChange: (changes) => {
     set({
-      nodes: applyNodeChanges(changes, get().nodes),
+      nodes: applyNodeChanges<NodeType>(changes, get().nodes),
     });
   },
 
   onEdgesChange: (changes) => {
     set({
-      edges: applyEdgeChanges(changes, get().edges),
+      edges: applyEdgeChanges<EdgeType>(changes, get().edges),
     });
   },
 

@@ -1,12 +1,13 @@
-import { MouseEvent, useCallback, useEffect } from "react";
-import { ReactFlow, Background, BackgroundVariant } from "@xyflow/react";
+import { MouseEvent, useCallback, useEffect, useState } from "react";
+import { ReactFlow, Background, BackgroundVariant, Panel } from "@xyflow/react";
 
 import "@xyflow/react/dist/style.css";
 
 import Menu from "./components/Menu";
 import { useAppStore } from "./state";
 import { ContextMenu } from "./components/ContextMenu";
-import { nodeTypes } from "./types";
+import { AudioGraph, nodeTypes } from "./types";
+import { invoke } from "@tauri-apps/api/core";
 
 function App() {
   const {
@@ -20,6 +21,8 @@ function App() {
     onConnect,
   } = useAppStore();
 
+  const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
+
   const onContextMenu = useCallback((event: MouseEvent) => {
     event.preventDefault();
 
@@ -31,6 +34,30 @@ function App() {
       setContextMenuOpen(false);
     }
   }, [contextMenuOpen]);
+
+  const onApply = useCallback(() => {
+    const graph: AudioGraph = {
+      nodes: nodes.map((node) => ({
+        type: node.type,
+        data: {
+          id: node.id,
+          device: node.data.device,
+        },
+      })),
+      edges: edges.map((edge) => ({
+        id: edge.id,
+        from: edge.source,
+        to: edge.target,
+        frequency: edge.data?.frequency,
+        channels: edge.data?.channels,
+        bitsPerSample: edge.data?.bitsPerSample,
+      })),
+    };
+
+    console.log(graph);
+
+    invoke("setup_runtime", { graph, bufferSize: 512 });
+  }, [nodes, edges]);
 
   useEffect(() => {
     document.title = "Cable";
@@ -54,6 +81,34 @@ function App() {
       </ReactFlow>
       <Menu />
       <ContextMenu />
+      <Panel position="bottom-center">
+        <div className="text-sm text-gray-500">
+          <button
+            className="bg-gray-700 text-white px-2 py-1 rounded"
+            onClick={onApply}
+          >
+            Apply
+          </button>
+        </div>
+      </Panel>
+      <Panel position="top-right">
+        <div className="text-sm text-gray-500">
+          <button
+            className="bg-gray-700 text-white px-2 py-1 rounded"
+            onClick={async () => {
+              if (isRuntimeEnabled) {
+                await invoke("disable_runtime");
+                setIsRuntimeEnabled(false);
+              } else {
+                await invoke("enable_runtime");
+                setIsRuntimeEnabled(true);
+              }
+            }}
+          >
+            {isRuntimeEnabled ? "Disable" : "Enable"} Runtime
+          </button>
+        </div>
+      </Panel>
     </div>
   );
 }
