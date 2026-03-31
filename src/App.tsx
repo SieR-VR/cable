@@ -1,12 +1,18 @@
-import { MouseEvent, useCallback, useEffect, useState } from "react";
-import { ReactFlow, Background, BackgroundVariant, Panel } from "@xyflow/react";
+import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
+import {
+  ReactFlow,
+  Background,
+  BackgroundVariant,
+  Panel,
+  ReactFlowInstance,
+} from "@xyflow/react";
 
 import "@xyflow/react/dist/style.css";
 
 import Menu from "./components/Menu";
 import { useAppStore } from "./state";
 import { ContextMenu } from "./components/ContextMenu";
-import { AudioGraph, nodeTypes } from "./types";
+import { AudioGraph, EdgeType, NodeType, nodeTypes } from "./types";
 import { invoke } from "@tauri-apps/api/core";
 
 function App() {
@@ -15,6 +21,7 @@ function App() {
     setContextMenuOpen,
     initializeApp,
     selectedAudioHost,
+    driverConnected,
     nodes,
     edges,
     onNodesChange,
@@ -23,28 +30,67 @@ function App() {
   } = useAppStore();
 
   const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
+  const [reactFlowInstance, setReactFlowInstance] =
+    useState<ReactFlowInstance<NodeType, EdgeType> | null>(null);
 
-  const onContextMenu = useCallback((event: MouseEvent) => {
+  const onPaneContextMenu = useCallback(
+    (event: MouseEvent | ReactMouseEvent<Element, MouseEvent>) => {
     event.preventDefault();
 
-    setContextMenuOpen(true, { x: event.clientX, y: event.clientY });
-  }, []);
+    const screenPosition = { x: event.clientX, y: event.clientY };
+    const flowPosition =
+      reactFlowInstance?.screenToFlowPosition(screenPosition) || screenPosition;
+
+      setContextMenuOpen(true, screenPosition, flowPosition);
+    },
+    [reactFlowInstance, setContextMenuOpen],
+  );
+
+  const onNodeContextMenu = useCallback(
+    (
+      event: MouseEvent | ReactMouseEvent<Element, MouseEvent>,
+      node: NodeType,
+    ) => {
+      event.preventDefault();
+
+      const screenPosition = { x: event.clientX, y: event.clientY };
+      const flowPosition =
+        reactFlowInstance?.screenToFlowPosition(screenPosition) || screenPosition;
+
+      setContextMenuOpen(true, screenPosition, flowPosition, node.id);
+    },
+    [reactFlowInstance, setContextMenuOpen],
+  );
 
   const onClick = useCallback(() => {
     if (contextMenuOpen) {
       setContextMenuOpen(false);
     }
-  }, [contextMenuOpen]);
+  }, [contextMenuOpen, setContextMenuOpen]);
 
   const onApply = useCallback(() => {
     const graph: AudioGraph = {
-      nodes: nodes.map((node) => ({
-        type: node.type,
-        data: {
-          id: node.id,
-          device: node.data.device,
-        },
-      })),
+      nodes: nodes.map((node) => {
+        if (
+          node.type === "virtualAudioInput" ||
+          node.type === "virtualAudioOutput"
+        ) {
+          return {
+            type: node.type,
+            data: {
+              id: node.id,
+              name: (node.data as any).name || "",
+            },
+          };
+        }
+        return {
+          type: node.type,
+          data: {
+            id: node.id,
+            device: (node.data as any).device,
+          },
+        };
+      }),
       edges: edges.map((edge) => ({
         id: edge.id,
         from: edge.source,
@@ -74,8 +120,10 @@ function App() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onInit={setReactFlowInstance}
         fitView
-        onContextMenu={onContextMenu}
+        onPaneContextMenu={onPaneContextMenu}
+        onNodeContextMenu={onNodeContextMenu}
         onClick={onClick}
       >
         <Background color="black" variant={BackgroundVariant.Dots} />
@@ -83,7 +131,9 @@ function App() {
       <Menu />
       <ContextMenu />
       <Panel position="bottom-center">
-        <div className="text-sm text-gray-500">
+        <div className="flex gap-2 items-center text-sm text-gray-500">
+          <span className={`inline-block w-2 h-2 rounded-full ${driverConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+          <span>{driverConnected ? 'Driver connected' : 'Driver offline'}</span>
           <button
             className="bg-gray-700 text-white px-2 py-1 rounded"
             onClick={onApply}

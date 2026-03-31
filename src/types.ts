@@ -5,6 +5,12 @@ import AudioInputDevice, {
 import AudioOutputDevice, {
   AudioOutputDeviceNode,
 } from "./nodes/AudioOutputDevice";
+import VirtualAudioInput, {
+  VirtualAudioInputNode,
+} from "./nodes/VirtualAudioInput";
+import VirtualAudioOutput, {
+  VirtualAudioOutputNode,
+} from "./nodes/VirtualAudioOutput";
 
 export interface AudioDevice {
   id: string;
@@ -19,9 +25,15 @@ export interface AudioDevice {
 export const nodeTypes = {
   audioInputDevice: AudioInputDevice,
   audioOutputDevice: AudioOutputDevice,
+  virtualAudioInput: VirtualAudioInput,
+  virtualAudioOutput: VirtualAudioOutput,
 } satisfies NodeTypes;
 
-export type NodeType = AudioInputDeviceNode | AudioOutputDeviceNode;
+export type NodeType =
+  | AudioInputDeviceNode
+  | AudioOutputDeviceNode
+  | VirtualAudioInputNode
+  | VirtualAudioOutputNode;
 
 export type EdgeType = Edge<AudioEdge>;
 
@@ -31,8 +43,14 @@ export interface AudioGraph {
 }
 
 export type AudioNode = {
-  type: "audioInputDevice" | "audioOutputDevice";
-  data: { device: AudioDevice | null; id: string };
+  type:
+    | "audioInputDevice"
+    | "audioOutputDevice"
+    | "virtualAudioInput"
+    | "virtualAudioOutput";
+  data:
+    | { device: AudioDevice | null; id: string }
+    | { name: string; id: string };
 };
 
 export type AudioEdge = {

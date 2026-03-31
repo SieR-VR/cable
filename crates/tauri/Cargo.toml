@@ -32,6 +32,10 @@ features = [
   "Win32_Devices_FunctionDiscovery",
   "Win32_Media_Audio",
   "Win32_UI_Shell_PropertiesSystem",
+  "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_System_IO",
+  "Win32_Storage_FileSystem",
+  "Win32_Security",
 ]
 
 [features]

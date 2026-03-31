@@ -40,6 +40,8 @@ export interface AppState {
 
   contextMenuOpen: boolean;
   contextMenuPosition: XYPosition;
+  contextMenuFlowPosition: XYPosition;
+  contextMenuTargetNodeId: string | null;
 
   availableAudioHosts: string[] | null;
   selectedAudioHost: string | null;
@@ -47,14 +49,31 @@ export interface AppState {
   availableAudioInputDevices: AudioDevice[] | null;
   availableAudioOutputDevices: AudioDevice[] | null;
 
+  driverConnected: boolean;
+
   nodes: NodeType[];
   edges: EdgeType[];
 
   setMenuOpen: (open: boolean) => void;
 
-  setContextMenuOpen: (open: boolean, position?: XYPosition) => void;
+  setContextMenuOpen: (
+    open: boolean,
+    position?: XYPosition,
+    flowPosition?: XYPosition,
+    targetNodeId?: string | null,
+  ) => void;
+
+  addNodeAtContextMenu: (
+    type:
+      | "audioInputDevice"
+      | "audioOutputDevice"
+      | "virtualAudioInput"
+      | "virtualAudioOutput",
+  ) => void;
+  removeNodeAtContextMenu: () => void;
 
   setSelectedAudioHost: (host: string) => void;
+  setDriverConnected: (connected: boolean) => void;
 
   initializeApp: () => Promise<void>;
 
@@ -69,6 +88,8 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
   contextMenuOpen: false,
   contextMenuPosition: { x: 0, y: 0 },
+  contextMenuFlowPosition: { x: 0, y: 0 },
+  contextMenuTargetNodeId: null,
 
   availableAudioHosts: null,
   selectedAudioHost: null,
@@ -76,15 +97,72 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   availableAudioInputDevices: null,
   availableAudioOutputDevices: null,
 
+  driverConnected: false,
+
   nodes: initialNodes,
   edges: [],
 
   setMenuOpen: (open: boolean) => set({ menuOpen: open }),
 
-  setContextMenuOpen: (open: boolean, position: XYPosition = { x: 0, y: 0 }) =>
-    set({ contextMenuOpen: open, contextMenuPosition: position }),
+  setContextMenuOpen: (
+    open: boolean,
+    position: XYPosition = { x: 0, y: 0 },
+    flowPosition: XYPosition = { x: 0, y: 0 },
+    targetNodeId: string | null = null,
+  ) =>
+    set({
+      contextMenuOpen: open,
+      contextMenuPosition: position,
+      contextMenuFlowPosition: flowPosition,
+      contextMenuTargetNodeId: targetNodeId,
+    }),
+
+  addNodeAtContextMenu: (type) => {
+    const { nodes, contextMenuFlowPosition } = get();
+
+    const usedIds = new Set(nodes.map((node) => node.id));
+    let nextId = nodes.length + 1;
+    while (usedIds.has(`node-${nextId}`)) {
+      nextId += 1;
+    }
+
+    const isVirtual =
+      type === "virtualAudioInput" || type === "virtualAudioOutput";
+
+    const data = isVirtual
+      ? { name: "", edgeType: null }
+      : { device: null, edgeType: null };
+
+    const newNode: NodeType = {
+      id: `node-${nextId}`,
+      type,
+      dragHandle: ".drag-handle__custom",
+      position: contextMenuFlowPosition,
+      data,
+    } as NodeType;
+
+    set({ nodes: [...nodes, newNode] });
+  },
+
+  removeNodeAtContextMenu: () => {
+    const { nodes, edges, contextMenuTargetNodeId } = get();
+
+    if (!contextMenuTargetNodeId) {
+      return;
+    }
+
+    set({
+      nodes: nodes.filter((node) => node.id !== contextMenuTargetNodeId),
+      edges: edges.filter(
+        (edge) =>
+          edge.source !== contextMenuTargetNodeId &&
+          edge.target !== contextMenuTargetNodeId,
+      ),
+    });
+  },
 
   setSelectedAudioHost: (host: string) => set({ selectedAudioHost: host }),
+  setDriverConnected: (connected: boolean) => set({ driverConnected: connected }),
 
   initializeApp: async () => {
     async function initHosts() {
@@ -109,8 +187,18 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       });
     }
 
+    async function initDriver() {
+      try {
+        const connected = await invoke("connect_driver");
+        set({ driverConnected: connected });
+      } catch (e) {
+        console.warn("Failed to connect to CableAudio driver:", e);
+        set({ driverConnected: false });
+      }
+    }
+
     const host = await initHosts();
-    await initDevices(host);
+    await Promise.all([initDevices(host), initDriver()]);
   },
 
   onNodesChange: (changes) => {
@@ -128,10 +216,17 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   onConnect: (connection) => {
     const nodes = get().nodes;
 
-    const fromType = nodes.find((node) => node.id === connection.source)?.data
-      .edgeType;
-    const toType = nodes.find((node) => node.id === connection.target)?.data
-      .edgeType;
+    const sourceNode = nodes.find((node) => node.id === connection.source);
+    const targetNode = nodes.find((node) => node.id === connection.target);
+
+    const fromType =
+      sourceNode?.data && "edgeType" in sourceNode.data
+        ? sourceNode.data.edgeType
+        : null;
+    const toType =
+      targetNode?.data && "edgeType" in targetNode.data
+        ? targetNode.data.edgeType
+        : null;
 
     if (fromType && toType && fromType !== toType) {
       console.warn(

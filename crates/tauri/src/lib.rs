@@ -1,22 +1,28 @@
 use std::sync::{
-  atomic::{AtomicBool, Ordering},
   Arc,
+  atomic::{AtomicBool, Ordering},
 };
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
-use tauri::{async_runtime::Mutex, Builder, State};
+use tauri::{Builder, State, async_runtime::Mutex};
 
+#[cfg(windows)]
+pub mod driver_client;
 pub mod nodes;
 mod runtime;
 
 use nodes::audio_input_device::AudioInputDeviceNode;
 use nodes::audio_output_device::AudioOutputDeviceNode;
+use nodes::virtual_audio_input::VirtualAudioInputNode;
+use nodes::virtual_audio_output::VirtualAudioOutputNode;
 
 struct AppData {
   runtime: Option<runtime::Runtime>,
   runtime_thread: Option<std::thread::JoinHandle<()>>,
   runtime_running: Option<Arc<AtomicBool>>,
+  #[cfg(windows)]
+  driver_handle: Option<Arc<driver_client::DriverHandle>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +49,8 @@ struct AudioGraph {
 pub(crate) enum AudioNode {
   AudioInputDevice(AudioInputDeviceNode),
   AudioOutputDevice(AudioOutputDeviceNode),
+  VirtualAudioInput(VirtualAudioInputNode),
+  VirtualAudioOutput(VirtualAudioOutputNode),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +127,48 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
   (input_devices, output_devices)
 }
 
+/// Try to open a handle to the CableAudio kernel driver.
+/// Returns true if the driver is available, false otherwise.
+#[tauri::command]
+async fn connect_driver(state: State<'_, Mutex<AppData>>) -> Result<bool, String> {
+  #[cfg(windows)]
+  {
+    let mut state = state.lock().await;
+    match driver_client::DriverHandle::open() {
+      Ok(handle) => {
+        println!("CableAudio driver connected successfully");
+        state.driver_handle = Some(Arc::new(handle));
+        Ok(true)
+      }
+      Err(e) => {
+        println!("CableAudio driver not available: {}", e);
+        state.driver_handle = None;
+        Ok(false)
+      }
+    }
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = state;
+    Ok(false)
+  }
+}
+
+/// Check if the driver is currently connected.
+#[tauri::command]
+async fn is_driver_connected(state: State<'_, Mutex<AppData>>) -> Result<bool, String> {
+  #[cfg(windows)]
+  {
+    let state = state.lock().await;
+    Ok(state.driver_handle.is_some())
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = state;
+    Ok(false)
+  }
+}
+
 #[tauri::command]
 async fn setup_runtime(
   state: State<'_, Mutex<AppData>>,
@@ -136,7 +186,6 @@ async fn setup_runtime(
   };
   let audio_host = cpal::host_from_id(host_id).unwrap();
 
-  // 그래프에서 대표 sample_rate 추출 (첫 번째 엣지의 frequency, 기본 48000)
   let sample_rate = graph
     .edges
     .first()
@@ -148,10 +197,24 @@ async fn setup_runtime(
     buffer_size, sample_rate, host_id
   );
 
-  let mut runtime =
-    runtime::Runtime::new(buffer_size, sample_rate, graph.nodes, graph.edges, audio_host);
+  let app_state = state.lock().await;
 
-  // 모든 노드를 초기화
+  #[cfg(windows)]
+  let driver_handle = app_state.driver_handle.clone();
+  #[cfg(not(windows))]
+  let driver_handle: Option<()> = None;
+
+  drop(app_state);
+
+  let mut runtime = runtime::Runtime::new(
+    buffer_size,
+    sample_rate,
+    graph.nodes,
+    graph.edges,
+    audio_host,
+    driver_handle,
+  );
+
   runtime.init_nodes()?;
 
   let mut state = state.lock().await;
@@ -168,10 +231,7 @@ async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> 
     let running_clone = running.clone();
 
     let sleep_duration = runtime.buffer_duration();
-    println!(
-      "Enabling runtime with sleep duration: {:?}",
-      sleep_duration
-    );
+    println!("Enabling runtime with sleep duration: {:?}", sleep_duration);
 
     let handle = std::thread::spawn(move || {
       while running_clone.load(Ordering::Relaxed) {
@@ -222,10 +282,14 @@ pub fn run() {
       runtime: None,
       runtime_thread: None,
       runtime_running: None,
+      #[cfg(windows)]
+      driver_handle: None,
     }))
     .invoke_handler(tauri::generate_handler![
       get_audio_hosts,
       get_audio_devices,
+      connect_driver,
+      is_driver_connected,
       setup_runtime,
       enable_runtime,
       disable_runtime,

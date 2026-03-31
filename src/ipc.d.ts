@@ -10,6 +10,10 @@ declare module "@tauri-apps/api/core" {
     },
   ): Promise<[AudioDevice[], AudioDevice[]]>;
 
+  declare function invoke(cmd: "connect_driver"): Promise<boolean>;
+
+  declare function invoke(cmd: "is_driver_connected"): Promise<boolean>;
+
   declare function invoke(
     cmd: "setup_runtime",
     args: {
