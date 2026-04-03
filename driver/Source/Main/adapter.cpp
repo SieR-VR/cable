@@ -30,6 +30,13 @@ extern "C" DRIVER_UNLOAD DriverUnload;
 // Saved PortCls IRP_MJ_DEVICE_CONTROL handler - we intercept and forward non-Cable IOCTLs.
 PDRIVER_DISPATCH gPCDeviceControlHandler = NULL;
 
+// Saved PortCls IRP_MJ_CREATE and IRP_MJ_CLOSE handlers.
+// We intercept Create/Close to allow user-mode to open the Cable control device interface.
+// PortCls only accepts opens for its own filter/pin reference strings, so direct
+// device interface opens (empty FileName) would fail without this hook.
+PDRIVER_DISPATCH gPCCreateHandler = NULL;
+PDRIVER_DISPATCH gPCCloseHandler = NULL;
+
 // Symbolic link name for the device interface (stored so we can enable/disable it).
 UNICODE_STRING g_CableControlSymLink = { 0 };
 
@@ -55,6 +62,12 @@ DRIVER_DISPATCH PnpHandler;
 
 _Dispatch_type_(IRP_MJ_DEVICE_CONTROL)
 DRIVER_DISPATCH DeviceControlHandler;
+
+_Dispatch_type_(IRP_MJ_CREATE)
+DRIVER_DISPATCH CreateHandler;
+
+_Dispatch_type_(IRP_MJ_CLOSE)
+DRIVER_DISPATCH CloseHandler;
 
 //
 // Rendering streams are not saved to a file by default. Use the registry value 
@@ -358,6 +371,18 @@ Return Value:
     //
     gPCDeviceControlHandler = DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL];
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DeviceControlHandler;
+
+    //
+    // To intercept Create/Close for the Cable control device interface.
+    // PortCls only accepts opens for its own filter/pin reference strings,
+    // so we must hook Create to allow raw device interface opens (empty FileName)
+    // for user-mode IOCTL clients.
+    //
+    gPCCreateHandler = DriverObject->MajorFunction[IRP_MJ_CREATE];
+    DriverObject->MajorFunction[IRP_MJ_CREATE] = CreateHandler;
+
+    gPCCloseHandler = DriverObject->MajorFunction[IRP_MJ_CLOSE];
+    DriverObject->MajorFunction[IRP_MJ_CLOSE] = CloseHandler;
 
     //
     // Hook the port class unload function
@@ -1240,6 +1265,141 @@ Return Value:
 }
 
 //=============================================================================
+// CreateHandler / CloseHandler
+//
+// PortCls installs its own IRP_MJ_CREATE handler that only accepts opens
+// for PortCls filter / pin reference strings.  When user-mode calls
+// CreateFile on our GUID_CABLE_CONTROL_INTERFACE device interface, the
+// FileObject->FileName is empty (just "\" or zero-length).  PortCls would
+// reject this with STATUS_OBJECT_NAME_NOT_FOUND.
+//
+// We intercept IRP_MJ_CREATE: if the FileName is empty or "\", we treat it
+// as a Cable control-channel open and succeed immediately.  All other opens
+// are forwarded to PortCls so normal audio streaming keeps working.
+//
+// Likewise, IRP_MJ_CLOSE for control-channel file objects is completed here;
+// all others go to PortCls.
+//=============================================================================
+#pragma code_seg("PAGE")
+
+// Tag stored in FsContext to identify Cable control-channel file objects.
+#define CABLE_CONTROL_FSCONTEXT ((PVOID)(ULONG_PTR)0x4341424C) // 'CABL'
+
+NTSTATUS
+CreateHandler(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP        Irp
+)
+{
+#pragma warning(suppress: 28118)
+    PAGED_CODE();
+
+    ASSERT(DeviceObject);
+    ASSERT(Irp);
+
+    PIO_STACK_LOCATION irpStack = IoGetCurrentIrpStackLocation(Irp);
+    PFILE_OBJECT fileObject = irpStack->FileObject;
+
+    //
+    // Detect a raw device-interface open (no PortCls reference string).
+    // FileName is either NULL/empty or just "\".
+    //
+    BOOLEAN isCableOpen = FALSE;
+
+    if (fileObject != NULL)
+    {
+        if (fileObject->FileName.Length == 0)
+        {
+            isCableOpen = TRUE;
+        }
+        else if (fileObject->FileName.Length == sizeof(WCHAR) &&
+                 fileObject->FileName.Buffer != NULL &&
+                 fileObject->FileName.Buffer[0] == L'\\')
+        {
+            isCableOpen = TRUE;
+        }
+    }
+
+    if (isCableOpen && g_CableControlInterfaceEnabled)
+    {
+        //
+        // This is a Cable control-channel open.  Mark the file object
+        // so we recognise it in Close, then succeed.
+        //
+        DPF(D_TERSE, ("CreateHandler: Cable control-channel open"));
+
+        if (fileObject != NULL)
+        {
+            fileObject->FsContext = CABLE_CONTROL_FSCONTEXT;
+        }
+
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
+    }
+
+    //
+    // Not a Cable control open - forward to PortCls.
+    //
+    if (gPCCreateHandler != NULL)
+    {
+        return gPCCreateHandler(DeviceObject, Irp);
+    }
+
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return STATUS_NOT_SUPPORTED;
+}
+
+#pragma code_seg("PAGE")
+NTSTATUS
+CloseHandler(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP        Irp
+)
+{
+#pragma warning(suppress: 28118)
+    PAGED_CODE();
+
+    ASSERT(DeviceObject);
+    ASSERT(Irp);
+
+    PIO_STACK_LOCATION irpStack = IoGetCurrentIrpStackLocation(Irp);
+    PFILE_OBJECT fileObject = irpStack->FileObject;
+
+    //
+    // Check if this is a Cable control-channel file object.
+    //
+    if (fileObject != NULL &&
+        fileObject->FsContext == CABLE_CONTROL_FSCONTEXT)
+    {
+        DPF(D_TERSE, ("CloseHandler: Cable control-channel close"));
+
+        fileObject->FsContext = NULL;
+
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
+    }
+
+    //
+    // Not a Cable control close - forward to PortCls.
+    //
+    if (gPCCloseHandler != NULL)
+    {
+        return gPCCloseHandler(DeviceObject, Irp);
+    }
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return STATUS_SUCCESS;
+}
+
+//=============================================================================
 #pragma code_seg("PAGE")
 NTSTATUS
 DeviceControlHandler(
@@ -1308,27 +1468,55 @@ Return Value:
 
     default:
         //
-        // Not a Cable IOCTL - forward to PortCls's original handler.
+        // Not a Cable IOCTL.
+        // If this file object is a Cable control-channel open, we must NOT
+        // forward to PortCls (PortCls would crash trying to find filter/pin
+        // context on a file object it didn't create).
         //
-        if (gPCDeviceControlHandler != NULL)
         {
-            return gPCDeviceControlHandler(DeviceObject, Irp);
-        }
-        else
-        {
-            // Should not happen - PortCls always installs a handler.
-            ntStatus = STATUS_NOT_SUPPORTED;
+            PFILE_OBJECT fileObj = irpStack->FileObject;
+            if (fileObj != NULL && fileObj->FsContext == CABLE_CONTROL_FSCONTEXT)
+            {
+                DPF(D_TERSE, ("DeviceControlHandler: unknown IOCTL 0x%08X on Cable control handle", ioControlCode));
+                ntStatus = STATUS_INVALID_DEVICE_REQUEST;
+            }
+            else if (gPCDeviceControlHandler != NULL)
+            {
+                return gPCDeviceControlHandler(DeviceObject, Irp);
+            }
+            else
+            {
+                // Should not happen - PortCls always installs a handler.
+                ntStatus = STATUS_NOT_SUPPORTED;
+            }
         }
         break;
     }
 
     //
     // Complete the IRP for Cable-handled IOCTLs.
-    // Note: MAP_RING_BUFFER sets Irp->IoStatus.Information inside its handler
-    // to return the response size. For all other IOCTLs, Information is 0.
+    //
+    // For METHOD_BUFFERED, the I/O manager copies min(OutputBufferLength, Information)
+    // bytes from SystemBuffer back to user-mode.
+    //
+    // MAP_RING_BUFFER sets Information in its handler.
+    // CREATE_VIRTUAL_DEVICE needs to return the payload (with generated ID).
+    // All other Cable IOCTLs return no output data.
     //
     Irp->IoStatus.Status = ntStatus;
-    if (ioControlCode != IOCTL_CABLE_MAP_RING_BUFFER || !NT_SUCCESS(ntStatus))
+    if (NT_SUCCESS(ntStatus))
+    {
+        if (ioControlCode == IOCTL_CABLE_CREATE_VIRTUAL_DEVICE && outputLength >= sizeof(CABLE_DEVICE_CONTROL_PAYLOAD))
+        {
+            Irp->IoStatus.Information = sizeof(CABLE_DEVICE_CONTROL_PAYLOAD);
+        }
+        else if (ioControlCode != IOCTL_CABLE_MAP_RING_BUFFER)
+        {
+            Irp->IoStatus.Information = 0;
+        }
+        // MAP_RING_BUFFER sets Information inside its handler
+    }
+    else
     {
         Irp->IoStatus.Information = 0;
     }

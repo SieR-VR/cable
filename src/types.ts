@@ -22,6 +22,16 @@ export interface AudioDevice {
   bitsPerSample: number;
 }
 
+/** A virtual audio device created in the CableAudio driver. */
+export interface VirtualDevice {
+  /** Hex-encoded 16-byte device ID from the driver. */
+  id: string;
+  /** User-chosen friendly name. */
+  name: string;
+  /** "render" or "capture". */
+  deviceType: string;
+}
+
 export const nodeTypes = {
   audioInputDevice: AudioInputDevice,
   audioOutputDevice: AudioOutputDevice,
@@ -50,10 +60,11 @@ export type AudioNode = {
     | "virtualAudioOutput";
   data:
     | { device: AudioDevice | null; id: string }
-    | { name: string; id: string };
+    | { deviceId: string; name: string; id: string };
 };
 
 export type AudioEdge = {
+  id: string;
   from: string;
   to: string;
 

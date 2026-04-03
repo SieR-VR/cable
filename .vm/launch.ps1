@@ -39,7 +39,9 @@ $ErrorActionPreference = "Stop"
 $VmDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $VmDir
 $DriverPkg = Join-Path $ProjectRoot "driver\x64\Debug\package"
-$StagingDir = Join-Path $VmDir "staging"
+$StagingRoot = Join-Path $VmDir "staging"
+$RunId = [System.IO.Path]::GetRandomFileName().Substring(0, 8)
+$StagingDir = Join-Path $StagingRoot $RunId
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Cable VM Test Environment" -ForegroundColor Cyan
@@ -57,8 +59,12 @@ if (-not (Test-Path (Join-Path $DriverPkg "CableAudio.sys"))) {
 # ---- Prepare staging directory with driver files + install script ----
 Write-Host "Preparing staging directory..." -ForegroundColor Yellow
 
-if (Test-Path $StagingDir) {
-    Remove-Item $StagingDir -Recurse -Force
+# Use a random subdirectory under staging/ each time to avoid Defender file locks
+# on previously-scanned .sys files. Old runs are cleaned up best-effort.
+if (Test-Path $StagingRoot) {
+    Get-ChildItem $StagingRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
 
@@ -388,6 +394,119 @@ pause
 
 Set-Content -Path (Join-Path $StagingDir "setup-winrm.bat") -Value $setupWinrmBat -Encoding ASCII
 
+# Create all-in-one setup script: WinRM + test signing + network + cert + shutdown
+# This is the only script the user needs to run inside the VM.
+# NOTE: We write setup-all.bat with Set-Content (not a here-string) to avoid
+# PowerShell interpolating @{} and % sequences meant for cmd.exe.
+$setupAllLines = @(
+    '@echo off'
+    'echo ========================================'
+    'echo Cable VM - Full Setup (run once as Admin)'
+    'echo ========================================'
+    'echo.'
+    ''
+    'net session >nul 2>&1'
+    'if errorlevel 1 ('
+    '    echo ERROR: This script must be run as Administrator.'
+    '    echo Right-click and select "Run as administrator".'
+    '    pause'
+    '    exit /b 1'
+    ')'
+    ''
+    'echo [1/5] Enabling test signing...'
+    'bcdedit /set testsigning on'
+    'echo.'
+    ''
+    'echo [2/5] Setting password for cable account...'
+    'net user cable cable123'
+    'echo.'
+    ''
+    'echo [3/5] Configuring WinRM + Network + Firewall...'
+    'powershell -ExecutionPolicy Bypass -File "%~dp0setup-winrm.ps1"'
+    'echo.'
+    ''
+    'echo [4/5] Importing test certificate...'
+    'powershell -ExecutionPolicy Bypass -File "%~dp0import-cert.ps1" "%~dp0WDKTestCert.cer"'
+    'echo.'
+    ''
+    'echo [5/5] Verifying...'
+    'powershell -Command "Get-Service WinRM | Format-Table Status,Name -AutoSize"'
+    'echo.'
+    ''
+    'echo ========================================'
+    'echo Setup complete!'
+    'echo.'
+    'echo The VM will now SHUT DOWN.'
+    'echo Relaunch from host with:  .\.vm\launch.ps1 -Reuse'
+    'echo Then WinRM will be available and test signing active.'
+    'echo ========================================'
+    'echo.'
+    'echo Shutting down in 5 seconds...'
+    'shutdown /s /t 5'
+)
+Set-Content -Path (Join-Path $StagingDir "setup-all.bat") -Value ($setupAllLines -join "`r`n") -Encoding ASCII
+
+# Create the PowerShell helper script for certificate import
+$importCertPs1 = @'
+param([string]$CertPath)
+if (-not (Test-Path $CertPath)) {
+    Write-Output "  No certificate file found at $CertPath, skipping."
+    exit 0
+}
+$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($CertPath)
+Write-Output "  Certificate: $($cert.Subject)"
+Write-Output "  Thumbprint:  $($cert.Thumbprint)"
+
+$rootStore = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'LocalMachine')
+$rootStore.Open('ReadWrite')
+$rootStore.Add($cert)
+$rootStore.Close()
+Write-Output "  Added to Root store"
+
+$pubStore = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPublisher', 'LocalMachine')
+$pubStore.Open('ReadWrite')
+$pubStore.Add($cert)
+$pubStore.Close()
+Write-Output "  Added to TrustedPublisher store"
+'@
+Set-Content -Path (Join-Path $StagingDir "import-cert.ps1") -Value $importCertPs1 -Encoding ASCII
+
+# Create the PowerShell helper script for WinRM setup
+$setupWinrmPs1 = @'
+# Set network to Private (required for WinRM)
+Write-Output "  Setting network to Private..."
+Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue
+
+# Configure and start WinRM service
+Write-Output "  Configuring WinRM service..."
+Set-Service -Name WinRM -StartupType Automatic
+Start-Service -Name WinRM -ErrorAction SilentlyContinue
+
+# Wait for WinRM to be ready
+$timeout = 30
+for ($i = 0; $i -lt $timeout; $i++) {
+    $svc = Get-Service WinRM -ErrorAction SilentlyContinue
+    if ($svc.Status -eq 'Running') { break }
+    Start-Sleep -Seconds 1
+}
+Write-Output "  WinRM service status: $((Get-Service WinRM).Status)"
+
+# Configure WinRM settings via WSMan provider (avoids winrm.cmd parsing issues)
+Write-Output "  Setting AllowUnencrypted..."
+Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
+Write-Output "  Setting Basic auth..."
+Set-Item -Path WSMan:\localhost\Service\Auth\Basic -Value $true -Force
+
+# Firewall rule
+Write-Output "  Adding firewall rule..."
+New-NetFirewallRule -DisplayName "WinRM-HTTP" -Direction Inbound -LocalPort 5985 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+# Restart to apply all settings
+Restart-Service WinRM -Force
+Write-Output "  WinRM configured and restarted."
+'@
+Set-Content -Path (Join-Path $StagingDir "setup-winrm.ps1") -Value $setupWinrmPs1 -Encoding ASCII
+
 Write-Host "  Staging directory ready: $StagingDir" -ForegroundColor Green
 Get-ChildItem $StagingDir | ForEach-Object { Write-Host "    $($_.Name)" -ForegroundColor White }
 Write-Host ""
@@ -497,9 +616,9 @@ if ($UseIso) {
 }
 Write-Host ""
 Write-Host "--- VM Instructions ---" -ForegroundColor Cyan
-Write-Host "1. If first time: open elevated cmd, run 'D:\setup-winrm.bat'" -ForegroundColor White
-Write-Host "2. After WinRM setup: use '.\.vm\vm-exec.ps1 <command>' from host" -ForegroundColor White
-Write-Host "3. Or manually: run 'D:\install.bat' as Administrator in VM" -ForegroundColor White
+Write-Host "1. First time: open elevated cmd, run 'E:\setup-all.bat' (does everything + shuts down)" -ForegroundColor White
+Write-Host "2. After shutdown: relaunch with '.\.vm\launch.ps1 -Reuse'" -ForegroundColor White
+Write-Host "3. Then use '.\.vm\vm-install.ps1' to install driver via WinRM" -ForegroundColor White
 Write-Host "4. WinRM port forwarded: localhost:15985 -> VM:5985" -ForegroundColor White
 Write-Host "-----------------------" -ForegroundColor Cyan
 Write-Host ""
@@ -515,6 +634,10 @@ $qemuArgs = @(
     "-netdev", "user,id=net0,hostfwd=tcp::15985-:5985",
     "-usb",
     "-device", "usb-tablet",
+    # Intel HDA sound card with duplex (playback + capture) output via DirectSound
+    "-audiodev", "dsound,id=snd0",
+    "-device", "intel-hda",
+    "-device", "hda-duplex,audiodev=snd0",
     "-boot", "c",
     "-name", "Cable Driver Test VM",
     "-qmp", "tcp:127.0.0.1:14444,server,nowait"
@@ -543,7 +666,9 @@ if (Test-Path $TestImg) {
     Write-Host "  To start fresh:                  .\.vm\launch.ps1 -Fresh" -ForegroundColor Yellow
 }
 if (Test-Path $IsoPath) {
-    Remove-Item $IsoPath -Force
+    Remove-Item $IsoPath -Force -ErrorAction SilentlyContinue
     Write-Host "  Removed staging ISO" -ForegroundColor Green
 }
+# Best-effort staging cleanup (may fail if Defender is scanning)
+Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Done." -ForegroundColor Green

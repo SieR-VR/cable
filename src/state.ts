@@ -10,7 +10,7 @@ import {
   XYPosition,
 } from "@xyflow/react";
 
-import { AudioDevice, EdgeType, NodeType } from "./types";
+import { AudioDevice, EdgeType, NodeType, VirtualDevice } from "./types";
 
 const initialNodes: NodeType[] = [
   {
@@ -51,6 +51,9 @@ export interface AppState {
 
   driverConnected: boolean;
 
+  /** Virtual devices created via the driver (managed in the menu panel). */
+  virtualDevices: VirtualDevice[];
+
   nodes: NodeType[];
   edges: EdgeType[];
 
@@ -77,6 +80,11 @@ export interface AppState {
 
   initializeApp: () => Promise<void>;
 
+  // Virtual device management
+  addVirtualDevice: (name: string, deviceType: "render" | "capture") => Promise<void>;
+  removeVirtualDevice: (deviceId: string) => Promise<void>;
+  renameVirtualDevice: (deviceId: string, newName: string) => Promise<void>;
+
   onNodesChange: (changes: NodeChange<NodeType>[]) => void;
   onEdgesChange: (changes: EdgeChange<EdgeType>[]) => void;
   onConnect: (connection: Connection) => void;
@@ -98,6 +106,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   availableAudioOutputDevices: null,
 
   driverConnected: false,
+  virtualDevices: [],
 
   nodes: initialNodes,
   edges: [],
@@ -130,7 +139,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       type === "virtualAudioInput" || type === "virtualAudioOutput";
 
     const data = isVirtual
-      ? { name: "", edgeType: null }
+      ? { deviceId: "", name: "", edgeType: null }
       : { device: null, edgeType: null };
 
     const newNode: NodeType = {
@@ -166,9 +175,8 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
   initializeApp: async () => {
     async function initHosts() {
-      const hosts = await invoke("get_audio_hosts");
+      const hosts = await invoke<string[]>("get_audio_hosts");
       set({ availableAudioHosts: hosts, selectedAudioHost: hosts[0] || null });
-
       return hosts[0] || null;
     }
 
@@ -178,9 +186,9 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
         return;
       }
 
-      const [inputDevices, outputDevices] = await invoke("get_audio_devices", {
-        host,
-      });
+      const [inputDevices, outputDevices] = await invoke<
+        [AudioDevice[], AudioDevice[]]
+      >("get_audio_devices", { host });
       set({
         availableAudioInputDevices: inputDevices,
         availableAudioOutputDevices: outputDevices,
@@ -189,16 +197,70 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
     async function initDriver() {
       try {
-        const connected = await invoke("connect_driver");
+        const connected = await invoke<boolean>("connect_driver");
         set({ driverConnected: connected });
+
+        if (connected) {
+          const devices = await invoke<VirtualDevice[]>("list_virtual_devices");
+          set({ virtualDevices: devices });
+        }
       } catch (e) {
         console.warn("Failed to connect to CableAudio driver:", e);
         set({ driverConnected: false });
       }
     }
 
-    const host = await initHosts();
-    await Promise.all([initDevices(host), initDriver()]);
+    let host: string | null = null;
+    try {
+      host = await initHosts();
+    } catch (e) {
+      console.warn("Failed to initialize audio hosts:", e);
+    }
+    await Promise.all([
+      initDevices(host).catch((e) =>
+        console.warn("Failed to initialize audio devices:", e),
+      ),
+      initDriver(),
+    ]);
+  },
+
+  addVirtualDevice: async (name, deviceType) => {
+    try {
+      const device = await invoke<VirtualDevice>("create_virtual_device", {
+        name,
+        deviceType,
+      });
+      set({ virtualDevices: [...get().virtualDevices, device] });
+    } catch (e) {
+      console.error("Failed to create virtual device:", e);
+      throw e;
+    }
+  },
+
+  removeVirtualDevice: async (deviceId) => {
+    try {
+      await invoke("remove_virtual_device", { deviceId });
+      set({
+        virtualDevices: get().virtualDevices.filter((d) => d.id !== deviceId),
+      });
+    } catch (e) {
+      console.error("Failed to remove virtual device:", e);
+      throw e;
+    }
+  },
+
+  renameVirtualDevice: async (deviceId, newName) => {
+    try {
+      await invoke("rename_virtual_device", { deviceId, newName });
+      set({
+        virtualDevices: get().virtualDevices.map((d) =>
+          d.id === deviceId ? { ...d, name: newName } : d,
+        ),
+      });
+    } catch (e) {
+      console.error("Failed to rename virtual device:", e);
+      throw e;
+    }
   },
 
   onNodesChange: (changes) => {

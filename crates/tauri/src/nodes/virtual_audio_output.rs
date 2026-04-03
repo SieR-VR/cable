@@ -1,9 +1,9 @@
 /// Virtual Audio Output node.
 ///
-/// Creates a virtual **render** (speaker/output) device in the CableAudio driver.
+/// Uses a pre-created virtual **render** (speaker) device.
 /// In the Flow UI this is a **source** node: Windows applications write audio
 /// to this virtual speaker, and the node reads samples from the driver's shared
-/// ring buffer, forwarding them to downstream nodes (e.g., real audio outputs).
+/// ring buffer, forwarding them to downstream nodes.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -17,20 +17,22 @@ use crate::{
 #[cfg(windows)]
 use crate::driver_client::{DriverHandle, RingBufferMapping};
 #[cfg(windows)]
-use common::{DeviceId, DeviceType};
+use common::DeviceId;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VirtualAudioOutputNode {
   /// Node ID (matches ReactFlow node id)
   id: String,
-  /// User-chosen display name for the virtual device
+  /// Hex-encoded device ID of the pre-created virtual device
+  device_id: String,
+  /// Display name (informational)
   name: String,
 
-  /// Driver-assigned device ID (set during init)
+  /// Parsed 16-byte device ID
   #[serde(skip)]
   #[cfg(windows)]
-  device_id: Option<DeviceId>,
+  parsed_device_id: Option<DeviceId>,
 
   /// Handle to the driver
   #[serde(skip)]
@@ -47,6 +49,7 @@ impl std::fmt::Debug for VirtualAudioOutputNode {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("VirtualAudioOutputNode")
       .field("id", &self.id)
+      .field("device_id", &self.device_id)
       .field("name", &self.name)
       .finish()
   }
@@ -55,9 +58,13 @@ impl std::fmt::Debug for VirtualAudioOutputNode {
 impl NodeTrait for VirtualAudioOutputNode {
   fn init(&mut self, runtime: &Runtime) -> Result<(), String> {
     println!(
-      "Initializing virtual audio output (render): {} ({})",
-      self.name, self.id
+      "Initializing virtual audio output (render): {} device={}",
+      self.name, self.device_id
     );
+
+    if self.device_id.is_empty() {
+      return Err("No virtual render device selected".to_string());
+    }
 
     #[cfg(windows)]
     {
@@ -66,21 +73,16 @@ impl NodeTrait for VirtualAudioOutputNode {
         .as_ref()
         .ok_or_else(|| "CableAudio driver not connected".to_string())?;
 
-      // Create a virtual render device in the driver
-      let device_id = driver.create_virtual_device(&self.name, DeviceType::Render)?;
-      println!(
-        "Created virtual render device: {:?} for node {}",
-        device_id, self.id
-      );
+      let device_id = crate::hex_to_device_id(&self.device_id)?;
 
-      // Map the ring buffer into our process
+      // Map the ring buffer for the pre-created device
       let mapping = driver.map_ring_buffer(&device_id)?;
       println!(
-        "Mapped ring buffer for virtual render: addr={:?}, total={}, data={}",
-        mapping.user_address, mapping.total_size, mapping.data_buffer_size
+        "Mapped ring buffer for virtual render {}: addr={:?}, total={}, data={}",
+        self.device_id, mapping.user_address, mapping.total_size, mapping.data_buffer_size
       );
 
-      self.device_id = Some(device_id);
+      self.parsed_device_id = Some(device_id);
       self.driver_handle = Some(driver.clone());
       self.ring_buffer = Some(mapping);
     }
@@ -97,16 +99,16 @@ impl NodeTrait for VirtualAudioOutputNode {
 
   fn dispose(&mut self, _runtime: &Runtime) -> Result<(), String> {
     println!(
-      "Disposing virtual audio output (render): {} ({})",
-      self.name, self.id
+      "Disposing virtual audio output (render): {} device={}",
+      self.name, self.device_id
     );
 
     #[cfg(windows)]
     {
-      // Unmap ring buffer first
+      // Unmap ring buffer (device is NOT removed here - it's managed by the menu panel)
       if let (Some(driver), Some(device_id), Some(mapping)) = (
         self.driver_handle.as_ref(),
-        self.device_id.as_ref(),
+        self.parsed_device_id.as_ref(),
         self.ring_buffer.take(),
       ) {
         if let Err(e) = driver.unmap_ring_buffer(device_id, mapping.user_address) {
@@ -114,16 +116,7 @@ impl NodeTrait for VirtualAudioOutputNode {
         }
       }
 
-      // Remove the virtual device
-      if let (Some(driver), Some(device_id)) =
-        (self.driver_handle.as_ref(), self.device_id.as_ref())
-      {
-        if let Err(e) = driver.remove_virtual_device(device_id) {
-          eprintln!("Warning: failed to remove virtual device: {}", e);
-        }
-      }
-
-      self.device_id = None;
+      self.parsed_device_id = None;
       self.driver_handle = None;
     }
 
@@ -142,9 +135,7 @@ impl NodeTrait for VirtualAudioOutputNode {
         None => return Ok(BTreeMap::new()),
       };
 
-      // Read available samples from the driver ring buffer.
-      // The driver writes to this buffer when Windows apps play audio to
-      // this virtual render device.
+      // Read available samples from the driver ring buffer
       let max_samples = runtime.buffer_size as usize * 2; // stereo
       let mut buffer = vec![0.0f32; max_samples];
       let samples_read = ring_buffer.read_f32_samples(&mut buffer);

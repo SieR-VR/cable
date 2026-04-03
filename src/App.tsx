@@ -30,6 +30,7 @@ function App() {
   } = useAppStore();
 
   const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
+  const [applyStatus, setApplyStatus] = useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] =
     useState<ReactFlowInstance<NodeType, EdgeType> | null>(null);
 
@@ -68,7 +69,8 @@ function App() {
     }
   }, [contextMenuOpen, setContextMenuOpen]);
 
-  const onApply = useCallback(() => {
+  const onApply = useCallback(async () => {
+    setApplyStatus("Applying...");
     const graph: AudioGraph = {
       nodes: nodes.map((node) => {
         if (
@@ -79,6 +81,7 @@ function App() {
             type: node.type,
             data: {
               id: node.id,
+              deviceId: (node.data as any).deviceId || "",
               name: (node.data as any).name || "",
             },
           };
@@ -101,10 +104,17 @@ function App() {
       })),
     };
 
-    console.log(graph);
+    console.log("Applying graph:", graph);
 
-    invoke("setup_runtime", { graph, host: selectedAudioHost, bufferSize: 512 });
-  }, [nodes, edges]);
+    try {
+      await invoke("setup_runtime", { graph, host: selectedAudioHost, bufferSize: 512 });
+      setApplyStatus("Applied successfully");
+      setTimeout(() => setApplyStatus(null), 3000);
+    } catch (e: any) {
+      console.error("setup_runtime failed:", e);
+      setApplyStatus(`Error: ${e}`);
+    }
+  }, [nodes, edges, selectedAudioHost]);
 
   useEffect(() => {
     document.title = "Cable";
@@ -131,15 +141,22 @@ function App() {
       <Menu />
       <ContextMenu />
       <Panel position="bottom-center">
-        <div className="flex gap-2 items-center text-sm text-gray-500">
-          <span className={`inline-block w-2 h-2 rounded-full ${driverConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-          <span>{driverConnected ? 'Driver connected' : 'Driver offline'}</span>
-          <button
-            className="bg-gray-700 text-white px-2 py-1 rounded"
-            onClick={onApply}
-          >
-            Apply
-          </button>
+        <div className="flex flex-col items-center gap-1">
+          {applyStatus && (
+            <div className={`text-xs px-2 py-1 rounded ${applyStatus.startsWith('Error') ? 'bg-red-800 text-red-200' : applyStatus === 'Applying...' ? 'bg-yellow-800 text-yellow-200' : 'bg-green-800 text-green-200'}`}>
+              {applyStatus}
+            </div>
+          )}
+          <div className="flex gap-2 items-center text-sm text-gray-500">
+            <span className={`inline-block w-2 h-2 rounded-full ${driverConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+            <span>{driverConnected ? 'Driver connected' : 'Driver offline'}</span>
+            <button
+              className="bg-gray-700 text-white px-2 py-1 rounded"
+              onClick={onApply}
+            >
+              Apply
+            </button>
+          </div>
         </div>
       </Panel>
       <Panel position="top-right">

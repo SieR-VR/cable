@@ -42,7 +42,31 @@ typedef struct _CABLE_VIRTUAL_DEVICE_ENTRY {
     PUNKNOWN            UnknownWave;                        // Cached wave port
     CableRingBuffer*    pRingBuffer;                        // Shared memory ring buffer
     PVOID               pMappedUserAddress;                 // User-mode mapping address (if mapped)
+    UNICODE_STRING      WaveSymbolicLink;                   // Symbolic link for KSCATEGORY_AUDIO interface
 } CABLE_VIRTUAL_DEVICE_ENTRY, *PCABLE_VIRTUAL_DEVICE_ENTRY;
+
+//=============================================================================
+// DEVPKEY_DeviceInterface_FriendlyName
+// {026E516E-B814-414B-83CD-856D6FEF4822}, 2
+// Used to set the friendly name on audio device interfaces.
+//=============================================================================
+DEFINE_DEVPROPKEY(DEVPKEY_CableAudio_FriendlyName,
+    0x026e516e, 0xb814, 0x414b, 0x83, 0xcd, 0x85, 0x6d, 0x6f, 0xef, 0x48, 0x22,
+    2); // DEVPROP_TYPE_STRING
+
+//=============================================================================
+// Work item context for deferred InstallEndpointFilters calls.
+// PortCls port->Init() may not work safely from an IOCTL dispatch context,
+// so we defer the call to a system worker thread via IoWorkItem.
+//=============================================================================
+typedef struct _CABLE_INSTALL_WORKITEM_CONTEXT {
+    PIO_WORKITEM                WorkItem;           // The work item handle
+    KEVENT                      CompletionEvent;    // Signaled when work item finishes
+    NTSTATUS                    Status;             // Result from InstallEndpointFilters
+    PVOID                       pAdapterCommon;     // PADAPTERCOMMON (cast in callback)
+    PCABLE_VIRTUAL_DEVICE_ENTRY pEntry;             // Slot entry to populate
+    PENDPOINT_MINIPAIR          pMiniportPair;      // Template (SpeakerMiniports or MicArray1Miniports)
+} CABLE_INSTALL_WORKITEM_CONTEXT, *PCABLE_INSTALL_WORKITEM_CONTEXT;
 
 //=============================================================================
 // Classes
@@ -532,10 +556,312 @@ Routine Description:
             m_VirtualDevices[i].pRingBuffer = NULL;
         }
 
+        // Free symbolic link string allocated by IoRegisterDeviceInterface
+        if (m_VirtualDevices[i].WaveSymbolicLink.Buffer != NULL)
+        {
+            RtlFreeUnicodeString(&m_VirtualDevices[i].WaveSymbolicLink);
+            RtlZeroMemory(&m_VirtualDevices[i].WaveSymbolicLink, sizeof(UNICODE_STRING));
+        }
+
         m_VirtualDevices[i].InUse = FALSE;
     }
 
     m_VirtualDeviceCount = 0;
+}
+
+//=============================================================================
+// Work item callback for deferred subdevice installation.
+// Runs at PASSIVE_LEVEL in a system worker thread context.
+//
+// We manually perform the steps from InstallSubdevice inline so we can
+// log exactly which step crashes, since port->Init() with NULL IRP is
+// the primary suspect.
+//=============================================================================
+IO_WORKITEM_ROUTINE CableInstallEndpointWorkItem;
+
+#pragma code_seg("PAGE")
+VOID
+CableInstallEndpointWorkItem(
+    _In_        PDEVICE_OBJECT  DeviceObject,
+    _In_opt_    PVOID           Context
+)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    PAGED_CODE();
+
+    PCABLE_INSTALL_WORKITEM_CONTEXT pCtx = (PCABLE_INSTALL_WORKITEM_CONTEXT)Context;
+    if (pCtx == NULL)
+    {
+        return;
+    }
+
+    PADAPTERCOMMON pAdapterCommon = (PADAPTERCOMMON)pCtx->pAdapterCommon;
+    PCABLE_VIRTUAL_DEVICE_ENTRY pEntry = pCtx->pEntry;
+    PENDPOINT_MINIPAIR pTemplate = pCtx->pMiniportPair;
+
+    DPF(D_TERSE, ("WorkItem: BEGIN slot='%ws'", pEntry->WaveName));
+
+    //
+    // Step 1: Create topology port + miniport, Init, Register
+    //
+    NTSTATUS ntStatus;
+    PPORT    topoPort = NULL;
+    PUNKNOWN topoMiniport = NULL;
+    PUNKNOWN topoUnknown = NULL;
+    PPORT    wavePort = NULL;
+    PUNKNOWN waveMiniport = NULL;
+    PUNKNOWN waveUnknown = NULL;
+
+    DPF(D_TERSE, ("WorkItem: Step 1a - PcNewPort(Topology)"));
+    ntStatus = PcNewPort(&topoPort, CLSID_PortTopology);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: PcNewPort(Topology) FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 1a - PcNewPort OK, port=%p", topoPort));
+
+    DPF(D_TERSE, ("WorkItem: Step 1b - CreateMiniport(Topology)"));
+    if (pTemplate->TopoCreateCallback)
+    {
+        ntStatus = pTemplate->TopoCreateCallback(
+            &topoMiniport,
+            CLSID_PortTopology,
+            NULL,
+            POOL_FLAG_NON_PAGED,
+            (PUNKNOWN)pAdapterCommon,
+            NULL,
+            pTemplate);
+    }
+    else
+    {
+        ntStatus = PcNewMiniport((PMINIPORT*)&topoMiniport, CLSID_PortTopology);
+    }
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: CreateMiniport(Topology) FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 1b - CreateMiniport OK, miniport=%p", topoMiniport));
+
+    DPF(D_TERSE, ("WorkItem: Step 1c - topoPort->Init(Irp=NULL)"));
+#pragma warning(push)
+#pragma warning(disable:6387)
+    ntStatus = topoPort->Init(
+        pAdapterCommon->GetDeviceObject(),
+        NULL,                   // IRP = NULL for dynamic devices
+        (PMINIPORT)topoMiniport,
+        (PADAPTERCOMMON)pAdapterCommon,
+        NULL                    // ResourceList = NULL
+    );
+#pragma warning(pop)
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: topoPort->Init FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 1c - topoPort->Init OK"));
+
+    DPF(D_TERSE, ("WorkItem: Step 1d - PcRegisterSubdevice(topo='%ws')", pEntry->TopoName));
+    ntStatus = PcRegisterSubdevice(
+        pAdapterCommon->GetDeviceObject(),
+        pEntry->TopoName,
+        topoPort);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: PcRegisterSubdevice(topo) FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 1d - PcRegisterSubdevice(topo) OK"));
+
+    // Get IUnknown for topology port
+    ntStatus = topoPort->QueryInterface(IID_IUnknown, (PVOID*)&topoUnknown);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: QI topo IUnknown FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+
+    //
+    // Step 2: Create wave port + miniport, Init, Register
+    //
+    DPF(D_TERSE, ("WorkItem: Step 2a - PcNewPort(WaveRT)"));
+    ntStatus = PcNewPort(&wavePort, CLSID_PortWaveRT);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: PcNewPort(WaveRT) FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 2a - PcNewPort(WaveRT) OK, port=%p", wavePort));
+
+    DPF(D_TERSE, ("WorkItem: Step 2b - CreateMiniport(Wave)"));
+    if (pTemplate->WaveCreateCallback)
+    {
+        ntStatus = pTemplate->WaveCreateCallback(
+            &waveMiniport,
+            CLSID_PortWaveRT,
+            NULL,
+            POOL_FLAG_NON_PAGED,
+            (PUNKNOWN)pAdapterCommon,
+            NULL,
+            pTemplate);
+    }
+    else
+    {
+        ntStatus = PcNewMiniport((PMINIPORT*)&waveMiniport, CLSID_PortWaveRT);
+    }
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: CreateMiniport(Wave) FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 2b - CreateMiniport(Wave) OK, miniport=%p", waveMiniport));
+
+    DPF(D_TERSE, ("WorkItem: Step 2c - wavePort->Init(Irp=NULL)"));
+#pragma warning(push)
+#pragma warning(disable:6387)
+    ntStatus = wavePort->Init(
+        pAdapterCommon->GetDeviceObject(),
+        NULL,                   // IRP = NULL for dynamic devices
+        (PMINIPORT)waveMiniport,
+        (PADAPTERCOMMON)pAdapterCommon,
+        NULL                    // ResourceList = NULL
+    );
+#pragma warning(pop)
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: wavePort->Init FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 2c - wavePort->Init OK"));
+
+    DPF(D_TERSE, ("WorkItem: Step 2d - PcRegisterSubdevice(wave='%ws')", pEntry->WaveName));
+    ntStatus = PcRegisterSubdevice(
+        pAdapterCommon->GetDeviceObject(),
+        pEntry->WaveName,
+        wavePort);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: PcRegisterSubdevice(wave) FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+    DPF(D_TERSE, ("WorkItem: Step 2d - PcRegisterSubdevice(wave) OK"));
+
+    // Get IUnknown for wave port
+    ntStatus = wavePort->QueryInterface(IID_IUnknown, (PVOID*)&waveUnknown);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: QI wave IUnknown FAILED 0x%08X", ntStatus));
+        pCtx->Status = ntStatus;
+        goto Done;
+    }
+
+    //
+    // Step 2e: Register KSCATEGORY_AUDIO interface and set FriendlyName
+    //
+    // IoRegisterDeviceInterface is idempotent - if PcRegisterSubdevice already
+    // registered the interface internally, this returns the same symbolic link.
+    // We use the wave reference string so the name applies to the wave subdevice
+    // that Windows audio subsystem enumerates as an endpoint.
+    //
+    {
+        UNICODE_STRING waveRefString;
+        RtlInitUnicodeString(&waveRefString, pEntry->WaveName);
+
+        DPF(D_TERSE, ("WorkItem: Step 2e - IoRegisterDeviceInterface(KSCATEGORY_AUDIO, '%ws')",
+            pEntry->WaveName));
+
+        ntStatus = IoRegisterDeviceInterface(
+            pAdapterCommon->GetPhysicalDeviceObject(),
+            &KSCATEGORY_AUDIO,
+            &waveRefString,
+            &pEntry->WaveSymbolicLink);
+
+        if (NT_SUCCESS(ntStatus))
+        {
+            DPF(D_TERSE, ("WorkItem: Step 2e - IoRegisterDeviceInterface OK, symlink='%wZ'",
+                &pEntry->WaveSymbolicLink));
+
+            // Set DEVPKEY_DeviceInterface_FriendlyName on the interface
+            CABLEAUDIO_DEVPROPERTY friendlyNameProp;
+            friendlyNameProp.PropertyKey = &DEVPKEY_CableAudio_FriendlyName;
+            friendlyNameProp.Type = DEVPROP_TYPE_STRING;
+            friendlyNameProp.BufferSize = (ULONG)((wcslen(pEntry->FriendlyName) + 1) * sizeof(WCHAR));
+            friendlyNameProp.Buffer = (PVOID)pEntry->FriendlyName;
+
+            NTSTATUS propStatus = CableAudioIoSetDeviceInterfacePropertyDataMultiple(
+                &pEntry->WaveSymbolicLink,
+                1,
+                &friendlyNameProp);
+
+            if (!NT_SUCCESS(propStatus))
+            {
+                DPF(D_ERROR, ("WorkItem: IoSetDeviceInterfacePropertyData(FriendlyName) FAILED 0x%08X", propStatus));
+                // Non-fatal: device will work but show generic name
+            }
+            else
+            {
+                DPF(D_TERSE, ("WorkItem: FriendlyName set to '%ws'", pEntry->FriendlyName));
+            }
+        }
+        else
+        {
+            DPF(D_ERROR, ("WorkItem: IoRegisterDeviceInterface FAILED 0x%08X", ntStatus));
+            // Non-fatal: device will work but we can't set its name
+            RtlZeroMemory(&pEntry->WaveSymbolicLink, sizeof(UNICODE_STRING));
+            ntStatus = STATUS_SUCCESS; // Don't fail the whole operation
+        }
+    }
+
+    //
+    // Step 3: Connect topology <-> wave bridge pins
+    //
+    DPF(D_TERSE, ("WorkItem: Step 3 - ConnectTopologies"));
+    ntStatus = pAdapterCommon->ConnectTopologies(
+        topoUnknown,
+        waveUnknown,
+        pTemplate->PhysicalConnections,
+        pTemplate->PhysicalConnectionCount);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("WorkItem: ConnectTopologies FAILED 0x%08X", ntStatus));
+        // Non-fatal: endpoints may still work without physical connections
+    }
+
+    //
+    // Success - store the unknown pointers in the device entry
+    //
+    pEntry->UnknownTopology = topoUnknown;
+    topoUnknown = NULL;     // ownership transferred
+    pEntry->UnknownWave = waveUnknown;
+    waveUnknown = NULL;     // ownership transferred
+
+    pCtx->Status = STATUS_SUCCESS;
+    DPF(D_TERSE, ("WorkItem: SUCCESS topo=%p wave=%p",
+        pEntry->UnknownTopology, pEntry->UnknownWave));
+
+Done:
+    // Cleanup on failure
+    SAFE_RELEASE(waveUnknown);
+    SAFE_RELEASE(topoUnknown);
+    SAFE_RELEASE(waveMiniport);
+    SAFE_RELEASE(topoMiniport);
+    if (wavePort) wavePort->Release();
+    if (topoPort) topoPort->Release();
+
+    DPF(D_TERSE, ("WorkItem: END status=0x%08X", pCtx->Status));
+
+    // Signal completion to the waiting IOCTL thread
+    KeSetEvent(&pCtx->CompletionEvent, IO_NO_INCREMENT, FALSE);
 }
 
 //=============================================================================
@@ -573,8 +899,24 @@ Return Value:
 
     NTSTATUS ntStatus = STATUS_SUCCESS;
 
-    // Check if device with this ID already exists
-    if (FindVirtualDeviceById(Payload->Id) != NULL)
+    //
+    // Generate a device ID if the caller sent all-zeros.
+    // We use a simple counter-based scheme: first 4 bytes = slot index + 1,
+    // next 4 bytes = incrementing counter.  This is sufficient for
+    // uniqueness within a single driver session.
+    //
+    BOOLEAN idIsZero = TRUE;
+    for (ULONG i = 0; i < CABLE_DEVICE_ID_SIZE; i++)
+    {
+        if (Payload->Id[i] != 0)
+        {
+            idIsZero = FALSE;
+            break;
+        }
+    }
+
+    // Check if device with this ID already exists (skip check for zero IDs)
+    if (!idIsZero && FindVirtualDeviceById(Payload->Id) != NULL)
     {
         DPF(D_ERROR, ("CreateVirtualDevice: device ID already exists"));
         return STATUS_OBJECTID_EXISTS;
@@ -601,7 +943,33 @@ Return Value:
 
     // Initialize the entry
     RtlZeroMemory(pEntry, sizeof(*pEntry));
-    RtlCopyMemory(pEntry->Id, Payload->Id, CABLE_DEVICE_ID_SIZE);
+
+    if (idIsZero)
+    {
+        // Generate a unique device ID:
+        //   bytes 0-3:  'C','B','L',0   (signature)
+        //   bytes 4-7:  slot index
+        //   bytes 8-11: device type
+        //   bytes 12-15: incrementing counter
+        static volatile LONG s_IdCounter = 0;
+        LONG counter = InterlockedIncrement(&s_IdCounter);
+
+        pEntry->Id[0] = 'C';
+        pEntry->Id[1] = 'B';
+        pEntry->Id[2] = 'L';
+        pEntry->Id[3] = 0;
+        *((ULONG*)&pEntry->Id[4])  = slotIndex;
+        *((ULONG*)&pEntry->Id[8])  = (ULONG)Payload->DeviceType;
+        *((LONG*)&pEntry->Id[12])  = counter;
+
+        // Write the generated ID back to the payload so it gets returned
+        // to user-mode via the output buffer (METHOD_BUFFERED).
+        RtlCopyMemory(Payload->Id, pEntry->Id, CABLE_DEVICE_ID_SIZE);
+    }
+    else
+    {
+        RtlCopyMemory(pEntry->Id, Payload->Id, CABLE_DEVICE_ID_SIZE);
+    }
     pEntry->DeviceType = Payload->DeviceType;
     RtlCopyMemory(pEntry->FriendlyName, Payload->FriendlyName, sizeof(pEntry->FriendlyName));
     // Ensure null termination
@@ -625,64 +993,70 @@ Return Value:
         return ntStatus;
     }
 
-    // Select template minipair based on device type
-    PENDPOINT_MINIPAIR pTemplate;
-    if (pEntry->DeviceType == CableDeviceTypeRender)
+    //
+    // Select the appropriate miniport template based on device type.
+    //
+    PENDPOINT_MINIPAIR pTemplate =
+        (Payload->DeviceType == CableDeviceTypeRender)
+        ? &SpeakerMiniports
+        : &MicArray1Miniports;
+
+    //
+    // Defer InstallEndpointFilters to a system worker thread via IoWorkItem.
+    // PortCls port->Init() can BSOD if called directly from IOCTL context.
+    // The work item runs at PASSIVE_LEVEL in a system thread which is safe.
+    //
+    PIO_WORKITEM workItem = IoAllocateWorkItem(m_pDeviceObject);
+    if (workItem == NULL)
     {
-        pTemplate = &SpeakerMiniports;
+        DPF(D_ERROR, ("CreateVirtualDevice: IoAllocateWorkItem failed"));
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    CABLE_INSTALL_WORKITEM_CONTEXT ctx;
+    RtlZeroMemory(&ctx, sizeof(ctx));
+    ctx.WorkItem        = workItem;
+    ctx.pAdapterCommon  = (PVOID)(PADAPTERCOMMON)this;
+    ctx.pEntry          = pEntry;
+    ctx.pMiniportPair   = pTemplate;
+    ctx.Status          = STATUS_PENDING;
+    KeInitializeEvent(&ctx.CompletionEvent, NotificationEvent, FALSE);
+
+    // Mark InUse BEFORE queuing so cleanup won't miss it
+    pEntry->UnknownTopology = NULL;
+    pEntry->UnknownWave     = NULL;
+    pEntry->InUse           = TRUE;
+    m_VirtualDeviceCount++;
+
+    DPF(D_TERSE, ("CreateVirtualDevice: queuing work item for slot=%u type=%u name='%ws'",
+        slotIndex, pEntry->DeviceType, pEntry->FriendlyName));
+
+    IoQueueWorkItem(workItem, CableInstallEndpointWorkItem, DelayedWorkQueue, &ctx);
+
+    //
+    // Wait for the work item to complete.  This blocks the IOCTL thread
+    // but that is acceptable since the caller expects a synchronous result.
+    //
+    KeWaitForSingleObject(&ctx.CompletionEvent, Executive, KernelMode, FALSE, NULL);
+
+    // Free the work item now that the callback has finished
+    IoFreeWorkItem(workItem);
+
+    ntStatus = ctx.Status;
+
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DPF(D_ERROR, ("CreateVirtualDevice: work item failed 0x%08X, rolling back slot %u",
+            ntStatus, slotIndex));
+        // Roll back the slot allocation
+        pEntry->InUse = FALSE;
+        m_VirtualDeviceCount--;
     }
     else
     {
-        pTemplate = &MicArray1Miniports;
-    }
-
-    //
-    // We build a temporary ENDPOINT_MINIPAIR that uses the template's
-    // filter descriptors, create callbacks, and physical connections,
-    // but with our unique topology/wave names.
-    //
-    ENDPOINT_MINIPAIR dynamicPair;
-    RtlCopyMemory(&dynamicPair, pTemplate, sizeof(ENDPOINT_MINIPAIR));
-    dynamicPair.TopoName = pEntry->TopoName;
-    dynamicPair.WaveName = pEntry->WaveName;
-    // Use the existing reference strings from template as template names
-    // so that INF interface properties can be inherited.
-    dynamicPair.TemplateTopoName = pTemplate->TopoName;
-    dynamicPair.TemplateWaveName = pTemplate->WaveName;
-
-    // Install the endpoint filters (topology + wave)
-    PUNKNOWN unknownTopo = NULL;
-    PUNKNOWN unknownWave = NULL;
-
-    ntStatus = InstallEndpointFilters(
-        NULL,                   // No IRP for runtime creation
-        &dynamicPair,
-        NULL,                   // No device context
-        &unknownTopo,
-        &unknownWave,
-        NULL,                   // Don't need miniport topology
-        NULL                    // Don't need miniport wave
-    );
-
-    if (NT_SUCCESS(ntStatus))
-    {
-        pEntry->UnknownTopology = unknownTopo;  // Takes ownership of AddRef'd reference
-        pEntry->UnknownWave     = unknownWave;
-        pEntry->InUse           = TRUE;
-        m_VirtualDeviceCount++;
-
-        DPF(D_TERSE, ("CreateVirtualDevice: OK slot=%u type=%u name='%ws' topo='%ws' wave='%ws'",
-            slotIndex, pEntry->DeviceType, pEntry->FriendlyName,
-            pEntry->TopoName, pEntry->WaveName));
-    }
-    else
-    {
-        DPF(D_ERROR, ("CreateVirtualDevice: InstallEndpointFilters failed 0x%x", ntStatus));
-
-        // Clean up partial state
-        SAFE_RELEASE(unknownTopo);
-        SAFE_RELEASE(unknownWave);
-        RtlZeroMemory(pEntry, sizeof(*pEntry));
+        DPF(D_TERSE, ("CreateVirtualDevice: OK slot=%u type=%u wave='%ws' topo=%p wave=%p",
+            slotIndex, pEntry->DeviceType, pEntry->WaveName,
+            pEntry->UnknownTopology, pEntry->UnknownWave));
     }
 
     return ntStatus;
@@ -724,38 +1098,42 @@ Return Value:
 
     DPF(D_TERSE, ("RemoveVirtualDevice: removing '%ws'", pEntry->FriendlyName));
 
-    // Get the template for physical connections
-    PENDPOINT_MINIPAIR pTemplate =
-        (pEntry->DeviceType == CableDeviceTypeRender)
-        ? &SpeakerMiniports
-        : &MicArray1Miniports;
-
-    // Disconnect topology <-> wave
-    if (pEntry->UnknownTopology != NULL && pEntry->UnknownWave != NULL)
+    // If subdevices were registered (future: non-stub path), disconnect and unregister them
+    if (pEntry->UnknownTopology != NULL || pEntry->UnknownWave != NULL)
     {
-        DisconnectTopologies(
-            pEntry->UnknownTopology,
-            pEntry->UnknownWave,
-            pTemplate->PhysicalConnections,
-            pTemplate->PhysicalConnectionCount);
-    }
+        // Get the template for physical connections
+        PENDPOINT_MINIPAIR pTemplate =
+            (pEntry->DeviceType == CableDeviceTypeRender)
+            ? &SpeakerMiniports
+            : &MicArray1Miniports;
 
-    // Unregister wave
-    if (pEntry->UnknownWave != NULL)
-    {
-        RemoveCachedSubdevice(pEntry->WaveName);
-        UnregisterSubdevice(pEntry->UnknownWave);
-        pEntry->UnknownWave->Release();
-        pEntry->UnknownWave = NULL;
-    }
+        // Disconnect topology <-> wave
+        if (pEntry->UnknownTopology != NULL && pEntry->UnknownWave != NULL)
+        {
+            DisconnectTopologies(
+                pEntry->UnknownTopology,
+                pEntry->UnknownWave,
+                pTemplate->PhysicalConnections,
+                pTemplate->PhysicalConnectionCount);
+        }
 
-    // Unregister topology
-    if (pEntry->UnknownTopology != NULL)
-    {
-        RemoveCachedSubdevice(pEntry->TopoName);
-        UnregisterSubdevice(pEntry->UnknownTopology);
-        pEntry->UnknownTopology->Release();
-        pEntry->UnknownTopology = NULL;
+        // Unregister wave
+        if (pEntry->UnknownWave != NULL)
+        {
+            RemoveCachedSubdevice(pEntry->WaveName);
+            UnregisterSubdevice(pEntry->UnknownWave);
+            pEntry->UnknownWave->Release();
+            pEntry->UnknownWave = NULL;
+        }
+
+        // Unregister topology
+        if (pEntry->UnknownTopology != NULL)
+        {
+            RemoveCachedSubdevice(pEntry->TopoName);
+            UnregisterSubdevice(pEntry->UnknownTopology);
+            pEntry->UnknownTopology->Release();
+            pEntry->UnknownTopology = NULL;
+        }
     }
 
     // Clean up ring buffer (Phase 4)
@@ -769,6 +1147,13 @@ Return Value:
         pEntry->pRingBuffer->Cleanup();
         delete pEntry->pRingBuffer;
         pEntry->pRingBuffer = NULL;
+    }
+
+    // Free symbolic link string allocated by IoRegisterDeviceInterface
+    if (pEntry->WaveSymbolicLink.Buffer != NULL)
+    {
+        RtlFreeUnicodeString(&pEntry->WaveSymbolicLink);
+        RtlZeroMemory(&pEntry->WaveSymbolicLink, sizeof(UNICODE_STRING));
     }
 
     // Clear the slot
@@ -793,12 +1178,8 @@ CAdapterCommon::UpdateVirtualDeviceName
 Routine Description:
 
     Updates the friendly name of a dynamically created virtual device.
-
-    Note: This updates our internal tracking only. The actual device
-    friendly name in the audio endpoint is set via device properties
-    and may require re-registration to take effect in the Windows
-    audio control panel. Full re-registration will be addressed
-    in a future iteration.
+    Sets both the internal tracking name and the Windows audio endpoint
+    property via IoSetDeviceInterfacePropertyData.
 
 Arguments:
 
@@ -827,10 +1208,35 @@ Return Value:
 
     RtlStringCbCopyW(pEntry->FriendlyName, sizeof(pEntry->FriendlyName), NewName);
 
-    // TODO: Update the actual audio endpoint friendly name property
-    // via IoSetDeviceInterfacePropertyData with DEVPKEY_DeviceInterface_FriendlyName.
-    // This requires the symbolic link name of the audio interface, which we
-    // don't currently store. Will be addressed when we need live renaming.
+    // Update the Windows audio endpoint friendly name property
+    if (pEntry->WaveSymbolicLink.Buffer != NULL &&
+        pEntry->WaveSymbolicLink.Length > 0)
+    {
+        CABLEAUDIO_DEVPROPERTY friendlyNameProp;
+        friendlyNameProp.PropertyKey = &DEVPKEY_CableAudio_FriendlyName;
+        friendlyNameProp.Type = DEVPROP_TYPE_STRING;
+        friendlyNameProp.BufferSize = (ULONG)((wcslen(pEntry->FriendlyName) + 1) * sizeof(WCHAR));
+        friendlyNameProp.Buffer = (PVOID)pEntry->FriendlyName;
+
+        NTSTATUS propStatus = CableAudioIoSetDeviceInterfacePropertyDataMultiple(
+            &pEntry->WaveSymbolicLink,
+            1,
+            &friendlyNameProp);
+
+        if (!NT_SUCCESS(propStatus))
+        {
+            DPF(D_ERROR, ("UpdateVirtualDeviceName: IoSetDeviceInterfacePropertyData FAILED 0x%08X", propStatus));
+            // Non-fatal: internal name was updated even if endpoint name failed
+        }
+        else
+        {
+            DPF(D_TERSE, ("UpdateVirtualDeviceName: endpoint FriendlyName updated OK"));
+        }
+    }
+    else
+    {
+        DPF(D_TERSE, ("UpdateVirtualDeviceName: no symbolic link stored, internal name only"));
+    }
 
     return STATUS_SUCCESS;
 }

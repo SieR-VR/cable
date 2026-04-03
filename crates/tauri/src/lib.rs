@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{
   Arc,
   atomic::{AtomicBool, Ordering},
@@ -17,12 +18,26 @@ use nodes::audio_output_device::AudioOutputDeviceNode;
 use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
 
+/// A virtual audio device managed by the driver, independent of the audio graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VirtualDevice {
+  /// Hex-encoded 16-byte device ID from the driver.
+  pub id: String,
+  /// User-chosen friendly name.
+  pub name: String,
+  /// "render" or "capture".
+  pub device_type: String,
+}
+
 struct AppData {
   runtime: Option<runtime::Runtime>,
   runtime_thread: Option<std::thread::JoinHandle<()>>,
   runtime_running: Option<Arc<AtomicBool>>,
   #[cfg(windows)]
   driver_handle: Option<Arc<driver_client::DriverHandle>>,
+  /// Virtual devices created via the menu panel (device_hex_id -> VirtualDevice).
+  virtual_devices: BTreeMap<String, VirtualDevice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,6 +184,118 @@ async fn is_driver_connected(state: State<'_, Mutex<AppData>>) -> Result<bool, S
   }
 }
 
+/// List all currently created virtual devices.
+#[tauri::command]
+async fn list_virtual_devices(
+  state: State<'_, Mutex<AppData>>,
+) -> Result<Vec<VirtualDevice>, String> {
+  let state = state.lock().await;
+  Ok(state.virtual_devices.values().cloned().collect())
+}
+
+/// Create a new virtual audio device via the driver.
+/// Returns the created VirtualDevice with its driver-assigned ID.
+#[tauri::command]
+async fn create_virtual_device(
+  state: State<'_, Mutex<AppData>>,
+  name: String,
+  device_type: String,
+) -> Result<VirtualDevice, String> {
+  #[cfg(windows)]
+  {
+    let mut app = state.lock().await;
+    let driver = app
+      .driver_handle
+      .as_ref()
+      .ok_or_else(|| "Driver not connected".to_string())?
+      .clone();
+
+    let dt = match device_type.as_str() {
+      "render" => common::DeviceType::Render,
+      "capture" => common::DeviceType::Capture,
+      _ => return Err(format!("Invalid device type: {}", device_type)),
+    };
+
+    let device_id = driver.create_virtual_device(&name, dt)?;
+    let hex_id = hex::encode(device_id);
+
+    println!(
+      "Created virtual {} device '{}' -> {}",
+      device_type, name, hex_id
+    );
+
+    let vd = VirtualDevice {
+      id: hex_id.clone(),
+      name,
+      device_type,
+    };
+    app.virtual_devices.insert(hex_id, vd.clone());
+    Ok(vd)
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = (state, name, device_type);
+    Err("Virtual devices require Windows".to_string())
+  }
+}
+
+/// Remove an existing virtual audio device via the driver.
+#[tauri::command]
+async fn remove_virtual_device(
+  state: State<'_, Mutex<AppData>>,
+  device_id: String,
+) -> Result<(), String> {
+  #[cfg(windows)]
+  {
+    let mut app = state.lock().await;
+    let driver = app
+      .driver_handle
+      .as_ref()
+      .ok_or_else(|| "Driver not connected".to_string())?
+      .clone();
+
+    let id_bytes = hex_to_device_id(&device_id)?;
+    driver.remove_virtual_device(&id_bytes)?;
+    app.virtual_devices.remove(&device_id);
+
+    println!("Removed virtual device {}", device_id);
+    Ok(())
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = (state, device_id);
+    Err("Virtual devices require Windows".to_string())
+  }
+}
+
+/// Rename a virtual device (local state only; driver doesn't support rename IOCTL yet).
+#[tauri::command]
+async fn rename_virtual_device(
+  state: State<'_, Mutex<AppData>>,
+  device_id: String,
+  new_name: String,
+) -> Result<(), String> {
+  let mut app = state.lock().await;
+  if let Some(vd) = app.virtual_devices.get_mut(&device_id) {
+    vd.name = new_name;
+    Ok(())
+  } else {
+    Err(format!("Device {} not found", device_id))
+  }
+}
+
+/// Convert hex string to 16-byte DeviceId.
+#[cfg(windows)]
+fn hex_to_device_id(hex: &str) -> Result<common::DeviceId, String> {
+  let bytes = hex::decode(hex).map_err(|e| format!("Invalid device ID hex: {}", e))?;
+  if bytes.len() != 16 {
+    return Err(format!("Device ID must be 16 bytes, got {}", bytes.len()));
+  }
+  let mut id = [0u8; 16];
+  id.copy_from_slice(&bytes);
+  Ok(id)
+}
+
 #[tauri::command]
 async fn setup_runtime(
   state: State<'_, Mutex<AppData>>,
@@ -284,12 +411,17 @@ pub fn run() {
       runtime_running: None,
       #[cfg(windows)]
       driver_handle: None,
+      virtual_devices: BTreeMap::new(),
     }))
     .invoke_handler(tauri::generate_handler![
       get_audio_hosts,
       get_audio_devices,
       connect_driver,
       is_driver_connected,
+      list_virtual_devices,
+      create_virtual_device,
+      remove_virtual_device,
+      rename_virtual_device,
       setup_runtime,
       enable_runtime,
       disable_runtime,
