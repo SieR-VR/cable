@@ -68,12 +68,13 @@ pub const CABLE_MAX_DYNAMIC_DEVICES: u32 = 16;
 /// Mirrors: CABLE_DEVICE_CONTROL_PAYLOAD in cable_common.h
 ///
 /// Layout (packed):
-///   Id:           [u8; 16]    = 16 bytes
-///   FriendlyName: [u16; 64]   = 128 bytes
-///   DeviceType:   DeviceType  = 4 bytes (u32)
-///   IsEnabled:    u8          = 1 byte
-///   Persistent:   u8          = 1 byte
-///   Total: 150 bytes
+///   Id:               [u8; 16]    = 16 bytes
+///   FriendlyName:     [u16; 64]   = 128 bytes
+///   DeviceType:       DeviceType  = 4 bytes (u32)
+///   IsEnabled:        u8          = 1 byte
+///   Persistent:       u8          = 1 byte
+///   WaveSymbolicLink: [u16; 256]  = 512 bytes  (response-only, null-terminated)
+///   Total: 662 bytes
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct DeviceControlPayload {
@@ -87,6 +88,10 @@ pub struct DeviceControlPayload {
   pub is_enabled: u8,
   /// Persistence flag (true = survives reboot)
   pub persistent: u8,
+  /// KS audio interface symbolic link returned by the driver after creation.
+  /// Kernel form: `\??\SWD#MMDEVAPI#...#WaveCable_NN` (null-terminated UTF-16).
+  /// Written by the driver in the CREATE response; zero in all other requests.
+  pub wave_symbolic_link: [u16; 256],
 }
 
 /// IOCTL unified request packet
@@ -94,7 +99,7 @@ pub struct DeviceControlPayload {
 pub union IoctlRequest {
   pub device_control: DeviceControlPayload,
   pub format_update: AudioFormat,
-  pub raw_data: [u8; 256], // Padding / future expansion
+  pub raw_data: [u8; 768], // Padding / future expansion (covers 662-byte DeviceControlPayload)
 }
 
 /// CTL_CODE(DeviceType, Function, Method, Access) calculation

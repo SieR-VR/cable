@@ -24,6 +24,15 @@ use common::{
   RingBufferHeader, RingBufferMapRequest, RingBufferMapResponse, RingBufferUnmapRequest,
 };
 
+/// Result of a successful `create_virtual_device` IOCTL.
+pub struct CreatedDevice {
+  /// The 16-byte device ID assigned by the driver.
+  pub id: DeviceId,
+  /// The KS audio interface symbolic link (kernel form `\??\SWD#...`).
+  /// Empty string if the driver could not register the interface.
+  pub wave_symbolic_link: String,
+}
+
 /// Device interface GUID matching the driver's GUID_CABLE_CONTROL_INTERFACE.
 /// {A3F2E8B1-7C4D-4F5A-9E6B-1D2C3A4B5E6F}
 const GUID_CABLE_CONTROL_INTERFACE: GUID = GUID::from_values(
@@ -199,12 +208,13 @@ impl DriverHandle {
 
   /// Create a virtual audio device in the driver.
   ///
-  /// Returns the 16-byte device ID assigned by the driver.
+  /// Returns a `CreatedDevice` containing the driver-assigned device ID and
+  /// the KS audio interface symbolic link for endpoint discovery.
   pub fn create_virtual_device(
     &self,
     friendly_name: &str,
     device_type: DeviceType,
-  ) -> Result<DeviceId, String> {
+  ) -> Result<CreatedDevice, String> {
     let mut name_wide = [0u16; 64];
     for (i, ch) in friendly_name.encode_utf16().take(63).enumerate() {
       name_wide[i] = ch;
@@ -216,6 +226,7 @@ impl DriverHandle {
       device_type,
       is_enabled: 1,
       persistent: 0,
+      wave_symbolic_link: [0u16; 256],
     };
 
     let mut response = DeviceControlPayload {
@@ -224,6 +235,7 @@ impl DriverHandle {
       device_type: DeviceType::Render,
       is_enabled: 0,
       persistent: 0,
+      wave_symbolic_link: [0u16; 256],
     };
 
     let _bytes = self.ioctl(
@@ -234,7 +246,16 @@ impl DriverHandle {
       mem::size_of::<DeviceControlPayload>() as u32,
     )?;
 
-    Ok(response.id)
+    // Decode the null-terminated UTF-16 WaveSymbolicLink from the response.
+    // Copy to a local array first because `response` is a packed struct (unaligned refs are UB).
+    let wsl: [u16; 256] = response.wave_symbolic_link;
+    let len = wsl.iter().position(|&c| c == 0).unwrap_or(wsl.len());
+    let wave_symbolic_link = String::from_utf16_lossy(&wsl[..len]).to_owned();
+
+    Ok(CreatedDevice {
+      id: response.id,
+      wave_symbolic_link,
+    })
   }
 
   /// Remove a virtual audio device from the driver.
@@ -245,6 +266,7 @@ impl DriverHandle {
       device_type: DeviceType::Render,
       is_enabled: 0,
       persistent: 0,
+      wave_symbolic_link: [0u16; 256],
     };
 
     self.ioctl(

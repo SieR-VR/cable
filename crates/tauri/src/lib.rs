@@ -28,6 +28,16 @@ pub(crate) struct VirtualDevice {
   pub name: String,
   /// "render" or "capture".
   pub device_type: String,
+  /// KS audio interface symbolic link (kernel form `\??\SWD#...`).
+  /// Internal field — not sent to the frontend.
+  #[serde(skip)]
+  #[allow(dead_code)]
+  pub wave_symbolic_link: String,
+  /// Windows MM endpoint ID string (e.g. `{0.0.0.00000000}.{guid}`).
+  /// Cached at creation time for fast IMMDevice lookup during rename.
+  /// Internal field — not sent to the frontend.
+  #[serde(skip)]
+  pub endpoint_id: String,
 }
 
 struct AppData {
@@ -203,32 +213,84 @@ async fn create_virtual_device(
 ) -> Result<VirtualDevice, String> {
   #[cfg(windows)]
   {
-    let mut app = state.lock().await;
-    let driver = app
-      .driver_handle
-      .as_ref()
-      .ok_or_else(|| "Driver not connected".to_string())?
-      .clone();
+    // Take a snapshot of existing endpoint IDs *before* creating the device so
+    // we can detect the new one by diff (avoids unreliable PnP tree traversal).
+    let pre_snapshot = tauri::async_runtime::spawn_blocking(snapshot_endpoint_ids)
+      .await
+      .unwrap_or_else(|_| std::collections::HashSet::new());
 
-    let dt = match device_type.as_str() {
-      "render" => common::DeviceType::Render,
-      "capture" => common::DeviceType::Capture,
-      _ => return Err(format!("Invalid device type: {}", device_type)),
-    };
+    // Acquire lock only long enough to clone the driver handle and issue the IOCTL.
+    // We release the lock before the long COM enumeration so other commands can proceed.
+    let (hex_id, wave_symbolic_link) = {
+      let app = state.lock().await;
+      let driver = app
+        .driver_handle
+        .as_ref()
+        .ok_or_else(|| "Driver not connected".to_string())?
+        .clone();
+      // Lock is still held during the IOCTL call, but the IOCTL is fast (kernel
+      // synchronous); the long async wait is the COM enumeration below.
+      drop(app); // release lock before blocking IOCTL
 
-    let device_id = driver.create_virtual_device(&name, dt)?;
-    let hex_id = hex::encode(device_id);
+      let dt = match device_type.as_str() {
+        "render" => common::DeviceType::Render,
+        "capture" => common::DeviceType::Capture,
+        _ => return Err(format!("Invalid device type: {}", device_type)),
+      };
 
-    println!(
-      "Created virtual {} device '{}' -> {}",
-      device_type, name, hex_id
-    );
+      let created = driver.create_virtual_device(&name, dt)?;
+      let hex_id = hex::encode(created.id);
+
+      println!(
+        "Created virtual {} device '{}' -> {} (wsl='{}')",
+        device_type, name, hex_id, created.wave_symbolic_link
+      );
+
+      (hex_id, created.wave_symbolic_link)
+    }; // ← mutex is already released (dropped above)
+
+    // Attempt to find the Windows MM endpoint ID for this device by polling for
+    // a newly-appeared endpoint (diff against pre_snapshot).
+    // We do this on a blocking thread to keep COM calls off the async executor.
+    let name_for_creation = name.clone();
+    let endpoint_id = tauri::async_runtime::spawn_blocking(move || {
+      let ep_id = find_new_endpoint_id(&pre_snapshot, 15, 300)?;
+      eprintln!("create_virtual_device: found endpoint_id='{}'", ep_id);
+      // If we found the endpoint, immediately stamp the user's chosen name.
+      // The driver sets interface-level properties, but PKEY_Device_DeviceDesc
+      // on the MM endpoint (pid=2) is what Windows Audio exposes as FriendlyName.
+      if !ep_id.is_empty() {
+        if let Err(e) = elevated_set_endpoint_device_desc(&ep_id, &name_for_creation) {
+          eprintln!(
+            "elevated_set_endpoint_device_desc at creation failed: {}",
+            e
+          );
+          // Non-fatal: device works, just shows generic name until next rename.
+        }
+      }
+      Ok(ep_id)
+    })
+    .await
+    .unwrap_or_else(|e: tauri::Error| {
+      eprintln!("spawn_blocking error finding endpoint_id: {}", e);
+      Ok::<String, String>(String::new())
+    })
+    .unwrap_or_else(|e: String| {
+      eprintln!("find_new_endpoint_id error: {}", e);
+      String::new()
+    });
+
+    println!("  endpoint_id for {}: '{}'", hex_id, endpoint_id);
 
     let vd = VirtualDevice {
       id: hex_id.clone(),
       name,
       device_type,
+      wave_symbolic_link,
+      endpoint_id,
     };
+    // Re-acquire the lock to persist the new device entry.
+    let mut app = state.lock().await;
     app.virtual_devices.insert(hex_id, vd.clone());
     Ok(vd)
   }
@@ -268,19 +330,57 @@ async fn remove_virtual_device(
   }
 }
 
-/// Rename a virtual device (local state only; driver doesn't support rename IOCTL yet).
+/// Rename a virtual audio device.
+///
+/// Uses COM IPropertyStore to write PKEY_Device_DeviceDesc (pid=2) on the
+/// MM endpoint, which causes Windows to reflect the new name as FriendlyName.
+/// Also updates the in-memory AppData entry.
 #[tauri::command]
 async fn rename_virtual_device(
   state: State<'_, Mutex<AppData>>,
   device_id: String,
   new_name: String,
 ) -> Result<(), String> {
-  let mut app = state.lock().await;
-  if let Some(vd) = app.virtual_devices.get_mut(&device_id) {
-    vd.name = new_name;
+  #[cfg(windows)]
+  {
+    // Fetch the cached endpoint_id under the lock, then drop the lock before
+    // calling into COM (which can block and must not hold the async mutex).
+    let endpoint_id = {
+      let app = state.lock().await;
+      app
+        .virtual_devices
+        .get(&device_id)
+        .ok_or_else(|| format!("Device {} not found", device_id))?
+        .endpoint_id
+        .clone()
+    };
+
+    if endpoint_id.is_empty() {
+      return Err(format!(
+        "Device {} has no cached endpoint_id; cannot rename",
+        device_id
+      ));
+    }
+
+    let name_for_com = new_name.clone();
+    let ep_id = endpoint_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+      elevated_set_endpoint_device_desc(&ep_id, &name_for_com)
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking error: {}", e))??;
+
+    // Update local state.
+    let mut app = state.lock().await;
+    if let Some(vd) = app.virtual_devices.get_mut(&device_id) {
+      vd.name = new_name;
+    }
     Ok(())
-  } else {
-    Err(format!("Device {} not found", device_id))
+  }
+  #[cfg(not(windows))]
+  {
+    let _ = (state, device_id, new_name);
+    Err("Virtual devices require Windows".to_string())
   }
 }
 
@@ -294,6 +394,363 @@ fn hex_to_device_id(hex: &str) -> Result<common::DeviceId, String> {
   let mut id = [0u8; 16];
   id.copy_from_slice(&bytes);
   Ok(id)
+}
+
+// ---------------------------------------------------------------------------
+// COM helpers for audio endpoint discovery and rename
+// ---------------------------------------------------------------------------
+
+/// Collect the IDs of all currently active MM audio endpoints into a HashSet.
+///
+/// Called on a blocking thread before creating a virtual device so we can
+/// identify the new endpoint by set-difference after creation.
+#[cfg(windows)]
+fn snapshot_endpoint_ids() -> std::collections::HashSet<String> {
+  use windows::Win32::Media::Audio::{DEVICE_STATE, IMMDeviceEnumerator, MMDeviceEnumerator, eAll};
+  use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+  };
+
+  let mut ids = std::collections::HashSet::new();
+
+  unsafe {
+    let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+    if hr.is_err() && hr != windows::Win32::Foundation::S_FALSE {
+      eprintln!("snapshot_endpoint_ids: CoInitializeEx failed: {:?}", hr);
+      return ids;
+    }
+    let _guard = CoUninitGuard;
+
+    let enumerator: IMMDeviceEnumerator =
+      match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER) {
+        Ok(e) => e,
+        Err(e) => {
+          eprintln!("snapshot_endpoint_ids: CoCreateInstance failed: {}", e);
+          return ids;
+        }
+      };
+
+    // Enumerate all active endpoints (render + capture).
+    let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0x1)) {
+      Ok(c) => c,
+      Err(e) => {
+        eprintln!("snapshot_endpoint_ids: EnumAudioEndpoints failed: {}", e);
+        return ids;
+      }
+    };
+
+    let count = match collection.GetCount() {
+      Ok(n) => n,
+      Err(_) => return ids,
+    };
+
+    for i in 0..count {
+      let device = match collection.Item(i) {
+        Ok(d) => d,
+        Err(_) => continue,
+      };
+      let id_pwstr = match device.GetId() {
+        Ok(p) => p,
+        Err(_) => continue,
+      };
+      let id_str = id_pwstr.to_string().unwrap_or_default();
+      windows::Win32::System::Com::CoTaskMemFree(Some(id_pwstr.as_ptr() as *const _));
+      ids.insert(id_str);
+    }
+  }
+
+  ids
+}
+
+/// Poll MM audio endpoints until one appears that is NOT in `pre_snapshot`.
+///
+/// Returns the new endpoint's ID string, e.g. `{0.0.0.00000000}.{guid}`.
+/// Returns an empty string if no new endpoint appears within the retry window.
+///
+/// This avoids all PnP-tree traversal (CM_Get_Parent, SetupDi) — the new
+/// endpoint is simply the one that wasn't there before the IOCTL.
+#[cfg(windows)]
+fn find_new_endpoint_id(
+  pre_snapshot: &std::collections::HashSet<String>,
+  max_retries: u32,
+  retry_delay_ms: u64,
+) -> Result<String, String> {
+  use windows::Win32::Media::Audio::{DEVICE_STATE, IMMDeviceEnumerator, MMDeviceEnumerator, eAll};
+  use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+  };
+
+  unsafe {
+    let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+    if hr.is_err() && hr != windows::Win32::Foundation::S_FALSE {
+      return Err(format!("CoInitializeEx failed: {:?}", hr));
+    }
+    let _coinit_guard = CoUninitGuard;
+
+    let enumerator: IMMDeviceEnumerator =
+      CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER)
+        .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) failed: {}", e))?;
+
+    for attempt in 0..=max_retries {
+      if attempt > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(retry_delay_ms));
+        eprintln!("find_new_endpoint_id: retry {}/{}", attempt, max_retries);
+      }
+
+      let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0x1)) {
+        Ok(c) => c,
+        Err(e) => return Err(format!("EnumAudioEndpoints failed: {}", e)),
+      };
+
+      let count = match collection.GetCount() {
+        Ok(n) => n,
+        Err(e) => return Err(format!("GetCount failed: {}", e)),
+      };
+
+      for i in 0..count {
+        let device = match collection.Item(i) {
+          Ok(d) => d,
+          Err(_) => continue,
+        };
+        let id_pwstr = match device.GetId() {
+          Ok(p) => p,
+          Err(_) => continue,
+        };
+        let id_str = id_pwstr.to_string().unwrap_or_default();
+        windows::Win32::System::Com::CoTaskMemFree(Some(id_pwstr.as_ptr() as *const _));
+
+        if !pre_snapshot.contains(&id_str) {
+          eprintln!(
+            "find_new_endpoint_id: found new endpoint '{}' on attempt {}",
+            id_str, attempt
+          );
+          return Ok(id_str);
+        }
+      }
+    }
+
+    eprintln!(
+      "find_new_endpoint_id: no new endpoint appeared after {} retries",
+      max_retries
+    );
+    Ok(String::new())
+  }
+}
+
+/// Write PKEY_Device_DeviceDesc (pid=2) on the MM endpoint identified by
+/// `endpoint_id`. This changes the first component of the FriendlyName that
+/// Windows Audio shows in the Sound control panel and GetFriendlyName().
+#[cfg(windows)]
+fn set_endpoint_device_desc(endpoint_id: &str, new_name: &str) -> Result<(), String> {
+  use windows::Win32::Foundation::PROPERTYKEY;
+  use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator};
+  use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+  use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemAlloc,
+    CoTaskMemFree, STGM,
+  };
+  use windows::Win32::System::Variant::VT_LPWSTR;
+  use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+
+  // PKEY_Device_DeviceDesc = {A45C254E-DF1C-4EFD-8020-67D146A850E0}, pid=2
+  const PKEY_DEVICE_DESC_FMTID: windows::core::GUID = windows::core::GUID::from_values(
+    0xA45C254E,
+    0xDF1C,
+    0x4EFD,
+    [0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0],
+  );
+
+  let ep_wide: Vec<u16> = endpoint_id
+    .encode_utf16()
+    .chain(std::iter::once(0))
+    .collect();
+  let name_wide: Vec<u16> = new_name.encode_utf16().chain(std::iter::once(0)).collect();
+
+  unsafe {
+    let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+    if hr.is_err() && hr != windows::Win32::Foundation::S_FALSE {
+      return Err(format!("CoInitializeEx failed: {:?}", hr));
+    }
+    let _coinit_guard = CoUninitGuard;
+
+    let enumerator: IMMDeviceEnumerator =
+      CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER)
+        .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) failed: {}", e))?;
+
+    let device = enumerator
+      .GetDevice(windows::core::PCWSTR(ep_wide.as_ptr()))
+      .map_err(|e| format!("GetDevice('{}') failed: {}", endpoint_id, e))?;
+
+    // STGM_READWRITE = 2
+    let props: IPropertyStore = device
+      .OpenPropertyStore(STGM(2))
+      .map_err(|e| format!("OpenPropertyStore(READWRITE) failed: {}", e))?;
+
+    // Build a VT_LPWSTR PROPVARIANT for the new name.
+    // PROPVARIANT layout: vt (u16 at offset 0) + padding (6 bytes) + union (8 bytes).
+    // We allocate a CoTaskMem buffer for the string and store the pointer at offset 8.
+    let mut pv = PROPVARIANT::default();
+    let byte_len = name_wide.len() * 2; // includes null terminator
+    let buf = CoTaskMemAlloc(byte_len) as *mut u16;
+    if buf.is_null() {
+      return Err("CoTaskMemAlloc failed".to_string());
+    }
+    std::ptr::copy_nonoverlapping(name_wide.as_ptr(), buf, name_wide.len());
+
+    let pv_ptr = &mut pv as *mut PROPVARIANT as *mut u8;
+    *(pv_ptr as *mut u16) = VT_LPWSTR.0 as u16; // vt at offset 0
+    *(pv_ptr.add(8) as *mut *mut u16) = buf; // pwszVal at offset 8
+
+    let key = PROPERTYKEY {
+      fmtid: PKEY_DEVICE_DESC_FMTID,
+      pid: 2,
+    };
+
+    let set_result = props.SetValue(&key, &pv);
+
+    // Always free the buffer we allocated.
+    CoTaskMemFree(Some(buf as *const _));
+    // Zero the pointer in pv so it isn't double-freed by accident.
+    *(pv_ptr.add(8) as *mut *mut u16) = std::ptr::null_mut();
+
+    set_result.map_err(|e| format!("IPropertyStore::SetValue(DeviceDesc) failed: {}", e))?;
+
+    props
+      .Commit()
+      .map_err(|e| format!("IPropertyStore::Commit failed: {}", e))?;
+
+    println!(
+      "IPropertyStore::SetValue(DeviceDesc) OK for endpoint '{}'",
+      endpoint_id
+    );
+    Ok(())
+  }
+}
+
+/// RAII guard that calls CoUninitialize when dropped.
+#[cfg(windows)]
+struct CoUninitGuard;
+
+#[cfg(windows)]
+impl Drop for CoUninitGuard {
+  fn drop(&mut self) {
+    unsafe {
+      windows::Win32::System::Com::CoUninitialize();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Elevated rename helpers
+// ---------------------------------------------------------------------------
+
+/// Public entry point called from `main.rs` when the process is re-launched
+/// with `--rename-endpoint <endpoint_id> <name>`.
+///
+/// This runs in an elevated (admin) context and writes PKEY_Device_DeviceDesc
+/// via IPropertyStore, then returns.
+#[cfg(windows)]
+pub fn rename_endpoint_elevated(endpoint_id: &str, new_name: &str) -> Result<(), String> {
+  set_endpoint_device_desc(endpoint_id, new_name)
+}
+
+/// Re-launch the current executable with verb "runas" so that Windows shows a
+/// UAC prompt and the child process runs elevated.  The child is invoked with
+/// `--rename-endpoint <endpoint_id> <new_name>` arguments.
+///
+/// This function blocks until the elevated child exits and returns an error if
+/// the user cancels the UAC prompt or the child exits with a non-zero code.
+#[cfg(windows)]
+fn elevated_set_endpoint_device_desc(endpoint_id: &str, new_name: &str) -> Result<(), String> {
+  use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+  use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+  use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+  use windows::core::PCWSTR;
+
+  // Build the argument string: --rename-endpoint <endpoint_id> <new_name>
+  // We quote the name component to preserve spaces.
+  // The endpoint_id is a Windows audio endpoint path — it can contain braces
+  // and dots but not spaces, so no quoting needed.
+  let args_str = format!(
+    "--rename-endpoint {} {}",
+    endpoint_id,
+    shell_quote(new_name)
+  );
+
+  // Get the path of the current executable.
+  let exe_path = std::env::current_exe().map_err(|e| format!("current_exe() failed: {}", e))?;
+  let exe_str = exe_path
+    .to_str()
+    .ok_or_else(|| "exe path is not valid UTF-8".to_string())?;
+
+  // Encode as wide strings with null terminator.
+  let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+  let exe_wide: Vec<u16> = exe_str.encode_utf16().chain(std::iter::once(0)).collect();
+  let args_wide: Vec<u16> = args_str.encode_utf16().chain(std::iter::once(0)).collect();
+
+  unsafe {
+    let mut sei = SHELLEXECUTEINFOW {
+      cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+      fMask: SEE_MASK_NOCLOSEPROCESS,
+      hwnd: windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+      lpVerb: PCWSTR(verb.as_ptr()),
+      lpFile: PCWSTR(exe_wide.as_ptr()),
+      lpParameters: PCWSTR(args_wide.as_ptr()),
+      lpDirectory: PCWSTR(std::ptr::null()),
+      nShow: 0, // SW_HIDE
+      ..Default::default()
+    };
+
+    ShellExecuteExW(&mut sei).map_err(|e| {
+      format!(
+        "ShellExecuteExW(runas) failed: {} — user may have cancelled UAC",
+        e
+      )
+    })?;
+
+    // hProcess is only valid when SEE_MASK_NOCLOSEPROCESS is set and the
+    // operation succeeded.
+    let hproc = sei.hProcess;
+    if hproc.is_invalid() {
+      return Err("ShellExecuteExW returned invalid process handle".to_string());
+    }
+
+    // Wait for the elevated child to complete.
+    let wait_result = WaitForSingleObject(hproc, INFINITE);
+    if wait_result != WAIT_OBJECT_0 {
+      let _ = CloseHandle(hproc);
+      return Err(format!(
+        "WaitForSingleObject failed (result={:?})",
+        wait_result
+      ));
+    }
+
+    let mut exit_code: u32 = 0;
+    let _ = GetExitCodeProcess(hproc, &mut exit_code);
+    let _ = CloseHandle(hproc);
+
+    if exit_code != 0 {
+      return Err(format!(
+        "Elevated rename process exited with code {} (rename failed)",
+        exit_code
+      ));
+    }
+
+    Ok(())
+  }
+}
+
+/// Minimally quote a string for use as a single shell token:
+/// wraps in double-quotes if the string contains spaces, escaping embedded
+/// double-quotes with backslash.
+#[cfg(windows)]
+fn shell_quote(s: &str) -> String {
+  if s.contains(' ') || s.contains('"') {
+    let escaped = s.replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+  } else {
+    s.to_string()
+  }
 }
 
 #[tauri::command]
@@ -381,6 +838,13 @@ async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> 
   Ok(())
 }
 
+/// Open the WebView developer tools (browser devtools).
+/// Works in debug builds; in release builds requires the `devtools` Cargo feature.
+#[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) {
+  window.open_devtools();
+}
+
 #[tauri::command]
 async fn disable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
@@ -425,6 +889,7 @@ pub fn run() {
       setup_runtime,
       enable_runtime,
       disable_runtime,
+      open_devtools,
     ])
     .run(tauri::generate_context!())
     .unwrap();
