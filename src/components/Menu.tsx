@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { MenuIcon, XIcon, PlusIcon, TrashIcon, PencilIcon, CheckIcon } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/state";
@@ -12,64 +13,90 @@ function DeviceItem({
 }: {
   device: VirtualDevice;
   onRemove: () => void;
-  onRename: (newName: string) => void;
+  onRename: (newName: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(device.name);
+  const [renaming, setRenaming] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
 
-  const handleConfirm = () => {
-    if (editName.trim() && editName !== device.name) {
-      onRename(editName.trim());
+  const handleConfirm = async () => {
+    if (!editName.trim() || editName === device.name) {
+      setEditing(false);
+      return;
     }
-    setEditing(false);
+    setRenaming(true);
+    setRenameError(null);
+    try {
+      await onRename(editName.trim());
+      setEditing(false);
+    } catch (e: unknown) {
+      const msg = String(e);
+      // ShellExecuteExW failure means the user cancelled the UAC prompt.
+      if (msg.includes("cancelled UAC") || msg.includes("ShellExecuteExW")) {
+        setRenameError("Rename cancelled (UAC denied)");
+      } else {
+        setRenameError("Rename failed");
+      }
+    } finally {
+      setRenaming(false);
+    }
   };
 
   return (
-    <div className="flex items-center gap-1 group">
-      {editing ? (
-        <>
-          <input
-            type="text"
-            className="flex-1 min-w-0 px-1 py-0.5 text-xs border border-gray-300 rounded bg-white text-black"
-            value={editName}
-            onChange={(e) => setEditName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleConfirm();
-              if (e.key === "Escape") setEditing(false);
-            }}
-            autoFocus
-          />
-          <button
-            className="p-0.5 text-green-600 hover:text-green-800"
-            onClick={handleConfirm}
-            title="Confirm"
-          >
-            <CheckIcon size={12} />
-          </button>
-        </>
-      ) : (
-        <>
-          <span className="flex-1 min-w-0 text-xs text-black truncate" title={device.name}>
-            {device.name}
-          </span>
-          <button
-            className="p-0.5 text-gray-400 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
-            onClick={() => {
-              setEditName(device.name);
-              setEditing(true);
-            }}
-            title="Rename"
-          >
-            <PencilIcon size={12} />
-          </button>
-          <button
-            className="p-0.5 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            onClick={onRemove}
-            title="Remove"
-          >
-            <TrashIcon size={12} />
-          </button>
-        </>
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1 group">
+        {editing ? (
+          <>
+            <input
+              type="text"
+              className="flex-1 min-w-0 px-1 py-0.5 text-xs border border-gray-300 rounded bg-white text-black"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleConfirm();
+                if (e.key === "Escape") { setEditing(false); setRenameError(null); }
+              }}
+              disabled={renaming}
+              autoFocus
+            />
+            <button
+              className="p-0.5 text-green-600 hover:text-green-800 disabled:opacity-40"
+              onClick={handleConfirm}
+              disabled={renaming}
+              title={renaming ? "Renaming…" : "Confirm"}
+            >
+              <CheckIcon size={12} />
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="flex-1 min-w-0 text-xs text-black truncate" title={device.name}>
+              {device.name}
+            </span>
+            <button
+              className="p-0.5 text-gray-400 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={() => {
+                setEditName(device.name);
+                setRenameError(null);
+                setEditing(true);
+              }}
+              title="Rename"
+            >
+              <PencilIcon size={12} />
+            </button>
+            <button
+              className="p-0.5 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={onRemove}
+              title="Remove"
+            >
+              <TrashIcon size={12} />
+            </button>
+          </>
+        )}
+      </div>
+      {renameError && (
+        <span className="text-xs text-red-500 pl-1">{renameError}</span>
       )}
     </div>
   );
@@ -90,7 +117,7 @@ function DeviceGroup({
   deviceType: "render" | "capture";
   onAdd: (name: string, type: "render" | "capture") => void;
   onRemove: (id: string) => void;
-  onRename: (id: string, name: string) => void;
+  onRename: (id: string, name: string) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -264,6 +291,16 @@ export default function Menu() {
               onRename={renameVirtualDevice}
             />
           </div>
+        </div>
+
+        {/* Footer: Dev Tools */}
+        <div className="border-t border-gray-200 p-2">
+          <button
+            className="w-full text-xs text-gray-400 hover:text-gray-700 py-1 rounded hover:bg-gray-50 transition-colors"
+            onClick={() => invoke("open_devtools")}
+          >
+            Developer Tools
+          </button>
         </div>
       </div>
     </>
