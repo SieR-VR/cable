@@ -148,14 +148,14 @@ Custom device type: `CABLE_FILE_DEVICE_TYPE = 0x00008000`
 
 All IOCTLs use `METHOD_BUFFERED` and `FILE_ANY_ACCESS`.
 
-| IOCTL | Function | Code | Input | Output |
-|---|---|---|---|---|
-| `IOCTL_CABLE_CREATE_VIRTUAL_DEVICE` | 0x0001 | `0x80000004` | `CABLE_IOCTL_REQUEST` (256 bytes) | `CABLE_DEVICE_CONTROL_PAYLOAD` (150 bytes) |
-| `IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE` | 0x0002 | `0x80000008` | `CABLE_IOCTL_REQUEST` (256 bytes) | None |
-| `IOCTL_CABLE_UPDATE_DEVICE_NAME` | 0x0003 | `0x8000000C` | `CABLE_IOCTL_REQUEST` (256 bytes) | None |
-| `IOCTL_CABLE_SET_STREAM_FORMAT` | 0x0004 | `0x80000010` | `CABLE_IOCTL_REQUEST` (256 bytes) | None |
-| `IOCTL_CABLE_MAP_RING_BUFFER` | 0x0005 | `0x80000014` | `CABLE_RING_BUFFER_MAP_REQUEST` (16 bytes) | `CABLE_RING_BUFFER_MAP_RESPONSE` (16 bytes) |
-| `IOCTL_CABLE_UNMAP_RING_BUFFER` | 0x0006 | `0x80000018` | `CABLE_RING_BUFFER_UNMAP_REQUEST` (24 bytes) | None |
+| IOCTL | Function | Code | Input | Output | Notes |
+|---|---|---|---|---|---|
+| `IOCTL_CABLE_CREATE_VIRTUAL_DEVICE` | 0x0001 | `0x80000004` | `CABLE_IOCTL_REQUEST` (768 bytes) | `CABLE_DEVICE_CONTROL_PAYLOAD` (662 bytes) | Response includes `WaveSymbolicLink` |
+| `IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE` | 0x0002 | `0x80000008` | `CABLE_IOCTL_REQUEST` (768 bytes) | None | |
+| `IOCTL_CABLE_UPDATE_DEVICE_NAME` | 0x0003 | `0x8000000C` | `CABLE_IOCTL_REQUEST` (768 bytes) | None | Tauri 앱에서 사용하지 않음 — 이름 변경은 elevated IPropertyStore COM 호출로 수행 (`docs/endpoint-naming.md` 참고) |
+| `IOCTL_CABLE_SET_STREAM_FORMAT` | 0x0004 | `0x80000010` | `CABLE_IOCTL_REQUEST` (768 bytes) | None | |
+| `IOCTL_CABLE_MAP_RING_BUFFER` | 0x0005 | `0x80000014` | `CABLE_RING_BUFFER_MAP_REQUEST` (16 bytes) | `CABLE_RING_BUFFER_MAP_RESPONSE` (16 bytes) | |
+| `IOCTL_CABLE_UNMAP_RING_BUFFER` | 0x0006 | `0x80000018` | `CABLE_RING_BUFFER_UNMAP_REQUEST` (24 bytes) | None | |
 
 ### IOCTL Code Calculation
 
@@ -179,13 +179,14 @@ User-mode (Tauri app)                   Kernel (CableAudio.sys)
      |                                       |
      |-- DeviceIoControl(IOCTL_CABLE_        |
      |   CREATE_VIRTUAL_DEVICE,              |
-     |   inBuf=CABLE_IOCTL_REQUEST,          |
-     |   outBuf=150 bytes)              ---->  DeviceControlHandler
-     |                                       |   -> CableIoctl_CreateVirtualDevice
-     |                                       |   -> CAdapterCommon::CreateVirtualDevice
-     |                                       |   -> (work item creates subdevices)
-     |  <-- outBuf filled with payload       |   <- IRP completed, Information=150
-     |      (ID, name, type)                 |
+      |   inBuf=CABLE_IOCTL_REQUEST,          |
+      |   outBuf=662 bytes)              ---->  DeviceControlHandler
+      |                                       |   -> CableIoctl_CreateVirtualDevice
+      |                                       |   -> CAdapterCommon::CreateVirtualDevice
+      |                                       |   -> (work item creates subdevices)
+      |  <-- outBuf filled with payload       |   <- IRP completed, Information=662
+      |      (ID, name, type,                 |
+      |       WaveSymbolicLink)               |
      |                                       |
      |-- DeviceIoControl(IOCTL_CABLE_        |
      |   MAP_RING_BUFFER,                    |
@@ -218,26 +219,29 @@ All structures use `#pragma pack(push, 1)` (no padding). Rust counterparts use `
 typedef UINT8 CABLE_DEVICE_ID[16];    // 16 bytes
 ```
 
-### CABLE_DEVICE_CONTROL_PAYLOAD -- 150 bytes
+### CABLE_DEVICE_CONTROL_PAYLOAD -- 662 bytes
 
-Used for Create, Remove, Update Name, and as the output of Create.
+Used for Create and Remove; also returned as the output buffer of Create. The `WaveSymbolicLink` field is populated by the driver only in the Create response — it is zeroed in all request payloads.
 
-| Offset | Field | Type | Size |
-|---|---|---|---|
-| 0 | `Id` | UINT8[16] | 16 |
-| 16 | `FriendlyName` | WCHAR[64] | 128 |
-| 144 | `DeviceType` | UINT32 | 4 |
-| 148 | `IsEnabled` | UINT8 (BOOLEAN) | 1 |
-| 149 | `Persistent` | UINT8 (BOOLEAN) | 1 |
-| **Total** | | | **150** |
+| Offset | Field | Type | Size | Notes |
+|---|---|---|---|---|
+| 0 | `Id` | UINT8[16] | 16 | |
+| 16 | `FriendlyName` | WCHAR[64] | 128 | |
+| 144 | `DeviceType` | UINT32 | 4 | |
+| 148 | `IsEnabled` | UINT8 (BOOLEAN) | 1 | |
+| 149 | `Persistent` | UINT8 (BOOLEAN) | 1 | |
+| 150 | `WaveSymbolicLink` | WCHAR[256] | 512 | **Create response only.** Kernel-form KS audio interface path, e.g. `\??\ROOT#MEDIA#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\WaveCable_NN` (null-terminated). Used by the Tauri app to locate the new MM audio endpoint. |
+| **Total** | | | **662** | |
 
-### CABLE_IOCTL_REQUEST -- 256 bytes (union)
+Rust mirror: `common::DeviceControlPayload` (`crates/common/src/lib.rs`), field `wave_symbolic_link: [u16; 256]`.
+
+### CABLE_IOCTL_REQUEST -- 768 bytes (union)
 
 ```c
 typedef union {
-    CABLE_DEVICE_CONTROL_PAYLOAD DeviceControl;  // 150 bytes
+    CABLE_DEVICE_CONTROL_PAYLOAD DeviceControl;  // 662 bytes
     CABLE_AUDIO_FORMAT           FormatUpdate;   //  12 bytes
-    UINT8                        RawData[256];   // 256 bytes
+    UINT8                        RawData[768];   // 768 bytes
 } CABLE_IOCTL_REQUEST;
 ```
 
