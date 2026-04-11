@@ -3,3 +3,5 @@
 *.log
 
 staging/
+cable-vm/
+vm-logs/
