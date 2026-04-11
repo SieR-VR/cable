@@ -117,6 +117,15 @@ typedef enum _CABLE_DEVICE_TYPE {
 //=============================================================================
 // Device control payload for create/remove/update commands
 // Mirrors: DeviceControlPayload in lib.rs
+//
+// Layout (packed):
+//   Id:               UINT8[16]    = 16 bytes
+//   FriendlyName:     WCHAR[64]    = 128 bytes
+//   DeviceType:       UINT32       = 4 bytes
+//   IsEnabled:        UINT8        = 1 byte
+//   Persistent:       UINT8        = 1 byte
+//   WaveSymbolicLink: WCHAR[256]   = 512 bytes  (response-only, null-terminated)
+//   Total: 662 bytes
 //=============================================================================
 typedef struct _CABLE_DEVICE_CONTROL_PAYLOAD {
     CABLE_DEVICE_ID     Id;                     // 16 bytes: unique device identifier
@@ -124,6 +133,7 @@ typedef struct _CABLE_DEVICE_CONTROL_PAYLOAD {
     CABLE_DEVICE_TYPE   DeviceType;             // Render or Capture
     BOOLEAN             IsEnabled;              // Device activation state
     BOOLEAN             Persistent;             // Survives reboot if TRUE
+    WCHAR               WaveSymbolicLink[256];  // KS audio interface symlink (response-only)
 } CABLE_DEVICE_CONTROL_PAYLOAD, *PCABLE_DEVICE_CONTROL_PAYLOAD;
 
 //=============================================================================
@@ -136,7 +146,7 @@ typedef struct _CABLE_DEVICE_CONTROL_PAYLOAD {
 typedef union _CABLE_IOCTL_REQUEST {
     CABLE_DEVICE_CONTROL_PAYLOAD    DeviceControl;
     CABLE_AUDIO_FORMAT              FormatUpdate;
-    UINT8                           RawData[256];   // Padding / future expansion
+    UINT8                           RawData[768];   // Padding / future expansion (covers 662-byte DeviceControlPayload)
 } CABLE_IOCTL_REQUEST, *PCABLE_IOCTL_REQUEST;
 
 #pragma pack(pop)
@@ -155,9 +165,6 @@ typedef union _CABLE_IOCTL_REQUEST {
 
 #define IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE   \
     CTL_CODE(CABLE_FILE_DEVICE_TYPE, 0x0002, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-#define IOCTL_CABLE_UPDATE_DEVICE_NAME      \
-    CTL_CODE(CABLE_FILE_DEVICE_TYPE, 0x0003, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define IOCTL_CABLE_SET_STREAM_FORMAT       \
     CTL_CODE(CABLE_FILE_DEVICE_TYPE, 0x0004, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -204,10 +211,12 @@ typedef struct _CABLE_RING_BUFFER_UNMAP_REQUEST {
 //   = 0x80000004
 //
 // IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE = 0x80000008
-// IOCTL_CABLE_UPDATE_DEVICE_NAME    = 0x8000000C
 // IOCTL_CABLE_SET_STREAM_FORMAT     = 0x80000010
 // IOCTL_CABLE_MAP_RING_BUFFER       = 0x80000014
 // IOCTL_CABLE_UNMAP_RING_BUFFER     = 0x80000018
+//
+// sizeof(CABLE_DEVICE_CONTROL_PAYLOAD) = 662 bytes
+// sizeof(CABLE_IOCTL_REQUEST)          = 768 bytes (RawData dominates)
 //=============================================================================
 
 #endif // _CABLE_COMMON_H_

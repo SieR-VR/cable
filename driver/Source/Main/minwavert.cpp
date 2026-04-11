@@ -1638,46 +1638,5 @@ Return Value:
     return ntStatus;
 } // PropertyHandler_WaveFilter
 
-//=============================================================================
-#pragma code_seg("PAGE")
-NTSTATUS
-PropertyHandler_GenericPin
-( 
-    _In_ PPCPROPERTY_REQUEST      PropertyRequest 
-)
-{
-    NTSTATUS                ntStatus = STATUS_INVALID_DEVICE_REQUEST;
-    CMiniportWaveRT*        pWave = NULL;
-    CMiniportWaveRTStream * pStream = NULL;
-
-    PAGED_CODE();
-
-    if (PropertyRequest->MajorTarget == NULL ||
-        PropertyRequest->MinorTarget == NULL)
-    {
-        ntStatus = STATUS_INVALID_PARAMETER;
-        goto exit;
-    }
-    
-    //
-    // Get a ref to the miniport.
-    //
-    pWave = MajorTarget_to_Obj(PropertyRequest->MajorTarget);
-    pWave->AddRef();
-
-    //
-    // Get a ref to the stream.
-    //
-    pStream = MinorTarget_to_Obj(PropertyRequest->MinorTarget);
-    pStream->AddRef();
-
-exit:
-
-    SAFE_RELEASE(pStream);
-    SAFE_RELEASE(pWave);
-    
-    return ntStatus;
-}
-
 #pragma code_seg()
 

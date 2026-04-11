@@ -477,13 +477,6 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _In_        const CABLE_DEVICE_ID           DeviceId
     ) PURE;
 
-    STDMETHOD_(NTSTATUS,        UpdateVirtualDeviceName)
-    (
-        THIS_
-        _In_        const CABLE_DEVICE_ID           DeviceId,
-        _In_        const WCHAR*                    NewName
-    ) PURE;
-
     //=====================================================================
     // Ring buffer management (Phase 4)
     //=====================================================================

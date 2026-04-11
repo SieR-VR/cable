@@ -876,21 +876,6 @@ Done:
     return ntStatus;
 } // SetDataFormat
 
-//=============================================================================
-void
-CSaveData::ReadData
-(
-    _Inout_updates_bytes_all_(ulByteCount)  PBYTE   pBuffer,
-    _In_                                    ULONG   ulByteCount
-)
-{
-    UNREFERENCED_PARAMETER(pBuffer);
-    UNREFERENCED_PARAMETER(ulByteCount);
-
-    PAGED_CODE();
-
-    // Not implemented yet.
-} // ReadData
 
 //=============================================================================
 #pragma code_seg()

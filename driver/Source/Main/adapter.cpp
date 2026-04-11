@@ -74,7 +74,6 @@ DRIVER_DISPATCH CloseHandler;
 // DoNotCreateDataFiles (DWORD) = 0 to override this default.
 //
 DWORD g_DoNotCreateDataFiles = 1;  // default is off.
-DWORD g_DisableToneGenerator = 1;  // default is to not generate tones.
 UNICODE_STRING g_RegistryPath;      // This is used to store the registry settings path for the driver
 
 //-----------------------------------------------------------------------------
@@ -224,7 +223,6 @@ Returns:
     RTL_QUERY_REGISTRY_TABLE    paramTable[] = {
     // QueryRoutine     Flags                                               Name                     EntryContext             DefaultType                                                    DefaultData              DefaultLength
         { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DoNotCreateDataFiles", &g_DoNotCreateDataFiles, (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DoNotCreateDataFiles, sizeof(ULONG)},
-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DisableToneGenerator", &g_DisableToneGenerator, (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DisableToneGenerator, sizeof(ULONG)},
         { NULL,   0,                                                        NULL,                    NULL,                    0,                                                             NULL,                    0}
     };
 
@@ -264,7 +262,6 @@ Returns:
     // Dump settings.
     //
     DPF(D_VERBOSE, ("DoNotCreateDataFiles: %u", g_DoNotCreateDataFiles));
-    DPF(D_VERBOSE, ("DisableToneGenerator: %u", g_DisableToneGenerator));
 
     if (DriverKey)
     {
@@ -1036,46 +1033,6 @@ CableIoctl_RemoveVirtualDevice(
 #pragma code_seg("PAGE")
 static
 NTSTATUS
-CableIoctl_UpdateDeviceName(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PIRP           Irp,
-    _In_ ULONG          InputBufferLength,
-    _In_ ULONG          OutputBufferLength
-)
-{
-    PAGED_CODE();
-    UNREFERENCED_PARAMETER(OutputBufferLength);
-
-    DPF(D_TERSE, ("[CableIoctl_UpdateDeviceName]"));
-
-    if (InputBufferLength < sizeof(CABLE_DEVICE_CONTROL_PAYLOAD))
-    {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-
-    PCABLE_DEVICE_CONTROL_PAYLOAD pPayload =
-        (PCABLE_DEVICE_CONTROL_PAYLOAD)Irp->AssociatedIrp.SystemBuffer;
-
-    if (pPayload == NULL)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    PortClassDeviceContext* pExtension =
-        static_cast<PortClassDeviceContext*>(DeviceObject->DeviceExtension);
-
-    if (pExtension == NULL || pExtension->m_pCommon == NULL)
-    {
-        DPF(D_ERROR, ("UpdateDeviceName: adapter common not available"));
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    return pExtension->m_pCommon->UpdateVirtualDeviceName(pPayload->Id, pPayload->FriendlyName);
-}
-
-#pragma code_seg("PAGE")
-static
-NTSTATUS
 CableIoctl_SetStreamFormat(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP           Irp,
@@ -1450,10 +1407,6 @@ Return Value:
         ntStatus = CableIoctl_RemoveVirtualDevice(DeviceObject, Irp, inputLength, outputLength);
         break;
 
-    case IOCTL_CABLE_UPDATE_DEVICE_NAME:
-        ntStatus = CableIoctl_UpdateDeviceName(DeviceObject, Irp, inputLength, outputLength);
-        break;
-
     case IOCTL_CABLE_SET_STREAM_FORMAT:
         ntStatus = CableIoctl_SetStreamFormat(DeviceObject, Irp, inputLength, outputLength);
         break;
@@ -1526,4 +1479,3 @@ Return Value:
 }
 
 #pragma code_seg()
-

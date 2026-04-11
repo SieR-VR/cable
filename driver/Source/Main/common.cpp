@@ -55,6 +55,24 @@ DEFINE_DEVPROPKEY(DEVPKEY_CableAudio_FriendlyName,
     2); // DEVPROP_TYPE_STRING
 
 //=============================================================================
+// DEVPKEY_Device_FriendlyName
+// {A45C254E-DF1C-4EFD-8020-67D146A850E0}, 14
+// Also update the device-level friendly name so endpoint display refreshes.
+//=============================================================================
+DEFINE_DEVPROPKEY(DEVPKEY_CableAudio_DeviceFriendlyName,
+    0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0,
+    14);
+
+//=============================================================================
+// DEVPKEY_NAME
+// {A45C254E-DF1C-4EFD-8020-67D146A850E0}, 10
+// Generic display name key used by many shell/PnP UIs.
+//=============================================================================
+DEFINE_DEVPROPKEY(DEVPKEY_CableAudio_Name,
+    0xa45c254e, 0xdf1c, 0x4efd, 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0,
+    10);
+
+//=============================================================================
 // Work item context for deferred InstallEndpointFilters calls.
 // PortCls port->Init() may not work safely from an IOCTL dispatch context,
 // so we defer the call to a system worker thread via IoWorkItem.
@@ -290,12 +308,6 @@ class CAdapterCommon :
         STDMETHODIMP_(NTSTATUS) RemoveVirtualDevice
         (
             _In_ const CABLE_DEVICE_ID DeviceId
-        );
-
-        STDMETHODIMP_(NTSTATUS) UpdateVirtualDeviceName
-        (
-            _In_ const CABLE_DEVICE_ID DeviceId,
-            _In_ const WCHAR*          NewName
         );
 
         //=====================================================================
@@ -791,17 +803,29 @@ CableInstallEndpointWorkItem(
             DPF(D_TERSE, ("WorkItem: Step 2e - IoRegisterDeviceInterface OK, symlink='%wZ'",
                 &pEntry->WaveSymbolicLink));
 
-            // Set DEVPKEY_DeviceInterface_FriendlyName on the interface
-            CABLEAUDIO_DEVPROPERTY friendlyNameProp;
-            friendlyNameProp.PropertyKey = &DEVPKEY_CableAudio_FriendlyName;
-            friendlyNameProp.Type = DEVPROP_TYPE_STRING;
-            friendlyNameProp.BufferSize = (ULONG)((wcslen(pEntry->FriendlyName) + 1) * sizeof(WCHAR));
-            friendlyNameProp.Buffer = (PVOID)pEntry->FriendlyName;
+            // Set friendly-name related keys on the interface.
+            CABLEAUDIO_DEVPROPERTY friendlyNameProps[3];
+            ULONG friendlyNameBytes = (ULONG)((wcslen(pEntry->FriendlyName) + 1) * sizeof(WCHAR));
+
+            friendlyNameProps[0].PropertyKey = &DEVPKEY_CableAudio_FriendlyName;
+            friendlyNameProps[0].Type = DEVPROP_TYPE_STRING;
+            friendlyNameProps[0].BufferSize = friendlyNameBytes;
+            friendlyNameProps[0].Buffer = (PVOID)pEntry->FriendlyName;
+
+            friendlyNameProps[1].PropertyKey = &DEVPKEY_CableAudio_DeviceFriendlyName;
+            friendlyNameProps[1].Type = DEVPROP_TYPE_STRING;
+            friendlyNameProps[1].BufferSize = friendlyNameBytes;
+            friendlyNameProps[1].Buffer = (PVOID)pEntry->FriendlyName;
+
+            friendlyNameProps[2].PropertyKey = &DEVPKEY_CableAudio_Name;
+            friendlyNameProps[2].Type = DEVPROP_TYPE_STRING;
+            friendlyNameProps[2].BufferSize = friendlyNameBytes;
+            friendlyNameProps[2].Buffer = (PVOID)pEntry->FriendlyName;
 
             NTSTATUS propStatus = CableAudioIoSetDeviceInterfacePropertyDataMultiple(
                 &pEntry->WaveSymbolicLink,
-                1,
-                &friendlyNameProp);
+                RTL_NUMBER_OF(friendlyNameProps),
+                friendlyNameProps);
 
             if (!NT_SUCCESS(propStatus))
             {
@@ -1057,6 +1081,29 @@ Return Value:
         DPF(D_TERSE, ("CreateVirtualDevice: OK slot=%u type=%u wave='%ws' topo=%p wave=%p",
             slotIndex, pEntry->DeviceType, pEntry->WaveName,
             pEntry->UnknownTopology, pEntry->UnknownWave));
+
+        //
+        // Copy the WaveSymbolicLink back into the payload output buffer so that
+        // user-mode can read it from the METHOD_BUFFERED response.
+        // WaveSymbolicLink.Buffer may be NULL if IoRegisterDeviceInterface failed
+        // (non-fatal); in that case we leave the output field zeroed.
+        //
+        if (pEntry->WaveSymbolicLink.Buffer != NULL &&
+            pEntry->WaveSymbolicLink.Length > 0)
+        {
+            // Length is in bytes; each WCHAR is 2 bytes.
+            ULONG charCount = pEntry->WaveSymbolicLink.Length / sizeof(WCHAR);
+            if (charCount >= RTL_NUMBER_OF(Payload->WaveSymbolicLink))
+            {
+                charCount = RTL_NUMBER_OF(Payload->WaveSymbolicLink) - 1;
+            }
+            RtlCopyMemory(Payload->WaveSymbolicLink,
+                          pEntry->WaveSymbolicLink.Buffer,
+                          charCount * sizeof(WCHAR));
+            Payload->WaveSymbolicLink[charCount] = L'\0';
+
+            DPF(D_TERSE, ("CreateVirtualDevice: WaveSymbolicLink copied (%u chars)", charCount));
+        }
     }
 
     return ntStatus;
@@ -1161,82 +1208,6 @@ Return Value:
     m_VirtualDeviceCount--;
 
     DPF(D_TERSE, ("RemoveVirtualDevice: OK, remaining=%u", m_VirtualDeviceCount));
-
-    return STATUS_SUCCESS;
-}
-
-//=============================================================================
-#pragma code_seg("PAGE")
-STDMETHODIMP_(NTSTATUS)
-CAdapterCommon::UpdateVirtualDeviceName
-(
-    _In_ const CABLE_DEVICE_ID  DeviceId,
-    _In_ const WCHAR*           NewName
-)
-/*++
-
-Routine Description:
-
-    Updates the friendly name of a dynamically created virtual device.
-    Sets both the internal tracking name and the Windows audio endpoint
-    property via IoSetDeviceInterfacePropertyData.
-
-Arguments:
-
-    DeviceId - 16-byte identifier of the device to rename.
-    NewName  - New friendly name (null-terminated wide string).
-
-Return Value:
-
-    STATUS_SUCCESS on success.
-    STATUS_NOT_FOUND if no device with this ID exists.
-
---*/
-{
-    PAGED_CODE();
-    DPF_ENTER(("[CAdapterCommon::UpdateVirtualDeviceName]"));
-
-    PCABLE_VIRTUAL_DEVICE_ENTRY pEntry = FindVirtualDeviceById(DeviceId);
-    if (pEntry == NULL)
-    {
-        DPF(D_ERROR, ("UpdateVirtualDeviceName: device not found"));
-        return STATUS_NOT_FOUND;
-    }
-
-    DPF(D_TERSE, ("UpdateVirtualDeviceName: '%ws' -> '%ws'",
-        pEntry->FriendlyName, NewName));
-
-    RtlStringCbCopyW(pEntry->FriendlyName, sizeof(pEntry->FriendlyName), NewName);
-
-    // Update the Windows audio endpoint friendly name property
-    if (pEntry->WaveSymbolicLink.Buffer != NULL &&
-        pEntry->WaveSymbolicLink.Length > 0)
-    {
-        CABLEAUDIO_DEVPROPERTY friendlyNameProp;
-        friendlyNameProp.PropertyKey = &DEVPKEY_CableAudio_FriendlyName;
-        friendlyNameProp.Type = DEVPROP_TYPE_STRING;
-        friendlyNameProp.BufferSize = (ULONG)((wcslen(pEntry->FriendlyName) + 1) * sizeof(WCHAR));
-        friendlyNameProp.Buffer = (PVOID)pEntry->FriendlyName;
-
-        NTSTATUS propStatus = CableAudioIoSetDeviceInterfacePropertyDataMultiple(
-            &pEntry->WaveSymbolicLink,
-            1,
-            &friendlyNameProp);
-
-        if (!NT_SUCCESS(propStatus))
-        {
-            DPF(D_ERROR, ("UpdateVirtualDeviceName: IoSetDeviceInterfacePropertyData FAILED 0x%08X", propStatus));
-            // Non-fatal: internal name was updated even if endpoint name failed
-        }
-        else
-        {
-            DPF(D_TERSE, ("UpdateVirtualDeviceName: endpoint FriendlyName updated OK"));
-        }
-    }
-    else
-    {
-        DPF(D_TERSE, ("UpdateVirtualDeviceName: no symbolic link stored, internal name only"));
-    }
 
     return STATUS_SUCCESS;
 }

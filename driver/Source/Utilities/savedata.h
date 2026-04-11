@@ -133,11 +133,6 @@ public:
 	(
 	    void
 	);
-    void                        ReadData
-    (
-        _Inout_updates_bytes_all_(ulByteCount)  PBYTE   pBuffer,
-        _In_                                    ULONG   ulByteCount
-    );
     NTSTATUS                    SetDataFormat
     (
         _In_  PKSDATAFORMAT     pDataFormat

@@ -15,7 +15,6 @@ Abstract:
 #define _CABLEAUDIO_MINWAVERTSTREAM_H_
 
 #include "savedata.h"
-#include "ToneGenerator.h"
 #include "CableRingBuffer.h"
 
 //
@@ -113,24 +112,11 @@ protected:
     PWAVEFORMATEXTENSIBLE       m_pWfExt;
     ULONG                       m_ulContentId;
     CSaveData                   m_SaveData;
-    ToneGenerator               m_ToneGenerator;
     CableRingBuffer*            m_pCableRingBuffer;     // Phase 4: shared memory ring buffer (NULL for static endpoints)
     GUID                        m_SignalProcessingMode;
     BOOLEAN                     m_bEoSReceived;
     BOOLEAN                     m_bLastBufferRendered;
     KSPIN_LOCK                  m_PositionSpinLock;
-    // Member variable as config params for tone generator
-    ULONG                       m_ulHostCaptureToneFrequency;
-    // If abs(m_dwHostCaptureToneAmplitude) + abs(m_dwHostCaptureToneDCValue) > 100
-    // m_dwHostCaptureToneDCValue will be compensated to make the sum equal to 100
-    DWORD                       m_dwHostCaptureToneAmplitude;   // must be between -100 to 100
-    DWORD                       m_dwLoopbackCaptureToneAmplitude; // must be between -100 to 100
-    DWORD                       m_dwHostCaptureToneDCOffset;   // must be between -100 to 100
-    DWORD                       m_dwLoopbackCaptureToneDCOffset; // must be between -100 to 100
-    DWORD                       m_dwHostCaptureToneInitialPhase;   // must be between -31416 to 31416
-    DWORD                       m_dwLoopbackCaptureToneInitialPhase; // must be between -31416 to 31416
-    // Member variable as config params for tone generator
-
 public:
 
     //presentation
@@ -190,8 +176,6 @@ private:
         _Out_opt_  LARGE_INTEGER *  _pliQPCTime
     );
 
-    NTSTATUS ReadRegistrySettings();
-    
 };
 typedef CMiniportWaveRTStream *PCMiniportWaveRTStream;
 #endif // _CABLEAUDIO_MINWAVERTSTREAM_H_

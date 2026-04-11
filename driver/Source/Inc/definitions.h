@@ -195,11 +195,6 @@ NTSTATUS PropertyHandler_WaveFilter
     _In_ PPCPROPERTY_REQUEST PropertyRequest
 );
 
-NTSTATUS PropertyHandler_GenericPin
-( 
-    _In_ PPCPROPERTY_REQUEST      PropertyRequest 
-);
-
 // common.h uses some of the above definitions.
 #include "common.h"
 #include "kshelper.h"
