@@ -28,9 +28,6 @@ use common::{
 pub struct CreatedDevice {
   /// The 16-byte device ID assigned by the driver.
   pub id: DeviceId,
-  /// The KS audio interface symbolic link (kernel form `\??\SWD#...`).
-  /// Empty string if the driver could not register the interface.
-  pub wave_symbolic_link: String,
 }
 
 /// Device interface GUID matching the driver's GUID_CABLE_CONTROL_INTERFACE.
@@ -246,16 +243,7 @@ impl DriverHandle {
       mem::size_of::<DeviceControlPayload>() as u32,
     )?;
 
-    // Decode the null-terminated UTF-16 WaveSymbolicLink from the response.
-    // Copy to a local array first because `response` is a packed struct (unaligned refs are UB).
-    let wsl: [u16; 256] = response.wave_symbolic_link;
-    let len = wsl.iter().position(|&c| c == 0).unwrap_or(wsl.len());
-    let wave_symbolic_link = String::from_utf16_lossy(&wsl[..len]).to_owned();
-
-    Ok(CreatedDevice {
-      id: response.id,
-      wave_symbolic_link,
-    })
+    Ok(CreatedDevice { id: response.id })
   }
 
   /// Remove a virtual audio device from the driver.
@@ -315,7 +303,6 @@ impl DriverHandle {
     }
 
     Ok(RingBufferMapping {
-      device_id: *device_id,
       user_address: response.user_address as *mut u8,
       total_size: response.total_size as usize,
       data_buffer_size: response.data_buffer_size as usize,
@@ -358,10 +345,9 @@ impl DriverHandle {
 ///   - App writes audio data, driver reads from the ring buffer
 ///   - App advances write_index, driver reads from read_index
 pub struct RingBufferMapping {
-  pub device_id: DeviceId,
   pub user_address: *mut u8,
-  pub total_size: usize,
-  pub data_buffer_size: usize,
+  pub(crate) total_size: usize,
+  pub(crate) data_buffer_size: usize,
 }
 
 // SAFETY: The mapped memory is process-global and can be accessed from any thread.
@@ -371,7 +357,7 @@ unsafe impl Sync for RingBufferMapping {}
 
 impl RingBufferMapping {
   /// Get a pointer to the start of the audio data buffer (after the header).
-  pub fn data_ptr(&self) -> *mut u8 {
+  fn data_ptr(&self) -> *mut u8 {
     unsafe { self.user_address.add(mem::size_of::<RingBufferHeader>()) }
   }
 

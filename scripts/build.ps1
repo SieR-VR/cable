@@ -180,6 +180,11 @@ function Build-Driver {
     & $msbuild @msbuildArgs
     $buildResult = $LASTEXITCODE
 
+    if ($buildResult -ne 0) {
+        Write-Host "  DRIVER BUILD FAILED - MSBuild exited with code $buildResult" -ForegroundColor Red
+        return $false
+    }
+
     $outputDir = Join-Path $ProjectRoot "driver\$Platform\$Configuration\package"
     $sysFile = Join-Path $outputDir "CableAudio.sys"
 

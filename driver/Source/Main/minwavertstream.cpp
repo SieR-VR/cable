@@ -35,6 +35,12 @@ Return Value:
     PAGED_CODE();
     if (NULL != m_pMiniport)
     {
+        if (m_pCableRingBuffer != NULL)
+        {
+            m_pMiniport->GetAdapterCommObj()->ReleaseRingBufferReference(m_pCableRingBuffer);
+            m_pCableRingBuffer = NULL;
+        }
+
     
         if (m_bUnregisterStream)
         {
@@ -96,6 +102,16 @@ Return Value:
     // DPCs to complete before we free the notification DPC.
     //
     KeFlushQueuedDpcs();
+
+    KIRQL notifyIrql;
+    KeAcquireSpinLock(&m_NotificationListLock, &notifyIrql);
+    while (!IsListEmpty(&m_NotificationList))
+    {
+        PLIST_ENTRY le = RemoveHeadList(&m_NotificationList);
+        NotificationListEntry* entry = CONTAINING_RECORD(le, NotificationListEntry, ListEntry);
+        ExFreePoolWithTag(entry, MINWAVERTSTREAM_POOLTAG);
+    }
+    KeReleaseSpinLock(&m_NotificationListLock, notifyIrql);
 
     DPF_ENTER(("[CMiniportWaveRTStream::~CMiniportWaveRTStream]"));
 } // ~CMiniportWaveRTStream
@@ -177,6 +193,7 @@ Return Value:
 
     m_pPortStream = PortStream_;
     InitializeListHead(&m_NotificationList);
+    KeInitializeSpinLock(&m_NotificationListLock);
     m_ulNotificationIntervalMs = 0;
 
     // Initialize the spinlock to synchronize position updates
@@ -381,6 +398,11 @@ NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
         return STATUS_INVALID_PARAMETER;
     }
 
+    if (m_ulDmaMovementRate == 0)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     RequestedSize_ -= RequestedSize_ % (m_pWfExt->Format.nBlockAlign);
     
     if (!m_bCapture && (!g_DoNotCreateDataFiles))
@@ -423,6 +445,11 @@ NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
     //  A WaveRT miniport driver should not require software access to the audio buffer itself."
     //   
     m_pDmaBuffer = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
+    if (m_pDmaBuffer == NULL)
+    {
+        m_pPortStream->FreePagesFromMdl(pBufferMdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     m_ulNotificationsPerBuffer = NotificationCount_;
     m_ulDmaBufferSize = RequestedSize_;
     ulBufferDurationMs = (RequestedSize_ * 1000) / m_ulDmaMovementRate;
@@ -472,8 +499,6 @@ NTSTATUS CMiniportWaveRTStream::RegisterNotificationEvent
     _In_ PKEVENT NotificationEvent_
 )
 {
-    UNREFERENCED_PARAMETER(NotificationEvent_);
-
     PAGED_CODE();
 
     NotificationListEntry *nleNew = (NotificationListEntry*)ExAllocatePool2( 
@@ -488,6 +513,9 @@ NTSTATUS CMiniportWaveRTStream::RegisterNotificationEvent
     nleNew->NotificationEvent = NotificationEvent_;
 
     // Fail if the notification event already exists in our list.
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_NotificationListLock, &oldIrql);
+
     if (!IsListEmpty(&m_NotificationList))
     {
         PLIST_ENTRY leCurrent = m_NotificationList.Flink;
@@ -496,6 +524,7 @@ NTSTATUS CMiniportWaveRTStream::RegisterNotificationEvent
             NotificationListEntry* nleCurrent = CONTAINING_RECORD( leCurrent, NotificationListEntry, ListEntry);
             if (nleCurrent->NotificationEvent == NotificationEvent_)
             {
+                KeReleaseSpinLock(&m_NotificationListLock, oldIrql);
                 ExFreePoolWithTag( nleNew, MINWAVERTSTREAM_POOLTAG );
                 return STATUS_UNSUCCESSFUL;
             }
@@ -505,6 +534,7 @@ NTSTATUS CMiniportWaveRTStream::RegisterNotificationEvent
     }
 
     InsertTailList(&m_NotificationList, &(nleNew->ListEntry));
+    KeReleaseSpinLock(&m_NotificationListLock, oldIrql);
     
     return STATUS_SUCCESS;
 }
@@ -516,9 +546,10 @@ NTSTATUS CMiniportWaveRTStream::UnregisterNotificationEvent
     _In_ PKEVENT NotificationEvent_
 )
 {
-    UNREFERENCED_PARAMETER(NotificationEvent_);
-
     PAGED_CODE();
+
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_NotificationListLock, &oldIrql);
 
     if (!IsListEmpty(&m_NotificationList))
     {
@@ -529,6 +560,7 @@ NTSTATUS CMiniportWaveRTStream::UnregisterNotificationEvent
             if (nleCurrent->NotificationEvent == NotificationEvent_)
             {
                 RemoveEntryList( leCurrent );
+                KeReleaseSpinLock(&m_NotificationListLock, oldIrql);
                 ExFreePoolWithTag( nleCurrent, MINWAVERTSTREAM_POOLTAG );
                 return STATUS_SUCCESS;
             }
@@ -536,6 +568,8 @@ NTSTATUS CMiniportWaveRTStream::UnregisterNotificationEvent
             leCurrent = leCurrent->Flink;
         }
     }
+
+    KeReleaseSpinLock(&m_NotificationListLock, oldIrql);
 
     return STATUS_NOT_FOUND;
 }
@@ -659,6 +693,11 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
     //  A WaveRT miniport driver should not require software access to the audio buffer itself."
     //   
     m_pDmaBuffer = (BYTE*)m_pPortStream->MapAllocatedPages(pBufferMdl, MmCached);
+    if (m_pDmaBuffer == NULL)
+    {
+        m_pPortStream->FreePagesFromMdl(pBufferMdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     m_ulDmaBufferSize = RequestedSize_;
     m_ulNotificationsPerBuffer = 0;
@@ -735,6 +774,11 @@ NTSTATUS CMiniportWaveRTStream::GetReadPacket
     if (m_ulNotificationsPerBuffer == 0)
     {
         return STATUS_NOT_SUPPORTED;
+    }
+
+    if (m_ulDmaBufferSize == 0 || m_ulDmaMovementRate == 0)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
     }
 
     *Flags = 0;
@@ -819,6 +863,11 @@ NTSTATUS CMiniportWaveRTStream::SetWritePacket
     if (m_ulNotificationsPerBuffer == 0)
     {
         return STATUS_NOT_SUPPORTED;
+    }
+
+    if (m_ulDmaBufferSize == 0)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
     }
 
     ULONG oldLastOsWritePacket = m_ulLastOsWritePacket;
@@ -1210,6 +1259,16 @@ VOID CMiniportWaveRTStream::UpdatePosition
     _In_ LARGE_INTEGER ilQPC
 )
 {
+    if (m_ulDmaBufferSize == 0 || m_pDmaBuffer == NULL)
+    {
+        return;
+    }
+
+    if (m_ulDmaMovementRate == 0)
+    {
+        return;
+    }
+
     // Convert ticks to 100ns units.
     LONGLONG  hnsCurrentTime = KSCONVERT_PERFORMANCE_TIME(m_ullPerformanceCounterFrequency.QuadPart, ilQPC);
     
@@ -1313,6 +1372,11 @@ ByteDisplacement - # of bytes to process.
 
 --*/
 {
+    if (m_ulDmaBufferSize == 0 || m_pDmaBuffer == NULL)
+    {
+        return;
+    }
+
     ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
 
     // If a ring buffer is attached (Cable virtual capture device),
@@ -1359,6 +1423,11 @@ ByteDisplacement - # of bytes to process.
 
 --*/
 {
+    if (m_ulDmaBufferSize == 0 || m_pDmaBuffer == NULL)
+    {
+        return;
+    }
+
     ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
 
     // If a ring buffer is attached (Cable virtual render device),
@@ -1559,9 +1628,10 @@ TimerNotifyRT
     // 1. Driver consumed a complete buffer for this stream
     // 2. Driver consumed a partial buffer containing EoS for this stream
 
-    if (!IsListEmpty(&_this->m_NotificationList) && 
-        (bufferCompleted || _this->m_bLastBufferRendered))
+    if (bufferCompleted || _this->m_bLastBufferRendered)
     {
+        KIRQL notifyOldIrql;
+        KeAcquireSpinLock(&_this->m_NotificationListLock, &notifyOldIrql);
         PLIST_ENTRY leCurrent = _this->m_NotificationList.Flink;
         while (leCurrent != &_this->m_NotificationList)
         {
@@ -1570,6 +1640,7 @@ TimerNotifyRT
 
             leCurrent = leCurrent->Flink;
         }
+        KeReleaseSpinLock(&_this->m_NotificationListLock, notifyOldIrql);
     }
 
     if (_this->m_bLastBufferRendered)

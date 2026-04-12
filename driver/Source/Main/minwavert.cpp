@@ -736,21 +736,6 @@ CMiniportWaveRT::ValidateStreamCreate
     return ntStatus;
 }
 
-//=============================================================================
-#pragma code_seg()
-_Use_decl_annotations_
-VOID CMiniportWaveRT::AcquireFormatsAndModesLock()
-{
-    KeAcquireSpinLock(&m_DeviceFormatsAndModesLock, &m_DeviceFormatsAndModesIrql);
-}
-
-#pragma code_seg()
-_Use_decl_annotations_
-VOID CMiniportWaveRT::ReleaseFormatsAndModesLock()
-{
-    KeReleaseSpinLock(&m_DeviceFormatsAndModesLock, m_DeviceFormatsAndModesIrql);
-}
-
 //---------------------------------------------------------------------------
 // GetPinSupportedDeviceFormats 
 //
@@ -768,8 +753,9 @@ _Use_decl_annotations_
 ULONG CMiniportWaveRT::GetPinSupportedDeviceFormats(_In_ ULONG PinId, _Outptr_opt_result_buffer_(return) KSDATAFORMAT_WAVEFORMATEXTENSIBLE **ppFormats)
 {
     PPIN_DEVICE_FORMATS_AND_MODES pDeviceFormatsAndModes = NULL;
+    KIRQL oldIrql;
 
-    AcquireFormatsAndModesLock();
+    KeAcquireSpinLock(&m_DeviceFormatsAndModesLock, &oldIrql);
 
     pDeviceFormatsAndModes = m_DeviceFormatsAndModes;
     ASSERT(m_DeviceFormatsAndModesCount > PinId);
@@ -781,7 +767,7 @@ ULONG CMiniportWaveRT::GetPinSupportedDeviceFormats(_In_ ULONG PinId, _Outptr_op
         *ppFormats = pDeviceFormatsAndModes[PinId].WaveFormats;
     }
 
-    ReleaseFormatsAndModesLock();
+    KeReleaseSpinLock(&m_DeviceFormatsAndModesLock, oldIrql);
 
     return pDeviceFormatsAndModes[PinId].WaveFormatsCount;
 }
@@ -804,8 +790,9 @@ ULONG CMiniportWaveRT::GetPinSupportedDeviceModes(_In_ ULONG PinId, _Outptr_opt_
 {
     PMODE_AND_DEFAULT_FORMAT modes;
     ULONG numModes;
+    KIRQL oldIrql;
 
-    AcquireFormatsAndModesLock();
+    KeAcquireSpinLock(&m_DeviceFormatsAndModesLock, &oldIrql);
 
     ASSERT(m_DeviceFormatsAndModesCount > PinId);
     ASSERT((m_DeviceFormatsAndModes[PinId].ModeAndDefaultFormatCount == 0) == (m_DeviceFormatsAndModes[PinId].ModeAndDefaultFormat == NULL));
@@ -829,40 +816,43 @@ ULONG CMiniportWaveRT::GetPinSupportedDeviceModes(_In_ ULONG PinId, _Outptr_opt_
         }
     }
 
-    ReleaseFormatsAndModesLock();
+    KeReleaseSpinLock(&m_DeviceFormatsAndModesLock, oldIrql);
     return numModes;
 }
 
 #pragma code_seg()
 BOOL CMiniportWaveRT::IsSystemCapturePin(ULONG nPinId)
 {
-    AcquireFormatsAndModesLock();
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_DeviceFormatsAndModesLock, &oldIrql);
 
     PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
 
-    ReleaseFormatsAndModesLock();
+    KeReleaseSpinLock(&m_DeviceFormatsAndModesLock, oldIrql);
     return (pinType == SystemCapturePin);
 }
 
 #pragma code_seg()
 BOOL CMiniportWaveRT::IsSystemRenderPin(ULONG nPinId)
 {
-    AcquireFormatsAndModesLock();
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_DeviceFormatsAndModesLock, &oldIrql);
 
     PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
 
-    ReleaseFormatsAndModesLock();
+    KeReleaseSpinLock(&m_DeviceFormatsAndModesLock, oldIrql);
     return (pinType == SystemRenderPin);
 }
 
 #pragma code_seg()
 BOOL CMiniportWaveRT::IsBridgePin(ULONG nPinId)
 {
-    AcquireFormatsAndModesLock();
+    KIRQL oldIrql;
+    KeAcquireSpinLock(&m_DeviceFormatsAndModesLock, &oldIrql);
 
     PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
 
-    ReleaseFormatsAndModesLock();
+    KeReleaseSpinLock(&m_DeviceFormatsAndModesLock, oldIrql);
     return (pinType == BridgePin);
 }
 

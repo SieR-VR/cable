@@ -37,8 +37,8 @@ CableRingBuffer::CableRingBuffer()
     , m_pMdl(NULL)
     , m_TotalSize(0)
     , m_DataBufferSize(0)
+    , m_ReferenceCount(0)
 {
-    KeInitializeSpinLock(&m_SpinLock);
 }
 
 CableRingBuffer::~CableRingBuffer()
@@ -520,4 +520,41 @@ Routine Description:
         m_pHeader->Status = CABLE_RING_BUFFER_STATUS_OK;
         KeMemoryBarrier();
     }
+}
+
+//=============================================================================
+#pragma code_seg()
+LONG
+CableRingBuffer::AddReference()
+{
+    return InterlockedIncrement(&m_ReferenceCount);
+}
+
+//=============================================================================
+#pragma code_seg()
+LONG
+CableRingBuffer::ReleaseReference()
+{
+    LONG current = InterlockedCompareExchange(&m_ReferenceCount, 0, 0);
+
+    while (current > 0)
+    {
+        LONG updated = InterlockedCompareExchange(&m_ReferenceCount, current - 1, current);
+        if (updated == current)
+        {
+            return (current - 1);
+        }
+        current = updated;
+    }
+
+    DPF(D_TERSE, ("CableRingBuffer::ReleaseReference called with zero reference count"));
+    return 0;
+}
+
+//=============================================================================
+#pragma code_seg()
+LONG
+CableRingBuffer::GetReferenceCount() const
+{
+    return InterlockedCompareExchange((volatile LONG*)&m_ReferenceCount, 0, 0);
 }

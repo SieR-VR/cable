@@ -126,6 +126,13 @@ public:
     BOOLEAN IsInitialized() const { return (m_pHeader != NULL); }
 
     //
+    // External lifetime management for callers caching this object.
+    //
+    LONG AddReference();
+    LONG ReleaseReference();
+    LONG GetReferenceCount() const;
+
+    //
     // Reset read/write indices and status to zero.
     //
     _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -148,8 +155,8 @@ private:
     // Size of just the data buffer portion
     ULONG                       m_DataBufferSize;
 
-    // Spinlock to protect write index updates
-    KSPIN_LOCK                  m_SpinLock;
+    // External reference count for safe object lifetime coordination.
+    volatile LONG               m_ReferenceCount;
 };
 
 #endif // _CABLE_RING_BUFFER_H_

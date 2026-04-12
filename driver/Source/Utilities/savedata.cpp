@@ -899,7 +899,7 @@ CSaveData::SaveFrame
         pParam->pData = m_pDataBuffer + ulFrameNo * m_ulFrameSize;
         KeResetEvent(&pParam->EventDone);
         IoQueueWorkItem(pParam->WorkItem, SaveFrameWorkerCallback,
-                        CriticalWorkQueue, (PVOID)pParam);
+                        DelayedWorkQueue, (PVOID)pParam);
     }
 } // SaveFrame
 #pragma code_seg("PAGE")

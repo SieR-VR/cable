@@ -323,6 +323,8 @@ Status values:
 
 Shared memory between kernel and user-mode for lock-free audio data transfer.
 
+> Hardening update: detailed kernel safety patches and busy-removal policy are documented in `docs/driver-hardening.md`.
+
 ### Memory Layout
 
 ```
@@ -386,6 +388,7 @@ ReadIndex += bytesRead        // monotonically increasing
 | `driver/Source/Utilities/CableRingBuffer.cpp` | Ring buffer: allocate, map, read, write, cleanup |
 | `driver/Source/Main/minwavert.cpp` | WaveRT miniport stream implementation |
 | `driver/Source/Inc/minipairs.h` | Static endpoint templates (SpeakerMiniports, MicArray1Miniports) |
+| `docs/driver-hardening.md` | Kernel hardening changes, risk analysis, and validation checklist |
 
 ## Build
 

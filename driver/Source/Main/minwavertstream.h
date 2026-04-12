@@ -50,6 +50,7 @@ class CMiniportWaveRTStream :
 protected:
     PPORTWAVERTSTREAM           m_pPortStream;
     LIST_ENTRY                  m_NotificationList;
+    KSPIN_LOCK                  m_NotificationListLock;
     PEX_TIMER                   m_pNotificationTimer;
     ULONG                       m_ulNotificationIntervalMs;
     ULONG                       m_ulCurrentWritePosition;

@@ -42,6 +42,7 @@ typedef struct _CABLE_VIRTUAL_DEVICE_ENTRY {
     PUNKNOWN            UnknownWave;                        // Cached wave port
     CableRingBuffer*    pRingBuffer;                        // Shared memory ring buffer
     PVOID               pMappedUserAddress;                 // User-mode mapping address (if mapped)
+    PEPROCESS           pMappingProcess;                    // Owner process for user mapping
     UNICODE_STRING      WaveSymbolicLink;                   // Symbolic link for KSCATEGORY_AUDIO interface
 } CABLE_VIRTUAL_DEVICE_ENTRY, *PCABLE_VIRTUAL_DEVICE_ENTRY;
 
@@ -86,6 +87,39 @@ typedef struct _CABLE_INSTALL_WORKITEM_CONTEXT {
     PENDPOINT_MINIPAIR          pMiniportPair;      // Template (SpeakerMiniports or MicArray1Miniports)
 } CABLE_INSTALL_WORKITEM_CONTEXT, *PCABLE_INSTALL_WORKITEM_CONTEXT;
 
+static
+VOID
+CableUnmapRingBufferForEntry(
+    _Inout_ PCABLE_VIRTUAL_DEVICE_ENTRY pEntry
+)
+{
+    PAGED_CODE();
+
+    if (pEntry == NULL ||
+        pEntry->pRingBuffer == NULL ||
+        pEntry->pMappedUserAddress == NULL)
+    {
+        return;
+    }
+
+    if (pEntry->pMappingProcess != NULL &&
+        PsGetCurrentProcess() != pEntry->pMappingProcess)
+    {
+        DPF(D_TERSE, ("CableUnmapRingBufferForEntry: process mismatch, skipping unmap"));
+        return;
+    }
+
+    pEntry->pRingBuffer->UnmapFromUserMode(pEntry->pMappedUserAddress);
+
+    pEntry->pMappedUserAddress = NULL;
+
+    if (pEntry->pMappingProcess != NULL)
+    {
+        ObDereferenceObject(pEntry->pMappingProcess);
+        pEntry->pMappingProcess = NULL;
+    }
+}
+
 //=============================================================================
 // Classes
 //=============================================================================
@@ -117,6 +151,7 @@ class CAdapterCommon :
         //=====================================================================
         CABLE_VIRTUAL_DEVICE_ENTRY  m_VirtualDevices[CABLE_MAX_DYNAMIC_DEVICES];
         ULONG                       m_VirtualDeviceCount;
+        FAST_MUTEX                  m_VirtualDeviceLock;
 
     public:
         //=====================================================================
@@ -332,6 +367,11 @@ class CAdapterCommon :
             _In_ PCWSTR WaveName
         );
 
+        STDMETHODIMP_(VOID) ReleaseRingBufferReference
+        (
+            _In_opt_ CableRingBuffer* RingBuffer
+        );
+
         //=====================================================================
         // friends
         friend NTSTATUS         NewAdapterCommon
@@ -510,6 +550,8 @@ Routine Description:
     PAGED_CODE();
     DPF_ENTER(("[CAdapterCommon::CleanupVirtualDevices]"));
 
+    ExAcquireFastMutex(&m_VirtualDeviceLock);
+
     for (ULONG i = 0; i < CABLE_MAX_DYNAMIC_DEVICES; i++)
     {
         if (!m_VirtualDevices[i].InUse)
@@ -557,15 +599,24 @@ Routine Description:
         // Clean up ring buffer (Phase 4)
         if (m_VirtualDevices[i].pRingBuffer != NULL)
         {
+            CableUnmapRingBufferForEntry(&m_VirtualDevices[i]);
+
             if (m_VirtualDevices[i].pMappedUserAddress != NULL)
             {
-                m_VirtualDevices[i].pRingBuffer->UnmapFromUserMode(
-                    m_VirtualDevices[i].pMappedUserAddress);
-                m_VirtualDevices[i].pMappedUserAddress = NULL;
+                DPF(D_TERSE, ("CleanupVirtualDevices: ring buffer mapped in another process for slot %u, preserving allocation", i));
+                continue;
             }
-            m_VirtualDevices[i].pRingBuffer->Cleanup();
-            delete m_VirtualDevices[i].pRingBuffer;
-            m_VirtualDevices[i].pRingBuffer = NULL;
+
+            if (m_VirtualDevices[i].pRingBuffer->GetReferenceCount() == 0)
+            {
+                m_VirtualDevices[i].pRingBuffer->Cleanup();
+                delete m_VirtualDevices[i].pRingBuffer;
+                m_VirtualDevices[i].pRingBuffer = NULL;
+            }
+            else
+            {
+                DPF(D_TERSE, ("CleanupVirtualDevices: ring buffer still referenced for slot %u, preserving allocation", i));
+            }
         }
 
         // Free symbolic link string allocated by IoRegisterDeviceInterface
@@ -579,6 +630,7 @@ Routine Description:
     }
 
     m_VirtualDeviceCount = 0;
+    ExReleaseFastMutex(&m_VirtualDeviceLock);
 }
 
 //=============================================================================
@@ -921,6 +973,8 @@ Return Value:
     PAGED_CODE();
     DPF_ENTER(("[CAdapterCommon::CreateVirtualDevice]"));
 
+    ExAcquireFastMutex(&m_VirtualDeviceLock);
+
     NTSTATUS ntStatus = STATUS_SUCCESS;
 
     //
@@ -942,7 +996,8 @@ Return Value:
     // Check if device with this ID already exists (skip check for zero IDs)
     if (!idIsZero && FindVirtualDeviceById(Payload->Id) != NULL)
     {
-        DPF(D_ERROR, ("CreateVirtualDevice: device ID already exists"));
+        DPF(D_TERSE, ("CreateVirtualDevice: device ID already exists"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_OBJECTID_EXISTS;
     }
 
@@ -959,7 +1014,8 @@ Return Value:
 
     if (slotIndex == (ULONG)-1)
     {
-        DPF(D_ERROR, ("CreateVirtualDevice: no free slots (max=%u)", CABLE_MAX_DYNAMIC_DEVICES));
+        DPF(D_TERSE, ("CreateVirtualDevice: no free slots (max=%u)", CABLE_MAX_DYNAMIC_DEVICES));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -1005,7 +1061,8 @@ Return Value:
         L"WaveCable_%02u", slotIndex);
     if (!NT_SUCCESS(ntStatus))
     {
-        DPF(D_ERROR, ("CreateVirtualDevice: failed to format wave name"));
+        DPF(D_TERSE, ("CreateVirtualDevice: failed to format wave name"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return ntStatus;
     }
 
@@ -1013,7 +1070,8 @@ Return Value:
         L"TopologyCable_%02u", slotIndex);
     if (!NT_SUCCESS(ntStatus))
     {
-        DPF(D_ERROR, ("CreateVirtualDevice: failed to format topo name"));
+        DPF(D_TERSE, ("CreateVirtualDevice: failed to format topo name"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return ntStatus;
     }
 
@@ -1033,7 +1091,8 @@ Return Value:
     PIO_WORKITEM workItem = IoAllocateWorkItem(m_pDeviceObject);
     if (workItem == NULL)
     {
-        DPF(D_ERROR, ("CreateVirtualDevice: IoAllocateWorkItem failed"));
+        DPF(D_TERSE, ("CreateVirtualDevice: IoAllocateWorkItem failed"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -1070,7 +1129,7 @@ Return Value:
 
     if (!NT_SUCCESS(ntStatus))
     {
-        DPF(D_ERROR, ("CreateVirtualDevice: work item failed 0x%08X, rolling back slot %u",
+        DPF(D_TERSE, ("CreateVirtualDevice: work item failed 0x%08X, rolling back slot %u",
             ntStatus, slotIndex));
         // Roll back the slot allocation
         pEntry->InUse = FALSE;
@@ -1106,6 +1165,7 @@ Return Value:
         }
     }
 
+    ExReleaseFastMutex(&m_VirtualDeviceLock);
     return ntStatus;
 }
 
@@ -1130,20 +1190,38 @@ Return Value:
 
     STATUS_SUCCESS on success.
     STATUS_NOT_FOUND if no device with this ID exists.
+    STATUS_DEVICE_BUSY if stream references or user mappings are still active.
 
 --*/
 {
     PAGED_CODE();
     DPF_ENTER(("[CAdapterCommon::RemoveVirtualDevice]"));
 
+    ExAcquireFastMutex(&m_VirtualDeviceLock);
+
     PCABLE_VIRTUAL_DEVICE_ENTRY pEntry = FindVirtualDeviceById(DeviceId);
     if (pEntry == NULL)
     {
-        DPF(D_ERROR, ("RemoveVirtualDevice: device not found"));
+        DPF(D_TERSE, ("RemoveVirtualDevice: device not found"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_NOT_FOUND;
     }
 
     DPF(D_TERSE, ("RemoveVirtualDevice: removing '%ws'", pEntry->FriendlyName));
+
+    if (pEntry->pMappedUserAddress != NULL)
+    {
+        DPF(D_TERSE, ("RemoveVirtualDevice: device has active user mapping"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
+        return STATUS_DEVICE_BUSY;
+    }
+
+    if (pEntry->pRingBuffer != NULL && pEntry->pRingBuffer->GetReferenceCount() > 0)
+    {
+        DPF(D_TERSE, ("RemoveVirtualDevice: ring buffer is in active stream use"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
+        return STATUS_DEVICE_BUSY;
+    }
 
     // If subdevices were registered (future: non-stub path), disconnect and unregister them
     if (pEntry->UnknownTopology != NULL || pEntry->UnknownWave != NULL)
@@ -1186,11 +1264,7 @@ Return Value:
     // Clean up ring buffer (Phase 4)
     if (pEntry->pRingBuffer != NULL)
     {
-        if (pEntry->pMappedUserAddress != NULL)
-        {
-            pEntry->pRingBuffer->UnmapFromUserMode(pEntry->pMappedUserAddress);
-            pEntry->pMappedUserAddress = NULL;
-        }
+        CableUnmapRingBufferForEntry(pEntry);
         pEntry->pRingBuffer->Cleanup();
         delete pEntry->pRingBuffer;
         pEntry->pRingBuffer = NULL;
@@ -1208,6 +1282,8 @@ Return Value:
     m_VirtualDeviceCount--;
 
     DPF(D_TERSE, ("RemoveVirtualDevice: OK, remaining=%u", m_VirtualDeviceCount));
+
+    ExReleaseFastMutex(&m_VirtualDeviceLock);
 
     return STATUS_SUCCESS;
 }
@@ -1253,8 +1329,11 @@ Return Value:
     PAGED_CODE();
     DPF_ENTER(("[CAdapterCommon::MapRingBuffer]"));
 
+    ExAcquireFastMutex(&m_VirtualDeviceLock);
+
     if (UserAddress == NULL || TotalSize == NULL || DataBufferSize == NULL)
     {
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -1265,7 +1344,8 @@ Return Value:
     PCABLE_VIRTUAL_DEVICE_ENTRY pEntry = FindVirtualDeviceById(DeviceId);
     if (pEntry == NULL)
     {
-        DPF(D_ERROR, ("MapRingBuffer: device not found"));
+        DPF(D_TERSE, ("MapRingBuffer: device not found"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_NOT_FOUND;
     }
 
@@ -1278,16 +1358,18 @@ Return Value:
 
         if (pEntry->pRingBuffer == NULL)
         {
-            DPF(D_ERROR, ("MapRingBuffer: failed to allocate CableRingBuffer object"));
+            DPF(D_TERSE, ("MapRingBuffer: failed to allocate CableRingBuffer object"));
+            ExReleaseFastMutex(&m_VirtualDeviceLock);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
         NTSTATUS ntStatus = pEntry->pRingBuffer->Initialize(CABLE_DEFAULT_RING_BUFFER_SIZE);
         if (!NT_SUCCESS(ntStatus))
         {
-            DPF(D_ERROR, ("MapRingBuffer: ring buffer Initialize failed 0x%x", ntStatus));
+            DPF(D_TERSE, ("MapRingBuffer: ring buffer Initialize failed 0x%x", ntStatus));
             delete pEntry->pRingBuffer;
             pEntry->pRingBuffer = NULL;
+            ExReleaseFastMutex(&m_VirtualDeviceLock);
             return ntStatus;
         }
     }
@@ -1297,7 +1379,8 @@ Return Value:
     //
     if (pEntry->pMappedUserAddress != NULL)
     {
-        DPF(D_ERROR, ("MapRingBuffer: already mapped at %p", pEntry->pMappedUserAddress));
+        DPF(D_TERSE, ("MapRingBuffer: already mapped at %p", pEntry->pMappedUserAddress));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_ALREADY_REGISTERED;
     }
 
@@ -1308,11 +1391,14 @@ Return Value:
     NTSTATUS ntStatus = pEntry->pRingBuffer->MapToUserMode(&pUserAddr);
     if (!NT_SUCCESS(ntStatus))
     {
-        DPF(D_ERROR, ("MapRingBuffer: MapToUserMode failed 0x%x", ntStatus));
+        DPF(D_TERSE, ("MapRingBuffer: MapToUserMode failed 0x%x", ntStatus));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return ntStatus;
     }
 
     pEntry->pMappedUserAddress = pUserAddr;
+    pEntry->pMappingProcess = PsGetCurrentProcess();
+    ObReferenceObject(pEntry->pMappingProcess);
 
     *UserAddress = pUserAddr;
     *TotalSize = pEntry->pRingBuffer->GetTotalSize();
@@ -1320,6 +1406,8 @@ Return Value:
 
     DPF(D_TERSE, ("MapRingBuffer: OK addr=%p total=%u data=%u",
         pUserAddr, *TotalSize, *DataBufferSize));
+
+    ExReleaseFastMutex(&m_VirtualDeviceLock);
 
     return STATUS_SUCCESS;
 }
@@ -1353,29 +1441,57 @@ Return Value:
     PAGED_CODE();
     DPF_ENTER(("[CAdapterCommon::UnmapRingBuffer]"));
 
+    ExAcquireFastMutex(&m_VirtualDeviceLock);
+
     PCABLE_VIRTUAL_DEVICE_ENTRY pEntry = FindVirtualDeviceById(DeviceId);
     if (pEntry == NULL)
     {
-        DPF(D_ERROR, ("UnmapRingBuffer: device not found"));
+        DPF(D_TERSE, ("UnmapRingBuffer: device not found"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_NOT_FOUND;
     }
 
     if (pEntry->pRingBuffer == NULL)
     {
-        DPF(D_ERROR, ("UnmapRingBuffer: no ring buffer exists"));
+        DPF(D_TERSE, ("UnmapRingBuffer: no ring buffer exists"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_INVALID_DEVICE_STATE;
     }
 
     if (UserAddress == NULL)
     {
-        DPF(D_ERROR, ("UnmapRingBuffer: NULL address"));
+        DPF(D_TERSE, ("UnmapRingBuffer: NULL address"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return STATUS_INVALID_PARAMETER;
     }
 
-    pEntry->pRingBuffer->UnmapFromUserMode(UserAddress);
-    pEntry->pMappedUserAddress = NULL;
+    if (pEntry->pMappedUserAddress == NULL)
+    {
+        DPF(D_TERSE, ("UnmapRingBuffer: device is not currently mapped"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
+        return STATUS_NOT_FOUND;
+    }
+
+    if (pEntry->pMappedUserAddress != UserAddress)
+    {
+        DPF(D_TERSE, ("UnmapRingBuffer: address mismatch, expected %p got %p",
+            pEntry->pMappedUserAddress, UserAddress));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (pEntry->pMappingProcess != NULL && PsGetCurrentProcess() != pEntry->pMappingProcess)
+    {
+        DPF(D_TERSE, ("UnmapRingBuffer: caller process does not own mapping"));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
+        return STATUS_ACCESS_DENIED;
+    }
+
+    CableUnmapRingBufferForEntry(pEntry);
 
     DPF(D_TERSE, ("UnmapRingBuffer: OK"));
+
+    ExReleaseFastMutex(&m_VirtualDeviceLock);
 
     return STATUS_SUCCESS;
 }
@@ -1410,8 +1526,11 @@ Return Value:
 {
     PAGED_CODE();
 
+    ExAcquireFastMutex(&m_VirtualDeviceLock);
+
     if (WaveName == NULL || WaveName[0] == L'\0')
     {
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
         return NULL;
     }
 
@@ -1420,11 +1539,32 @@ Return Value:
         if (m_VirtualDevices[i].InUse &&
             _wcsicmp(m_VirtualDevices[i].WaveName, WaveName) == 0)
         {
+            if (m_VirtualDevices[i].pRingBuffer != NULL)
+            {
+                m_VirtualDevices[i].pRingBuffer->AddReference();
+            }
+            ExReleaseFastMutex(&m_VirtualDeviceLock);
             return m_VirtualDevices[i].pRingBuffer;
         }
     }
 
+    ExReleaseFastMutex(&m_VirtualDeviceLock);
+
     return NULL;
+}
+
+//=============================================================================
+#pragma code_seg()
+STDMETHODIMP_(VOID)
+CAdapterCommon::ReleaseRingBufferReference
+(
+    _In_opt_ CableRingBuffer* RingBuffer
+)
+{
+    if (RingBuffer != NULL)
+    {
+        RingBuffer->ReleaseReference();
+    }
 }
 
 //=============================================================================
@@ -1662,6 +1802,7 @@ Return Value:
     // Initialize dynamic virtual device tracking
     RtlZeroMemory(m_VirtualDevices, sizeof(m_VirtualDevices));
     m_VirtualDeviceCount = 0;
+    ExInitializeFastMutex(&m_VirtualDeviceLock);
 
     //
     // Get the PDO.
@@ -2997,7 +3138,7 @@ Return Value:
                     }
                     break;
                 case CONNECTIONTYPE_WAVE_OUTPUT:
-                    ntStatus =
+                    ntStatus2 =
                         unregisterPhysicalConnection->UnregisterPhysicalConnection(
                             m_pDeviceObject,
                             UnknownWave,

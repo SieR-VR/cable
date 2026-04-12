@@ -1,19 +1,10 @@
-# IOCTL test suite for CableAudio driver.
-# Each Describe block resets the VM to a clean snapshot and installs the driver
-# before running its It blocks.
-#
-# Requires: $VmContext hashtable in the caller's scope, injected via Pester's
-# -Data parameter or script-scoped variable set by test.ps1 BeforeAll.
+# IOCTL hardening regression tests for CableAudio driver.
+# Verifies STATUS_DEVICE_BUSY behavior and map/unmap/remove stability loops.
 
 BeforeAll {
     . (Join-Path $PSScriptRoot "common.ps1")
 
-    # ---------------------------------------------------------------------------
-    # Helper: runs an inline script block inside the guest using the IOCTL C# type.
-    # The scriptblock receives the Add-Type + helper functions already defined.
-    # Defined inside BeforeAll so it is visible to all It blocks in this file.
-    # ---------------------------------------------------------------------------
-    function script:Invoke-IoctlSuite {
+    function script:Invoke-HardeningSuite {
         param(
             [System.Management.Automation.Runspaces.PSSession]$Session,
             [scriptblock]$Script
@@ -24,7 +15,7 @@ using System;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-public class CableIoctlSuite
+public class CableHardeningIoctl
 {
     const int DEVICE_CONTROL_PAYLOAD_SIZE = 662;
 
@@ -108,6 +99,17 @@ public class CableIoctlSuite
         return CreateFile(detail.DevicePath, 0xC0000000u, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
     }
 
+    static byte[] ParseId(string idHex)
+    {
+        string[] parts = idHex.Split('-');
+        byte[] id = new byte[16];
+        for (int i = 0; i < Math.Min(parts.Length, 16); i++)
+        {
+            id[i] = Convert.ToByte(parts[i], 16);
+        }
+        return id;
+    }
+
     public static string Create(int deviceType, string friendlyName)
     {
         SafeFileHandle h = OpenDriver();
@@ -135,11 +137,7 @@ public class CableIoctlSuite
         SafeFileHandle h = OpenDriver();
         if (h == null || h.IsInvalid) return "ERR:OpenDriver";
 
-        string[] parts = idHex.Split('-');
-        byte[] id = new byte[16];
-        for (int i = 0; i < Math.Min(parts.Length, 16); i++)
-            id[i] = Convert.ToByte(parts[i], 16);
-
+        byte[] id = ParseId(idHex);
         byte[] buf = new byte[DEVICE_CONTROL_PAYLOAD_SIZE];
         Array.Copy(id, 0, buf, 0, 16);
 
@@ -153,47 +151,131 @@ public class CableIoctlSuite
         return "REMOVE OK";
     }
 
-    public static string UpdateName(string idHex, string newName)
+    public static string MapRingBuffer(string idHex)
     {
         SafeFileHandle h = OpenDriver();
         if (h == null || h.IsInvalid) return "ERR:OpenDriver";
 
-        string[] parts = idHex.Split('-');
-        byte[] buf = new byte[DEVICE_CONTROL_PAYLOAD_SIZE];
-        for (int i = 0; i < Math.Min(parts.Length, 16); i++)
-            buf[i] = Convert.ToByte(parts[i], 16);
+        byte[] id = ParseId(idHex);
+        byte[] inBuf = new byte[16];
+        Array.Copy(id, 0, inBuf, 0, 16);
 
-        byte[] name = System.Text.Encoding.Unicode.GetBytes(newName);
-        int copyLen = Math.Min(name.Length, 126);
-        Array.Copy(name, 0, buf, 16, copyLen);
-
-        byte[] outBuf = new byte[DEVICE_CONTROL_PAYLOAD_SIZE];
+        byte[] outBuf = new byte[16];
         uint bytesReturned;
-        bool ok = DeviceIoControl(h, 0x8000000Cu, buf, (uint)buf.Length, outBuf, (uint)outBuf.Length, out bytesReturned, IntPtr.Zero);
+        bool ok = DeviceIoControl(h, 0x80000014u, inBuf, 16, outBuf, 16, out bytesReturned, IntPtr.Zero);
         int err = Marshal.GetLastWin32Error();
         h.Close();
 
-        if (!ok) return "RENAME FAILED: error=" + err;
-        return "RENAME OK";
+        if (!ok) return "MAP FAILED: error=" + err;
+
+        ulong address = BitConverter.ToUInt64(outBuf, 0);
+        uint totalSize = BitConverter.ToUInt32(outBuf, 8);
+        uint dataSize = BitConverter.ToUInt32(outBuf, 12);
+        return "MAP OK: Address=0x" + address.ToString("X") + ",Total=" + totalSize + ",Data=" + dataSize;
+    }
+
+    public static string UnmapRingBuffer(string idHex, ulong address)
+    {
+        SafeFileHandle h = OpenDriver();
+        if (h == null || h.IsInvalid) return "ERR:OpenDriver";
+
+        byte[] id = ParseId(idHex);
+        byte[] inBuf = new byte[24];
+        Array.Copy(id, 0, inBuf, 0, 16);
+        Array.Copy(BitConverter.GetBytes(address), 0, inBuf, 16, 8);
+
+        byte[] outBuf = new byte[4];
+        uint bytesReturned;
+        bool ok = DeviceIoControl(h, 0x80000018u, inBuf, 24, outBuf, (uint)outBuf.Length, out bytesReturned, IntPtr.Zero);
+        int err = Marshal.GetLastWin32Error();
+        h.Close();
+
+        if (!ok) return "UNMAP FAILED: error=" + err;
+        return "UNMAP OK";
     }
 }
 '@
 
         $helperFunctions = @'
-function Run-CreateRemove {
-    param([int]$DeviceType, [string]$Name)
-    $create = [CableIoctlSuite]::Create($DeviceType, $Name)
-    if ($create -notlike "CREATE OK: Id=*") { return @($create) }
-    $id = $create.Substring("CREATE OK: Id=".Length)
-    $remove = [CableIoctlSuite]::Remove($id)
-    return @($create, $remove)
+function Parse-CreateId {
+    param([string]$CreateResult)
+    if ($CreateResult -notlike "CREATE OK: Id=*") {
+        throw "Create failed: $CreateResult"
+    }
+    return $CreateResult.Substring("CREATE OK: Id=".Length)
 }
 
+function Parse-MapAddress {
+    param([string]$MapResult)
+    if ($MapResult -notlike "MAP OK: Address=0x*") {
+        throw "Map failed: $MapResult"
+    }
+
+    $prefix = "MAP OK: Address=0x"
+    $addrHex = ($MapResult.Substring($prefix.Length) -split ",")[0]
+    return [UInt64]::Parse($addrHex, [System.Globalization.NumberStyles]::HexNumber)
+}
+
+function Invoke-BusyRemoveSequence {
+    param(
+        [int]$DeviceType,
+        [string]$Name
+    )
+
+    $log = @()
+    $create = [CableHardeningIoctl]::Create($DeviceType, $Name)
+    $log += $create
+
+    $id = Parse-CreateId -CreateResult $create
+
+    $map = [CableHardeningIoctl]::MapRingBuffer($id)
+    $log += $map
+
+    $removeBusy = [CableHardeningIoctl]::Remove($id)
+    $log += $removeBusy
+
+    $address = Parse-MapAddress -MapResult $map
+    $unmap = [CableHardeningIoctl]::UnmapRingBuffer($id, $address)
+    $log += $unmap
+
+    $removeFinal = [CableHardeningIoctl]::Remove($id)
+    $log += $removeFinal
+
+    return $log
+}
+
+function Invoke-WrongAddressUnmapSequence {
+    param(
+        [int]$DeviceType,
+        [string]$Name
+    )
+
+    $log = @()
+    $create = [CableHardeningIoctl]::Create($DeviceType, $Name)
+    $log += $create
+
+    $id = Parse-CreateId -CreateResult $create
+
+    $map = [CableHardeningIoctl]::MapRingBuffer($id)
+    $log += $map
+
+    $address = Parse-MapAddress -MapResult $map
+    $wrongAddress = $address + 0x1000
+
+    $wrongUnmap = [CableHardeningIoctl]::UnmapRingBuffer($id, $wrongAddress)
+    $log += $wrongUnmap
+
+    $validUnmap = [CableHardeningIoctl]::UnmapRingBuffer($id, $address)
+    $log += $validUnmap
+
+    $remove = [CableHardeningIoctl]::Remove($id)
+    $log += $remove
+
+    return $log
+}
 '@
 
         $callerBody = $Script.ToString()
-
-        # Build the full guest script using string concatenation to avoid here-string nesting.
         $fullScript = '$ErrorActionPreference = "Stop"' + "`n" +
                       'Add-Type -TypeDefinition @''' + "`n" +
                       $ioctlCs + "`n" +
@@ -203,7 +285,7 @@ function Run-CreateRemove {
 
         $output = Invoke-Command -Session $Session -ScriptBlock {
             param($body)
-            $tmp = "C:\CableAudio\ioctl-suite.ps1"
+            $tmp = "C:\CableAudio\ioctl-hardening-suite.ps1"
             Set-Content -Path $tmp -Value $body -Encoding UTF8
             & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp
         } -ArgumentList $fullScript
@@ -212,50 +294,87 @@ function Run-CreateRemove {
     }
 }
 
-Describe "IOCTL: Capture device create/remove" {
+Describe "IOCTL: hardening remove busy policy" {
     BeforeAll {
         $script:Session = Reset-Vm @VmContext
     }
 
     AfterAll {
         if ($script:Session) {
-            Assert-NoGuestBugCheck -ComputerName $VmContext.ComputerName -Port $VmContext.Port -Username $VmContext.Username -Password $VmContext.Password -Context "IOCTL Capture create/remove"
+            Assert-NoGuestBugCheck -ComputerName $VmContext.ComputerName -Port $VmContext.Port -Username $VmContext.Username -Password $VmContext.Password -Context "IOCTL hardening remove busy policy"
             Remove-PSSession $script:Session -ErrorAction SilentlyContinue
         }
     }
 
-    It "creates a capture (mic) device and removes it cleanly" {
-        $output = Invoke-IoctlSuite -Session $script:Session -Script {
-            $results = @()
-            $results += Run-CreateRemove -DeviceType 1 -Name "IOCTL Mic Test"
-            $results
+    It "returns busy while mapped and succeeds after unmap" {
+        $output = Invoke-HardeningSuite -Session $script:Session -Script {
+            Invoke-BusyRemoveSequence -DeviceType 0 -Name "Hardening Busy Remove"
         }
 
-        $output | Should -Not -Match 'FAILED|ERR:'
+        $output | Should -Contain "UNMAP OK"
         $output | Should -Contain "REMOVE OK"
+        ($output -join "`n") | Should -Match 'REMOVE FAILED: error=(170|2404)'
     }
 }
 
-Describe "IOCTL: Render device create/remove" {
+Describe "IOCTL: hardening stress loop" {
     BeforeAll {
         $script:Session = Reset-Vm @VmContext
     }
 
     AfterAll {
         if ($script:Session) {
-            Assert-NoGuestBugCheck -ComputerName $VmContext.ComputerName -Port $VmContext.Port -Username $VmContext.Username -Password $VmContext.Password -Context "IOCTL Render create/remove"
+            Assert-NoGuestBugCheck -ComputerName $VmContext.ComputerName -Port $VmContext.Port -Username $VmContext.Username -Password $VmContext.Password -Context "IOCTL hardening stress loop"
             Remove-PSSession $script:Session -ErrorAction SilentlyContinue
         }
     }
 
-    It "creates a render (speaker) device and removes it cleanly" {
-        $output = Invoke-IoctlSuite -Session $script:Session -Script {
-            $results = @()
-            $results += Run-CreateRemove -DeviceType 0 -Name "IOCTL Speaker Test"
-            $results
+    It "repeats busy-remove then unmap-remove cycles" {
+        $loopCount = if ($VmContext.ContainsKey('RenameLoopCount')) {
+            [Math]::Max(2, [int]$VmContext.RenameLoopCount)
+        } else {
+            3
         }
 
-        $output | Should -Not -Match 'FAILED|ERR:'
+        $guestScript = @"
+`$results = @()
+`$loopCount = $loopCount
+
+for (`$i = 0; `$i -lt `$loopCount; `$i++) {
+    `$results += "LOOP `$i"
+    `$results += Invoke-BusyRemoveSequence -DeviceType 1 -Name ("Hardening Stress " + `$i)
+}
+
+`$results
+"@
+
+        $output = Invoke-HardeningSuite -Session $script:Session -Script ([scriptblock]::Create($guestScript))
+
+        ($output | Where-Object { $_ -eq 'REMOVE OK' }).Count | Should -BeGreaterThan 0
+        ($output | Where-Object { $_ -eq 'UNMAP OK' }).Count | Should -BeGreaterThan 0
+        ($output -join "`n") | Should -Not -Match 'ERR:OpenDriver|CREATE FAILED|MAP FAILED|UNMAP FAILED'
+    }
+}
+
+Describe "IOCTL: hardening unmap address validation" {
+    BeforeAll {
+        $script:Session = Reset-Vm @VmContext
+    }
+
+    AfterAll {
+        if ($script:Session) {
+            Assert-NoGuestBugCheck -ComputerName $VmContext.ComputerName -Port $VmContext.Port -Username $VmContext.Username -Password $VmContext.Password -Context "IOCTL hardening unmap address validation"
+            Remove-PSSession $script:Session -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "rejects wrong unmap address and still allows valid cleanup" {
+        $output = Invoke-HardeningSuite -Session $script:Session -Script {
+            Invoke-WrongAddressUnmapSequence -DeviceType 0 -Name "Hardening Wrong Unmap"
+        }
+
+        ($output -join "`n") | Should -Match 'UNMAP FAILED: error=87'
+        $output | Should -Contain "UNMAP OK"
         $output | Should -Contain "REMOVE OK"
     }
 }

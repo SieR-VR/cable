@@ -350,3 +350,11 @@ pub(crate) struct Runtime {
 | @tauri-apps/api | ^2 | Tauri IPC |
 | react | ^19.1.0 | UI 프레임워크 |
 | tailwindcss | ^4.1.12 | CSS 프레임워크 |
+
+## 10. 드라이버 안정성 노트
+
+커널 모드 드라이버 안정성/하드닝 변경 사항은 `docs/driver-hardening.md`에 별도로 기록한다.
+
+- 동적 장치 제거 정책: 사용 중 장치 제거 시 `STATUS_DEVICE_BUSY`
+- 링 버퍼 수명 관리: 스트림 참조/해제 기반으로 UAF 방지
+- 사용자 매핑 검증: map/unmap 주소/프로세스 소유자 검증 강화

@@ -359,6 +359,81 @@ function Install-AppInGuest {
     Invoke-Guest -Session $Session -Command "Start-Process msiexec.exe -ArgumentList '/i ""C:\CableAudio\cable-ui.msi"" /qn /norestart' -Wait -NoNewWindow"
 }
 
+function Get-GuestBugCheckEvidence {
+    param(
+        [string]$ComputerName,
+        [int]$Port,
+        [string]$Username,
+        [string]$Password
+    )
+
+    $script = @'
+$ErrorActionPreference = "Stop"
+
+$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+
+$bugcheckEvents = Get-WinEvent -FilterHashtable @{ LogName = "System"; Id = 1001; StartTime = $boot } -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.ProviderName -eq "BugCheck" -or
+        $_.ProviderName -eq "Microsoft-Windows-WER-SystemErrorReporting" -or
+        $_.Message -match "bugcheck"
+    }
+
+$kernelPower41 = Get-WinEvent -FilterHashtable @{ LogName = "System"; Id = 41; StartTime = $boot } -ErrorAction SilentlyContinue
+
+$dumpItems = @()
+$memoryDmp = "C:\Windows\MEMORY.DMP"
+if (Test-Path $memoryDmp) {
+    $item = Get-Item $memoryDmp -ErrorAction SilentlyContinue
+    if ($item -and $item.LastWriteTime -ge $boot) { $dumpItems += $item }
+}
+
+$miniDir = "C:\Windows\Minidump"
+if (Test-Path $miniDir) {
+    $dumpItems += Get-ChildItem $miniDir -Filter "*.dmp" -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -ge $boot }
+}
+
+$recentEvents = @($bugcheckEvents | Select-Object -First 3 | ForEach-Object {
+    $msg = [string]$_.Message
+    if ([string]::IsNullOrWhiteSpace($msg)) { $msg = "(no message)" }
+    $msg = ($msg -replace "`r?`n", " ")
+    if ($msg.Length -gt 200) { $msg = $msg.Substring(0, 200) }
+    "[{0}] {1}: {2}" -f $_.TimeCreated, $_.ProviderName, $msg
+})
+
+$payload = [PSCustomObject]@{
+    BootTime       = $boot
+    BugCheckCount  = @($bugcheckEvents).Count
+    Kernel41Count  = @($kernelPower41).Count
+    DumpCount      = @($dumpItems).Count
+    BugCheckRecent = $recentEvents
+}
+
+$payload | ConvertTo-Json -Depth 4 -Compress
+'@
+
+    $json = Invoke-GuestRetry -ComputerName $ComputerName -Port $Port -Username $Username -Password $Password -Command $script
+    return ($json | ConvertFrom-Json)
+}
+
+function Assert-NoGuestBugCheck {
+    param(
+        [string]$ComputerName,
+        [int]$Port,
+        [string]$Username,
+        [string]$Password,
+        [string]$Context = "VM test"
+    )
+
+    $evidence = Get-GuestBugCheckEvidence -ComputerName $ComputerName -Port $Port -Username $Username -Password $Password
+
+    if ($evidence.BugCheckCount -gt 0 -or $evidence.DumpCount -gt 0) {
+        $recent = if ($evidence.BugCheckRecent) { ($evidence.BugCheckRecent -join " | ") } else { "(no event text)" }
+        throw "$Context failed: Guest bugcheck evidence detected. Boot=$($evidence.BootTime), BugCheckCount=$($evidence.BugCheckCount), DumpCount=$($evidence.DumpCount), Kernel41Count=$($evidence.Kernel41Count), Recent=$recent"
+    }
+}
+
 function Resolve-GuestAppExePath {
     param([System.Management.Automation.Runspaces.PSSession]$Session)
 

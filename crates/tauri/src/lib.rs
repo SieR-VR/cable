@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{Builder, State, async_runtime::Mutex};
 
 #[cfg(windows)]
-pub mod driver_client;
-pub mod nodes;
+pub(crate) mod driver_client;
+pub(crate) mod nodes;
 mod runtime;
 
 use nodes::audio_input_device::AudioInputDeviceNode;
@@ -28,11 +28,6 @@ pub(crate) struct VirtualDevice {
   pub name: String,
   /// "render" or "capture".
   pub device_type: String,
-  /// KS audio interface symbolic link (kernel form `\??\SWD#...`).
-  /// Internal field — not sent to the frontend.
-  #[serde(skip)]
-  #[allow(dead_code)]
-  pub wave_symbolic_link: String,
   /// Windows MM endpoint ID string (e.g. `{0.0.0.00000000}.{guid}`).
   /// Cached at creation time for fast IMMDevice lookup during rename.
   /// Internal field — not sent to the frontend.
@@ -221,7 +216,7 @@ async fn create_virtual_device(
 
     // Acquire lock only long enough to clone the driver handle and issue the IOCTL.
     // We release the lock before the long COM enumeration so other commands can proceed.
-    let (hex_id, wave_symbolic_link) = {
+    let hex_id = {
       let app = state.lock().await;
       let driver = app
         .driver_handle
@@ -242,11 +237,11 @@ async fn create_virtual_device(
       let hex_id = hex::encode(created.id);
 
       println!(
-        "Created virtual {} device '{}' -> {} (wsl='{}')",
-        device_type, name, hex_id, created.wave_symbolic_link
+        "Created virtual {} device '{}' -> {}",
+        device_type, name, hex_id
       );
 
-      (hex_id, created.wave_symbolic_link)
+      hex_id
     }; // ← mutex is already released (dropped above)
 
     // Attempt to find the Windows MM endpoint ID for this device by polling for
@@ -286,7 +281,6 @@ async fn create_virtual_device(
       id: hex_id.clone(),
       name,
       device_type,
-      wave_symbolic_link,
       endpoint_id,
     };
     // Re-acquire the lock to persist the new device entry.

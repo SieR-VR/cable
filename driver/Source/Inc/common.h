@@ -503,6 +503,12 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _In_        PCWSTR                          WaveName
     ) PURE;
 
+    STDMETHOD_(VOID,            ReleaseRingBufferReference)
+    (
+        THIS_
+        _In_opt_    class CableRingBuffer*          RingBuffer
+    ) PURE;
+
 };
 
 typedef IAdapterCommon *PADAPTERCOMMON;

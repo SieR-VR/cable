@@ -125,6 +125,43 @@ $global:VmContext = @{
 # ------------------------------------------------------------------
 # Pester configuration
 # ------------------------------------------------------------------
+function Ensure-PesterModule {
+    $existing = Get-Module -ListAvailable -Name Pester |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+
+    if ($existing -and $existing.Version -ge [version]"5.0") {
+        return
+    }
+
+    Write-Host "Pester 5.x not found. Attempting to install for current user..." -ForegroundColor Yellow
+
+    try {
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force -Confirm:$false -ErrorAction Stop | Out-Null
+    }
+    catch {
+        throw "NuGet provider installation failed. Install NuGet provider (>=2.8.5.201) and retry. Details: $($_.Exception.Message)"
+    }
+
+    try {
+        $repo = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
+        if ($repo -and $repo.InstallationPolicy -ne 'Trusted') {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        # best effort only
+    }
+
+    try {
+        Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck -Confirm:$false -ErrorAction Stop
+    }
+    catch {
+        throw "Pester 5.x installation failed. Install manually with 'Install-Module Pester -Scope CurrentUser'. Details: $($_.Exception.Message)"
+    }
+}
+
+Ensure-PesterModule
 Import-Module Pester -MinimumVersion 5.0 -ErrorAction Stop
 
 $config = New-PesterConfiguration

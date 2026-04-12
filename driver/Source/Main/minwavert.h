@@ -49,7 +49,6 @@ private:
     PCFILTER_DESCRIPTOR                 m_FilterDesc;
     PIN_DEVICE_FORMATS_AND_MODES *      m_DeviceFormatsAndModes;
     KSPIN_LOCK                          m_DeviceFormatsAndModesLock; // To serialize access.
-    KIRQL                               m_DeviceFormatsAndModesIrql;
     ULONG                               m_DeviceFormatsAndModesCount; 
     USHORT                              m_DeviceMaxChannels;
     PDRMPORT                            m_pDrmPort;
@@ -176,7 +175,6 @@ public:
         }
 
         KeInitializeSpinLock(&m_DeviceFormatsAndModesLock);
-        m_DeviceFormatsAndModesIrql = PASSIVE_LEVEL;
     }
 
 #pragma code_seg()
@@ -215,17 +213,6 @@ public:
 #pragma code_seg()
 
 private:
-    _IRQL_raises_(DISPATCH_LEVEL)
-    _Acquires_lock_(m_DeviceFormatsAndModesLock)
-    _Requires_lock_not_held_(m_DeviceFormatsAndModesLock)
-    _IRQL_saves_global_(SpinLock, m_DeviceFormatsAndModesIrql)
-    VOID AcquireFormatsAndModesLock();
-
-    _Releases_lock_(m_DeviceFormatsAndModesLock)
-    _Requires_lock_held_(m_DeviceFormatsAndModesLock)
-    _IRQL_restores_global_(SpinLock, m_DeviceFormatsAndModesIrql)
-    VOID ReleaseFormatsAndModesLock();
-
     _Post_satisfies_(return > 0)
     ULONG GetPinSupportedDeviceFormats(_In_ ULONG PinId, _Outptr_opt_result_buffer_(return) KSDATAFORMAT_WAVEFORMATEXTENSIBLE **ppFormats);
 
