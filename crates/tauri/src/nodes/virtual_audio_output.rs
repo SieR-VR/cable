@@ -43,6 +43,9 @@ pub(crate) struct VirtualAudioOutputNode {
   #[serde(skip)]
   #[cfg(windows)]
   ring_buffer: Option<RingBufferMapping>,
+
+  #[serde(skip)]
+  debug_tick: u64,
 }
 
 impl std::fmt::Debug for VirtualAudioOutputNode {
@@ -56,6 +59,10 @@ impl std::fmt::Debug for VirtualAudioOutputNode {
 }
 
 impl NodeTrait for VirtualAudioOutputNode {
+  fn id(&self) -> &str {
+    &self.id
+  }
+
   fn init(&mut self, runtime: &Runtime) -> Result<(), String> {
     println!(
       "Initializing virtual audio output (render): {} device={}",
@@ -85,6 +92,9 @@ impl NodeTrait for VirtualAudioOutputNode {
       self.parsed_device_id = Some(device_id);
       self.driver_handle = Some(driver.clone());
       self.ring_buffer = Some(mapping);
+
+      // Stream format metadata is owned by the driver and updated when the
+      // render stream is created. Do not override it from user mode.
     }
 
     #[cfg(not(windows))]
@@ -135,10 +145,31 @@ impl NodeTrait for VirtualAudioOutputNode {
         None => return Ok(BTreeMap::new()),
       };
 
-      // Read available samples from the driver ring buffer
-      let max_samples = runtime.buffer_size as usize * 2; // stereo
+      // Read available samples from the driver ring buffer.
+      // Use the actual channel count from the stream format metadata so that
+      // mono, stereo, and surround formats all produce the correct frame count.
+      // Fall back to 2 (stereo) if metadata is not yet available.
+      let channels = ring_buffer
+        .read_stream_format_metadata()
+        .map(|(_sr, ch, _bits, _dt)| ch as usize)
+        .unwrap_or(2)
+        .max(1);
+      // Read all available data (up to 4x buffer_size) to keep up with the
+      // driver's write rate.  Limiting to a reasonable maximum prevents
+      // unbounded allocations if the ring buffer is very full.
+      let max_samples = runtime.buffer_size as usize * channels * 4;
       let mut buffer = vec![0.0f32; max_samples];
       let samples_read = ring_buffer.read_f32_samples(&mut buffer);
+
+      self.debug_tick = self.debug_tick.wrapping_add(1);
+      if self.debug_tick % 200 == 0 {
+        let (w, r, sz, st) = ring_buffer.debug_ring_stats();
+        let fmt = ring_buffer.read_stream_format_metadata();
+        println!(
+          "VirtualAudioOutput[{}] stats: read={} write_idx={} read_idx={} size={} status={} fmt={:?}",
+          self.id, samples_read, w, r, sz, st, fmt
+        );
+      }
 
       if samples_read == 0 {
         return Ok(BTreeMap::new());

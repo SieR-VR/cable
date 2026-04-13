@@ -45,6 +45,72 @@ struct AppData {
   virtual_devices: BTreeMap<String, VirtualDevice>,
 }
 
+fn start_runtime_thread(state: &mut AppData, mut runtime: runtime::Runtime) {
+  let running = Arc::new(AtomicBool::new(true));
+  let running_clone = running.clone();
+
+  let sleep_duration = runtime.buffer_duration();
+  println!("Enabling runtime with sleep duration: {:?}", sleep_duration);
+
+  let handle = std::thread::spawn(move || {
+    // Use a spin-loop with Instant for precise audio timing.
+    // std::thread::sleep on Windows has ~15.6ms granularity by default,
+    // which causes systematic underruns when sleep_duration < 15.6ms.
+    let mut next_tick = std::time::Instant::now() + sleep_duration;
+    while running_clone.load(Ordering::Relaxed) {
+      if let Err(e) = runtime.process() {
+        eprintln!("Error processing audio graph: {}", e);
+      }
+
+      // Spin-wait until the next tick for sub-millisecond accuracy.
+      // Yield to the OS when we're more than 2ms away to reduce CPU usage,
+      // then spin for the final stretch.
+      loop {
+        let now = std::time::Instant::now();
+        if now >= next_tick {
+          break;
+        }
+        let remaining = next_tick - now;
+        if remaining > std::time::Duration::from_millis(2) {
+          std::thread::sleep(std::time::Duration::from_millis(1));
+        } else {
+          std::hint::spin_loop();
+        }
+      }
+      next_tick += sleep_duration;
+
+      // If we fell behind (e.g. system stall), snap forward to avoid
+      // a burst of catch-up iterations.
+      let now = std::time::Instant::now();
+      if next_tick < now {
+        next_tick = now + sleep_duration;
+      }
+    }
+
+    if let Err(e) = runtime.dispose_nodes() {
+      eprintln!("Error disposing nodes: {}", e);
+    }
+    println!("Runtime thread stopped.");
+  });
+
+  state.runtime_running = Some(running);
+  state.runtime_thread = Some(handle);
+}
+
+fn stop_runtime_thread(state: &mut AppData) -> Result<(), String> {
+  if let Some(running) = state.runtime_running.take() {
+    running.store(false, Ordering::Relaxed);
+  }
+
+  if let Some(handle) = state.runtime_thread.take() {
+    handle
+      .join()
+      .map_err(|_| "Failed to join runtime thread".to_string())?;
+  }
+
+  Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AudioDevice {
@@ -118,7 +184,7 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
         descriptions: description.extended().to_vec(),
         frequency: interface_type.sample_rate(),
         channels: interface_type.channels(),
-        bits_per_sample: interface_type.sample_format().sample_size(),
+        bits_per_sample: interface_type.sample_format().sample_size() * 8,
       }
     })
     .collect();
@@ -135,7 +201,7 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
         descriptions: description.extended().to_vec(),
         frequency: interface_type.sample_rate(),
         channels: interface_type.channels(),
-        bits_per_sample: interface_type.sample_format().sample_size(),
+        bits_per_sample: interface_type.sample_format().sample_size() * 8,
       }
     })
     .collect();
@@ -248,6 +314,7 @@ async fn create_virtual_device(
     // a newly-appeared endpoint (diff against pre_snapshot).
     // We do this on a blocking thread to keep COM calls off the async executor.
     let name_for_creation = name.clone();
+    let is_render_for_creation = device_type.eq_ignore_ascii_case("render");
     let endpoint_id = tauri::async_runtime::spawn_blocking(move || {
       let ep_id = find_new_endpoint_id(&pre_snapshot, 15, 300)?;
       eprintln!("create_virtual_device: found endpoint_id='{}'", ep_id);
@@ -261,6 +328,17 @@ async fn create_virtual_device(
             e
           );
           // Non-fatal: device works, just shows generic name until next rename.
+        }
+
+        if is_render_for_creation {
+          if let Err(e) = set_default_render_endpoint(&ep_id) {
+            eprintln!("set_default_render_endpoint at creation failed: {}", e);
+          } else {
+            eprintln!(
+              "create_virtual_device: default render endpoint switched to '{}'",
+              ep_id
+            );
+          }
         }
       }
       Ok(ep_id)
@@ -337,9 +415,8 @@ async fn rename_virtual_device(
 ) -> Result<(), String> {
   #[cfg(windows)]
   {
-    // Fetch the cached endpoint_id under the lock, then drop the lock before
-    // calling into COM (which can block and must not hold the async mutex).
-    let endpoint_id = {
+    // Fetch cached endpoint_id; recover it opportunistically if missing.
+    let mut endpoint_id = {
       let app = state.lock().await;
       app
         .virtual_devices
@@ -350,10 +427,46 @@ async fn rename_virtual_device(
     };
 
     if endpoint_id.is_empty() {
-      return Err(format!(
-        "Device {} has no cached endpoint_id; cannot rename",
-        device_id
-      ));
+      let known_ids = {
+        let app = state.lock().await;
+        app
+          .virtual_devices
+          .values()
+          .filter_map(|v| {
+            if v.id != device_id && !v.endpoint_id.is_empty() {
+              Some(v.endpoint_id.clone())
+            } else {
+              None
+            }
+          })
+          .collect::<std::collections::HashSet<_>>()
+      };
+
+      endpoint_id = tauri::async_runtime::spawn_blocking(move || {
+        let all = snapshot_endpoint_ids();
+        for ep in all {
+          if !known_ids.contains(&ep) && endpoint_exists(&ep) {
+            return ep;
+          }
+        }
+        String::new()
+      })
+      .await
+      .map_err(|e| format!("spawn_blocking error recovering endpoint_id: {}", e))?;
+
+      if !endpoint_id.is_empty() {
+        let mut app = state.lock().await;
+        if let Some(vd) = app.virtual_devices.get_mut(&device_id) {
+          vd.endpoint_id = endpoint_id.clone();
+        }
+      }
+
+      if endpoint_id.is_empty() {
+        return Err(format!(
+          "Device {} has no cached endpoint_id; cannot rename",
+          device_id
+        ));
+      }
     }
 
     let name_for_com = new_name.clone();
@@ -424,8 +537,8 @@ fn snapshot_endpoint_ids() -> std::collections::HashSet<String> {
         }
       };
 
-    // Enumerate all active endpoints (render + capture).
-    let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0x1)) {
+    // Enumerate all endpoints (active/disabled/not-present/unplugged).
+    let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0xF)) {
       Ok(c) => c,
       Err(e) => {
         eprintln!("snapshot_endpoint_ids: EnumAudioEndpoints failed: {}", e);
@@ -491,7 +604,7 @@ fn find_new_endpoint_id(
         eprintln!("find_new_endpoint_id: retry {}/{}", attempt, max_retries);
       }
 
-      let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0x1)) {
+      let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0xF)) {
         Ok(c) => c,
         Err(e) => return Err(format!("EnumAudioEndpoints failed: {}", e)),
       };
@@ -529,6 +642,111 @@ fn find_new_endpoint_id(
     );
     Ok(String::new())
   }
+}
+
+#[cfg(windows)]
+fn endpoint_exists(endpoint_id: &str) -> bool {
+  use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator};
+  use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+  };
+
+  unsafe {
+    let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+    if hr.is_err() && hr != windows::Win32::Foundation::S_FALSE {
+      return false;
+    }
+    let _coinit_guard = CoUninitGuard;
+
+    let enumerator: IMMDeviceEnumerator =
+      match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER) {
+        Ok(e) => e,
+        Err(_) => return false,
+      };
+
+    let ep_wide: Vec<u16> = endpoint_id
+      .encode_utf16()
+      .chain(std::iter::once(0))
+      .collect();
+
+    enumerator
+      .GetDevice(windows::core::PCWSTR(ep_wide.as_ptr()))
+      .is_ok()
+  }
+}
+
+#[cfg(windows)]
+fn set_default_render_endpoint(endpoint_id: &str) -> Result<(), String> {
+  let escaped = endpoint_id.replace("'", "''");
+  let script = format!(
+    r#"
+$ErrorActionPreference = 'Stop'
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+[ComImport, Guid("f8679f50-850a-41cf-9c72-430f290290c8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IPolicyConfig
+{{
+    int GetMixFormat();
+    int GetDeviceFormat();
+    int SetDeviceFormat();
+    int GetProcessingPeriod();
+    int SetProcessingPeriod();
+    int GetShareMode();
+    int SetShareMode();
+    int GetPropertyValue();
+    int SetPropertyValue();
+    int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string wszDeviceId, int role);
+    int SetEndpointVisibility();
+}}
+
+[ComImport, Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9")]
+class PolicyConfigClient {{ }}
+
+public static class DefaultAudioSetter
+{{
+    public static void SetDefault(string endpointId)
+    {{
+        var pc = (IPolicyConfig)(new PolicyConfigClient());
+        pc.SetDefaultEndpoint(endpointId, 0); // eConsole
+        pc.SetDefaultEndpoint(endpointId, 1); // eMultimedia
+        pc.SetDefaultEndpoint(endpointId, 2); // eCommunications
+    }}
+}}
+'@
+
+[DefaultAudioSetter]::SetDefault('{0}')
+"#,
+    escaped
+  );
+
+  let output = std::process::Command::new("powershell")
+    .args([
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      &script,
+    ])
+    .output()
+    .map_err(|e| {
+      format!(
+        "Failed to launch PowerShell for default endpoint switch: {}",
+        e
+      )
+    })?;
+
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    return Err(format!(
+      "Failed to set default endpoint '{}': {}",
+      endpoint_id, stderr
+    ));
+  }
+
+  Ok(())
 }
 
 /// Write PKEY_Device_DeviceDesc (pid=2) on the MM endpoint identified by
@@ -775,7 +993,12 @@ async fn setup_runtime(
     buffer_size, sample_rate, host_id
   );
 
-  let app_state = state.lock().await;
+  let mut app_state = state.lock().await;
+
+  let was_running = app_state.runtime_running.is_some();
+  if was_running {
+    stop_runtime_thread(&mut app_state)?;
+  }
 
   #[cfg(windows)]
   let driver_handle = app_state.driver_handle.clone();
@@ -798,36 +1021,20 @@ async fn setup_runtime(
   let mut state = state.lock().await;
   state.runtime = Some(runtime);
 
+  // Always start (or restart) runtime after applying graph so users
+  // immediately hear the route without requiring a separate enable step.
+  if let Some(runtime_to_start) = state.runtime.take() {
+    start_runtime_thread(&mut state, runtime_to_start);
+  }
+
   Ok(())
 }
 
 #[tauri::command]
 async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
-  if let Some(mut runtime) = state.runtime.take() {
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-
-    let sleep_duration = runtime.buffer_duration();
-    println!("Enabling runtime with sleep duration: {:?}", sleep_duration);
-
-    let handle = std::thread::spawn(move || {
-      while running_clone.load(Ordering::Relaxed) {
-        if let Err(e) = runtime.process() {
-          eprintln!("Error processing audio graph: {}", e);
-        }
-        std::thread::sleep(sleep_duration);
-      }
-
-      // 루프 종료 시 노드 정리
-      if let Err(e) = runtime.dispose_nodes() {
-        eprintln!("Error disposing nodes: {}", e);
-      }
-      println!("Runtime thread stopped.");
-    });
-
-    state.runtime_running = Some(running);
-    state.runtime_thread = Some(handle);
+  if let Some(runtime) = state.runtime.take() {
+    start_runtime_thread(&mut state, runtime);
   }
   Ok(())
 }
@@ -842,18 +1049,7 @@ fn open_devtools(window: tauri::WebviewWindow) {
 #[tauri::command]
 async fn disable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
-
-  // AtomicBool을 false로 설정하여 루프 종료 시그널
-  if let Some(running) = state.runtime_running.take() {
-    running.store(false, Ordering::Relaxed);
-  }
-
-  // 스레드가 종료될 때까지 대기
-  if let Some(handle) = state.runtime_thread.take() {
-    handle
-      .join()
-      .map_err(|_| "Failed to join runtime thread".to_string())?;
-  }
+  stop_runtime_thread(&mut state)?;
 
   println!("Runtime disabled.");
   Ok(())

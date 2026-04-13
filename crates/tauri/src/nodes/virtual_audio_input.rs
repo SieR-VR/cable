@@ -55,6 +55,10 @@ impl std::fmt::Debug for VirtualAudioInputNode {
 }
 
 impl NodeTrait for VirtualAudioInputNode {
+  fn id(&self) -> &str {
+    &self.id
+  }
+
   fn init(&mut self, runtime: &Runtime) -> Result<(), String> {
     println!(
       "Initializing virtual audio input (capture): {} device={}",

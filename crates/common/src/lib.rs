@@ -51,7 +51,19 @@ pub struct RingBufferHeader {
   pub buffer_size: u32,
   /// Buffer status flags (0: OK, 1: Overrun, 2: Underrun)
   pub status: u32,
+  /// Active stream sample rate
+  pub sample_rate: u32,
+  /// Active stream channel count
+  pub channels: u16,
+  /// Active stream bit depth
+  pub bits_per_sample: u16,
+  /// Active stream sample type
+  pub data_type: AudioDataType,
+  /// Header magic ('CBRB')
+  pub magic: u32,
 }
+
+pub const RING_BUFFER_MAGIC: u32 = 0x42524243;
 
 /// Ring buffer status flags
 pub const RING_BUFFER_STATUS_OK: u32 = 0;

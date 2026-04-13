@@ -108,6 +108,7 @@ function App() {
 
     try {
       await invoke("setup_runtime", { graph, host: selectedAudioHost, bufferSize: 512 });
+      setIsRuntimeEnabled(true);
       setApplyStatus("Applied successfully");
       setTimeout(() => setApplyStatus(null), 3000);
     } catch (e: any) {
