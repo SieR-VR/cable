@@ -20,6 +20,7 @@ Abstract:
 #include "endpoints.h"
 #include "minipairs.h"
 #include "CableRingBuffer.h"
+#include "minwavert.h"
 
 //-----------------------------------------------------------------------------
 // CSaveData statics
@@ -367,6 +368,11 @@ class CAdapterCommon :
             _In_ PCWSTR WaveName
         );
 
+        STDMETHODIMP_(CableRingBuffer*) FindAnyMappedRingBuffer
+        (
+            _In_ BOOLEAN Capture
+        );
+
         STDMETHODIMP_(VOID) ReleaseRingBufferReference
         (
             _In_opt_ CableRingBuffer* RingBuffer
@@ -661,9 +667,22 @@ CableInstallEndpointWorkItem(
 
     PADAPTERCOMMON pAdapterCommon = (PADAPTERCOMMON)pCtx->pAdapterCommon;
     PCABLE_VIRTUAL_DEVICE_ENTRY pEntry = pCtx->pEntry;
-    PENDPOINT_MINIPAIR pTemplate = pCtx->pMiniportPair;
+    PENDPOINT_MINIPAIR pStaticTemplate = pCtx->pMiniportPair;
 
-    DPF(D_TERSE, ("WorkItem: BEGIN slot='%ws'", pEntry->WaveName));
+    //
+    // Create a local copy of the miniport pair template and override the
+    // WaveName / TopoName pointers with the dynamic device's unique names.
+    // Without this, the CMiniportWaveRT constructor would cache the template's
+    // static name (e.g. "WaveSpeaker") into m_WaveName, causing
+    // FindRingBufferByWaveName() to fail when it searches for "WaveCable_XX".
+    //
+    ENDPOINT_MINIPAIR localPair = *(pCtx->pMiniportPair);
+    localPair.WaveName = pEntry->WaveName;
+    localPair.TopoName = pEntry->TopoName;
+    PENDPOINT_MINIPAIR pTemplate = &localPair;
+
+    DPF(D_TERSE, ("WorkItem: BEGIN slot='%ws' (wave='%ws', topo='%ws')",
+        pEntry->WaveName, pTemplate->WaveName, pTemplate->TopoName));
 
     //
     // Step 1: Create topology port + miniport, Init, Register
@@ -787,6 +806,18 @@ CableInstallEndpointWorkItem(
         goto Done;
     }
     DPF(D_TERSE, ("WorkItem: Step 2b - CreateMiniport(Wave) OK, miniport=%p", waveMiniport));
+
+    //
+    // The wave miniport was created with &localPair so that its constructor
+    // copies the dynamic WaveName ("WaveCable_XX") into m_WaveName.  However
+    // localPair is stack-allocated and will be destroyed when this function
+    // returns, so redirect m_pMiniportPair to the long-lived static template
+    // for later accesses to WaveDescriptor->PinCount etc.
+    //
+    {
+        CMiniportWaveRT *pWaveRT = (CMiniportWaveRT*)(PMINIPORT)waveMiniport;
+        pWaveRT->SetMiniportPair(pStaticTemplate);
+    }
 
     DPF(D_TERSE, ("WorkItem: Step 2c - wavePort->Init(Irp=NULL)"));
 #pragma warning(push)
@@ -1548,8 +1579,82 @@ Return Value:
         }
     }
 
+    // Fallback for dynamic endpoints where WaveName can differ from the
+    // miniport-cached template name. If there is exactly one active mapped
+    // ring buffer, use it.
+    ULONG candidateIndex = (ULONG)-1;
+    for (ULONG i = 0; i < CABLE_MAX_DYNAMIC_DEVICES; i++)
+    {
+        if (m_VirtualDevices[i].InUse &&
+            m_VirtualDevices[i].pRingBuffer != NULL &&
+            m_VirtualDevices[i].pMappedUserAddress != NULL)
+        {
+            if (candidateIndex != (ULONG)-1)
+            {
+                candidateIndex = (ULONG)-1;
+                break;
+            }
+            candidateIndex = i;
+        }
+    }
+
+    if (candidateIndex != (ULONG)-1)
+    {
+        m_VirtualDevices[candidateIndex].pRingBuffer->AddReference();
+        DPF(D_TERSE, ("FindRingBufferByWaveName: fallback matched wave '%ws' to slot %u ('%ws')",
+            WaveName, candidateIndex, m_VirtualDevices[candidateIndex].WaveName));
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
+        return m_VirtualDevices[candidateIndex].pRingBuffer;
+    }
+
     ExReleaseFastMutex(&m_VirtualDeviceLock);
 
+    return NULL;
+}
+
+//=============================================================================
+#pragma code_seg("PAGE")
+STDMETHODIMP_(CableRingBuffer*)
+CAdapterCommon::FindAnyMappedRingBuffer
+(
+    _In_ BOOLEAN Capture
+)
+{
+    PAGED_CODE();
+
+    ExAcquireFastMutex(&m_VirtualDeviceLock);
+
+    ULONG candidate = (ULONG)-1;
+
+    for (ULONG i = 0; i < CABLE_MAX_DYNAMIC_DEVICES; i++)
+    {
+        if (!m_VirtualDevices[i].InUse ||
+            m_VirtualDevices[i].pRingBuffer == NULL ||
+            m_VirtualDevices[i].pMappedUserAddress == NULL)
+        {
+            continue;
+        }
+
+        if ((Capture && m_VirtualDevices[i].DeviceType == CableDeviceTypeCapture) ||
+            (!Capture && m_VirtualDevices[i].DeviceType == CableDeviceTypeRender))
+        {
+            if (candidate != (ULONG)-1)
+            {
+                candidate = (ULONG)-1;
+                break;
+            }
+            candidate = i;
+        }
+    }
+
+    if (candidate != (ULONG)-1)
+    {
+        m_VirtualDevices[candidate].pRingBuffer->AddReference();
+        ExReleaseFastMutex(&m_VirtualDeviceLock);
+        return m_VirtualDevices[candidate].pRingBuffer;
+    }
+
+    ExReleaseFastMutex(&m_VirtualDeviceLock);
     return NULL;
 }
 

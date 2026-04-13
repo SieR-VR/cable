@@ -156,8 +156,22 @@ foreach ($f in @("CableAudio.sys", "CableAudio.inf")) {
 }
 
 $catPath = Join-Path $driverPkgDir "cableaudio.cat"
+$catStale = $false
+if (Test-Path $catPath) {
+    # Regenerate the catalog when .sys or .inf are newer (e.g. after a rebuild).
+    $catTime = (Get-Item $catPath).LastWriteTime
+    $sysTime = (Get-Item (Join-Path $driverPkgDir "CableAudio.sys")).LastWriteTime
+    $infTime = (Get-Item (Join-Path $driverPkgDir "CableAudio.inf")).LastWriteTime
+    if ($sysTime -gt $catTime -or $infTime -gt $catTime) {
+        $catStale = $true
+        Remove-Item $catPath -Force
+        Write-Host "    cableaudio.cat is stale (older than .sys/.inf) — regenerating..." -ForegroundColor Yellow
+    }
+}
 if (-not (Test-Path $catPath)) {
-    Write-Host "    cableaudio.cat not found — generating with inf2cat..." -ForegroundColor Yellow
+    if (-not $catStale) {
+        Write-Host "    cableaudio.cat not found — generating with inf2cat..." -ForegroundColor Yellow
+    }
 
     $wdkBin = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "Inf2Cat.exe" -Recurse -ErrorAction SilentlyContinue |
         Sort-Object { [version]($_.Directory.Parent.Name) } -Descending |
@@ -170,7 +184,7 @@ if (-not (Test-Path $catPath)) {
 
     # Sign the catalog with the test certificate already used to sign the .sys
     $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match "x86" } |
+        Where-Object { $_.FullName -match "x64" } |
         Sort-Object { [version]($_.Directory.Parent.Name) } -Descending |
         Select-Object -First 1
 
@@ -279,26 +293,6 @@ if (-not $driverAlreadyPresent) {
         Restart-Service -Name AudioEndpointBuilder -Force -ErrorAction SilentlyContinue
         Restart-Service -Name Audiosrv             -Force -ErrorAction SilentlyContinue
 '@ | Out-Null
-
-    Write-Host "    Waiting for Cable audio endpoints..." -ForegroundColor DarkGray
-    $deadline       = (Get-Date).AddSeconds(60)
-    $endpointsReady = $false
-    while ((Get-Date) -lt $deadline) {
-        $found = Invoke-GuestRetry -ComputerName $ComputerName -Port $Port -Username $Username -Password $Password -Command @'
-            Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue |
-                Where-Object { $_.FriendlyName -like "*Cable Virtual Audio Device*" } |
-                Select-Object -First 1
-'@
-        if ($found) {
-            $endpointsReady = $true
-            Start-Sleep -Seconds 2
-            break
-        }
-        Start-Sleep -Seconds 2
-    }
-    if (-not $endpointsReady) {
-        Write-Warning "Cable audio endpoints did not appear within 60 s — continuing anyway."
-    }
 
     $session = New-GuestSession -ComputerName $ComputerName -Port $Port -Username $Username -Password $Password
 }

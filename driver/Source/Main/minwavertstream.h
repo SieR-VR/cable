@@ -177,6 +177,9 @@ private:
         _Out_opt_  LARGE_INTEGER *  _pliQPCTime
     );
 
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    VOID EnsureRingBufferAttached();
+
 };
 typedef CMiniportWaveRTStream *PCMiniportWaveRTStream;
 #endif // _CABLEAUDIO_MINWAVERTSTREAM_H_

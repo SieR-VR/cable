@@ -503,6 +503,12 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _In_        PCWSTR                          WaveName
     ) PURE;
 
+    STDMETHOD_(class CableRingBuffer*,  FindAnyMappedRingBuffer)
+    (
+        THIS_
+        _In_        BOOLEAN                         Capture
+    ) PURE;
+
     STDMETHOD_(VOID,            ReleaseRingBufferReference)
     (
         THIS_

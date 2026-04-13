@@ -297,6 +297,36 @@ Return Value:
     if (m_pMiniport != NULL && m_pMiniport->m_WaveName[0] != L'\0')
     {
         m_pCableRingBuffer = m_pMiniport->GetAdapterCommObj()->FindRingBufferByWaveName(m_pMiniport->m_WaveName);
+
+        if (m_pCableRingBuffer != NULL && m_pCableRingBuffer->GetHeader() != NULL)
+        {
+            CABLE_AUDIO_DATA_TYPE dataType = CableAudioDataPcmInt16;
+
+            if (IsEqualGUIDAligned(DataFormat_->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT))
+            {
+                dataType = CableAudioDataFloat32;
+            }
+            else
+            {
+                if (pWfEx->wBitsPerSample == 24)
+                {
+                    dataType = CableAudioDataPcmInt24;
+                }
+                else if (pWfEx->wBitsPerSample == 32)
+                {
+                    dataType = CableAudioDataPcmInt32;
+                }
+                else
+                {
+                    dataType = CableAudioDataPcmInt16;
+                }
+            }
+
+            m_pCableRingBuffer->GetHeader()->SampleRate = pWfEx->nSamplesPerSec;
+            m_pCableRingBuffer->GetHeader()->Channels = pWfEx->nChannels;
+            m_pCableRingBuffer->GetHeader()->BitsPerSample = pWfEx->wBitsPerSample;
+            m_pCableRingBuffer->GetHeader()->DataType = dataType;
+        }
     }
 
     return ntStatus;
@@ -488,6 +518,7 @@ VOID CMiniportWaveRTStream::FreeBufferWithNotification
     
     m_ulDmaBufferSize = 0;
     m_ulNotificationsPerBuffer = 0;
+    m_ulNotificationIntervalMs = 0;
 
     return;
 }
@@ -702,6 +733,16 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
     m_ulDmaBufferSize = RequestedSize_;
     m_ulNotificationsPerBuffer = 0;
 
+    if (m_ulDmaMovementRate != 0)
+    {
+        ULONG ulBufferDurationMs = (RequestedSize_ * 1000) / m_ulDmaMovementRate;
+        m_ulNotificationIntervalMs = max(1ul, min(10ul, ulBufferDurationMs));
+    }
+    else
+    {
+        m_ulNotificationIntervalMs = 10;
+    }
+
     *AudioBufferMdl_ = pBufferMdl;
     *ActualSize_ = RequestedSize_;
     *OffsetFromFirstPage_ = 0;
@@ -711,6 +752,55 @@ _Out_   MEMORY_CACHING_TYPE    *CacheType_
 }
 
 //=============================================================================
+#pragma code_seg()
+
+//=============================================================================
+// EnsureRingBufferAttached() calls FindRingBufferByWaveName() which acquires
+// a FastMutex, so it can only be called at PASSIVE_LEVEL.  It must NOT be
+// called from WriteBytes()/ReadBytes() which run at DISPATCH_LEVEL in the
+// timer DPC.  Instead it is called from SetState(KSSTATE_RUN), GetReadPacket,
+// SetWritePacket, and GetPacketCount -- all of which run at PASSIVE_LEVEL.
+#pragma code_seg("PAGE")
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID CMiniportWaveRTStream::EnsureRingBufferAttached()
+{
+    PAGED_CODE();
+
+    if (m_pCableRingBuffer == NULL &&
+        m_pMiniport != NULL &&
+        m_pMiniport->m_WaveName[0] != L'\0')
+    {
+        m_pCableRingBuffer = m_pMiniport->GetAdapterCommObj()->FindRingBufferByWaveName(m_pMiniport->m_WaveName);
+
+        if (m_pCableRingBuffer != NULL && m_pCableRingBuffer->GetHeader() != NULL && m_pWfExt != NULL)
+        {
+            CABLE_AUDIO_DATA_TYPE dataType = CableAudioDataPcmInt16;
+            if (m_pWfExt->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+            {
+                dataType = CableAudioDataFloat32;
+            }
+            else if (m_pWfExt->Format.wBitsPerSample == 24)
+            {
+                dataType = CableAudioDataPcmInt24;
+            }
+            else if (m_pWfExt->Format.wBitsPerSample == 32)
+            {
+                dataType = CableAudioDataPcmInt32;
+            }
+
+            m_pCableRingBuffer->GetHeader()->SampleRate = m_pWfExt->Format.nSamplesPerSec;
+            m_pCableRingBuffer->GetHeader()->Channels = m_pWfExt->Format.nChannels;
+            m_pCableRingBuffer->GetHeader()->BitsPerSample = m_pWfExt->Format.wBitsPerSample;
+            m_pCableRingBuffer->GetHeader()->DataType = dataType;
+        }
+    }
+
+    if (m_pCableRingBuffer == NULL && m_pMiniport != NULL)
+    {
+        m_pCableRingBuffer = m_pMiniport->GetAdapterCommObj()->FindAnyMappedRingBuffer(m_bCapture);
+    }
+}
+
 #pragma code_seg()
 NTSTATUS CMiniportWaveRTStream::GetPosition
 (
@@ -767,6 +857,8 @@ NTSTATUS CMiniportWaveRTStream::GetReadPacket
     _Out_ BOOL* MoreData
 )
 {
+    EnsureRingBufferAttached();
+
     ULONG availablePacketNumber;
     ULONG droppedPackets;
 
@@ -858,6 +950,8 @@ NTSTATUS CMiniportWaveRTStream::SetWritePacket
 {
     UNREFERENCED_PARAMETER(EosPacketLength);
     NTSTATUS ntStatus;
+
+    EnsureRingBufferAttached();
 
     // The call must be from event driven mode
     if (m_ulNotificationsPerBuffer == 0)
@@ -963,6 +1057,8 @@ NTSTATUS CMiniportWaveRTStream::GetPacketCount
 )
 {
     ASSERT(pPacketCount);
+
+    EnsureRingBufferAttached();
 
     // The call must be from event driven mode
     if(m_ulNotificationsPerBuffer == 0)
@@ -1153,10 +1249,15 @@ NTSTATUS CMiniportWaveRTStream::SetState
                 m_SaveData.WaitAllWorkItems();
             }
 
-            // Reset ring buffer indices if attached (Phase 4)
+            // Reset ring buffer indices and release reference on stop.
             if (m_pCableRingBuffer != NULL && m_pCableRingBuffer->IsInitialized())
             {
                 m_pCableRingBuffer->Reset();
+            }
+            if (m_pCableRingBuffer != NULL)
+            {
+                m_pMiniport->GetAdapterCommObj()->ReleaseRingBufferReference(m_pCableRingBuffer);
+                m_pCableRingBuffer = NULL;
             }
             break;
 
@@ -1202,6 +1303,9 @@ NTSTATUS CMiniportWaveRTStream::SetState
             break;
 
         case KSSTATE_RUN:
+            // Lazily attach ring buffer when stream transitions to RUN.
+            EnsureRingBufferAttached();
+
             // Start DMA
             LARGE_INTEGER ullPerfCounterTemp;
             ullPerfCounterTemp = KeQueryPerformanceCounter(&m_ullPerformanceCounterFrequency);
@@ -1329,11 +1433,9 @@ VOID CMiniportWaveRTStream::UpdatePosition
             m_bLastBufferRendered = TRUE;
         }
 
-        if (!g_DoNotCreateDataFiles)
-        {
-            // Read from buffer and write to a file.
-            ReadBytes(ByteDisplacement);
-        }
+        // Always advance render path. ReadBytes() handles ring-buffer attach
+        // and optional file fallback.
+        ReadBytes(ByteDisplacement);
     }
     
     // Increment the DMA position by the number of bytes displaced since the last
@@ -1376,6 +1478,14 @@ ByteDisplacement - # of bytes to process.
     {
         return;
     }
+
+    // NOTE: Do NOT call EnsureRingBufferAttached() here.
+    // WriteBytes() is called from UpdatePosition() which runs in the timer DPC
+    // at DISPATCH_LEVEL. EnsureRingBufferAttached() calls FindRingBufferByWaveName()
+    // and FindAnyMappedRingBuffer() which use ExAcquireFastMutex (requires <= APC_LEVEL)
+    // and are marked PAGED_CODE(). Calling them at DISPATCH_LEVEL would BSOD.
+    // Ring buffer attachment happens at PASSIVE_LEVEL in SetState(KSSTATE_RUN),
+    // GetReadPacket(), SetWritePacket(), and GetPacketCount().
 
     ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
 
@@ -1428,6 +1538,14 @@ ByteDisplacement - # of bytes to process.
         return;
     }
 
+    // NOTE: Do NOT call EnsureRingBufferAttached() here.
+    // ReadBytes() is called from UpdatePosition() which runs in the timer DPC
+    // at DISPATCH_LEVEL. EnsureRingBufferAttached() calls FindRingBufferByWaveName()
+    // and FindAnyMappedRingBuffer() which use ExAcquireFastMutex (requires <= APC_LEVEL)
+    // and are marked PAGED_CODE(). Calling them at DISPATCH_LEVEL would BSOD.
+    // Ring buffer attachment happens at PASSIVE_LEVEL in SetState(KSSTATE_RUN),
+    // GetReadPacket(), SetWritePacket(), and GetPacketCount().
+
     ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
 
     // If a ring buffer is attached (Cable virtual render device),
@@ -1441,6 +1559,11 @@ ByteDisplacement - # of bytes to process.
             bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
             ByteDisplacement -= runWrite;
         }
+        return;
+    }
+
+    if (g_DoNotCreateDataFiles)
+    {
         return;
     }
 

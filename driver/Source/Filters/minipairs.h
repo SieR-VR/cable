@@ -144,35 +144,19 @@ ENDPOINT_MINIPAIR MicArray1Miniports =
 
 //=============================================================================
 //
-// Render miniport pairs. NOTE: the split of render and capture is arbitrary and
-// unnessary, this array could contain capture endpoints.
+// Static render/capture endpoint arrays are intentionally empty.
+// All audio endpoints are created dynamically via CreateVirtualDevice().
+// The SpeakerMiniports and MicArray1Miniports structs are retained for
+// reference but are not registered at driver startup.
 //
-static
-PENDPOINT_MINIPAIR  g_RenderEndpoints[] = 
-{
-    &SpeakerMiniports,
-};
-
-#define g_cRenderEndpoints  (SIZEOF_ARRAY(g_RenderEndpoints))
+#define g_cRenderEndpoints  0
+#define g_cCaptureEndpoints 0
 
 //=============================================================================
 //
-// Capture miniport pairs. NOTE: the split of render and capture is arbitrary and
-// unnessary, this array could contain render endpoints.
-//
-static
-PENDPOINT_MINIPAIR  g_CaptureEndpoints[] =
-{
-    &MicArray1Miniports,
-};
-
-#define g_cCaptureEndpoints (SIZEOF_ARRAY(g_CaptureEndpoints))
-
-//=============================================================================
-//
-// Total miniports = static endpoints * 2 (topology + wave) + dynamic device slots.
+// Total miniports = dynamic device slots only (no static endpoints).
 // CABLE_MAX_DYNAMIC_SUBDEVICES is defined in cable_common.h (currently 32).
 //
-#define g_MaxMiniports  ((g_cRenderEndpoints + g_cCaptureEndpoints) * 2 + CABLE_MAX_DYNAMIC_SUBDEVICES)
+#define g_MaxMiniports  (CABLE_MAX_DYNAMIC_SUBDEVICES)
 
 #endif // _CABLEAUDIO_MINIPAIRS_H_

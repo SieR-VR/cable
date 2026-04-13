@@ -24,6 +24,7 @@ Abstract:
 #ifndef _NTDEF_
 #include <stdint.h>
 typedef uint8_t     UINT8;
+typedef uint16_t    UINT16;
 typedef uint32_t    UINT32;
 typedef uint64_t    UINT64;
 typedef wchar_t     WCHAR;
@@ -86,7 +87,14 @@ typedef struct _CABLE_RING_BUFFER_HEADER {
     UINT64  ReadIndex;      // App read cursor (byte offset)
     UINT32  BufferSize;     // Total audio data buffer size in bytes
     UINT32  Status;         // 0: OK, 1: Overrun, 2: Underrun
+    UINT32  SampleRate;     // Active stream sample rate
+    UINT16  Channels;       // Active stream channel count
+    UINT16  BitsPerSample;  // Active stream bit depth
+    CABLE_AUDIO_DATA_TYPE DataType; // Active stream sample type
+    UINT32  Magic;          // Header magic ('CBRB')
 } CABLE_RING_BUFFER_HEADER, *PCABLE_RING_BUFFER_HEADER;
+
+#define CABLE_RING_BUFFER_MAGIC 0x42524243u // 'CBRB'
 
 #define CABLE_RING_BUFFER_STATUS_OK         0
 #define CABLE_RING_BUFFER_STATUS_OVERRUN    1

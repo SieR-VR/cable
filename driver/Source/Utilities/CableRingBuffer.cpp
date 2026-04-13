@@ -130,6 +130,11 @@ Return Value:
     m_pHeader->ReadIndex = 0;
     m_pHeader->BufferSize = DataBufferSize;
     m_pHeader->Status = CABLE_RING_BUFFER_STATUS_OK;
+    m_pHeader->SampleRate = 48000;
+    m_pHeader->Channels = 2;
+    m_pHeader->BitsPerSample = 32;
+    m_pHeader->DataType = CableAudioDataFloat32;
+    m_pHeader->Magic = CABLE_RING_BUFFER_MAGIC;
 
     //
     // Create an MDL for the allocation so we can map it to user-mode.
@@ -319,16 +324,7 @@ Return Value:
     KeMemoryBarrier(); // Ensure we read data after reading the write index
     ULONGLONG readIndex = m_pHeader->ReadIndex;
 
-    ULONGLONG available;
-    if (writeIndex >= readIndex)
-    {
-        available = writeIndex - readIndex;
-    }
-    else
-    {
-        // Should not happen with monotonic indices, but handle gracefully
-        available = 0;
-    }
+    ULONGLONG available = writeIndex - readIndex;
 
     // Clamp available to buffer size to handle extreme wrap cases
     if (available > bufferSize)

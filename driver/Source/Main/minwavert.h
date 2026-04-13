@@ -68,6 +68,13 @@ protected:
     WCHAR                               m_WaveName[MAX_PATH];   // Cached wave name for ring buffer lookup
     
 public:
+    // Replace the cached miniport-pair pointer.  Used after dynamic device
+    // creation where a stack-local copy was passed to the constructor so that
+    // m_WaveName gets the correct dynamic name.  After construction, the
+    // caller must redirect m_pMiniportPair to the long-lived static template
+    // so that later accesses (e.g. WaveDescriptor->PinCount) remain valid.
+    VOID SetMiniportPair(_In_ PENDPOINT_MINIPAIR Pair) { m_pMiniportPair = Pair; }
+
     NTSTATUS EventHandler_PinCapsChange
     (
         _In_  PPCEVENT_REQUEST EventRequest

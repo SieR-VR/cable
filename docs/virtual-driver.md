@@ -274,7 +274,7 @@ typedef union {
 | 0 | `DeviceId` | UINT8[16] | 16 |
 | 16 | `UserAddress` | UINT64 | 8 |
 
-### CABLE_RING_BUFFER_HEADER -- 24 bytes
+### CABLE_RING_BUFFER_HEADER -- 40 bytes
 
 | Offset | Field | Type | Size |
 |---|---|---|---|
@@ -282,6 +282,11 @@ typedef union {
 | 8 | `ReadIndex` | UINT64 | 8 |
 | 16 | `BufferSize` | UINT32 | 4 |
 | 20 | `Status` | UINT32 | 4 |
+| 24 | `SampleRate` | UINT32 | 4 |
+| 28 | `Channels` | UINT16 | 2 |
+| 30 | `BitsPerSample` | UINT16 | 2 |
+| 32 | `DataType` | UINT32 (`CABLE_AUDIO_DATA_TYPE`) | 4 |
+| 36 | `Magic` | UINT32 (0x43424C45 = "CBLE") | 4 |
 
 Status values:
 
@@ -330,7 +335,7 @@ Shared memory between kernel and user-mode for lock-free audio data transfer.
 ```
 +----------------------------+--------------------------------------+
 | CABLE_RING_BUFFER_HEADER   |          Audio Data Buffer           |
-|        (24 bytes)          |   (CABLE_DEFAULT_RING_BUFFER_SIZE)   |
+|        (40 bytes)          |   (CABLE_DEFAULT_RING_BUFFER_SIZE)   |
 +----------------------------+--------------------------------------+
 ^                            ^
 |                            |
