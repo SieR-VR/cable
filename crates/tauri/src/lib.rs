@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::{
-  Arc,
   atomic::{AtomicBool, Ordering},
+  Arc,
 };
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
-use tauri::{Builder, State, async_runtime::Mutex};
+use tauri::{async_runtime::Mutex, Builder, State};
 
 #[cfg(windows)]
 pub(crate) mod driver_client;
@@ -314,7 +314,6 @@ async fn create_virtual_device(
     // a newly-appeared endpoint (diff against pre_snapshot).
     // We do this on a blocking thread to keep COM calls off the async executor.
     let name_for_creation = name.clone();
-    let is_render_for_creation = device_type.eq_ignore_ascii_case("render");
     let endpoint_id = tauri::async_runtime::spawn_blocking(move || {
       let ep_id = find_new_endpoint_id(&pre_snapshot, 15, 300)?;
       eprintln!("create_virtual_device: found endpoint_id='{}'", ep_id);
@@ -328,17 +327,6 @@ async fn create_virtual_device(
             e
           );
           // Non-fatal: device works, just shows generic name until next rename.
-        }
-
-        if is_render_for_creation {
-          if let Err(e) = set_default_render_endpoint(&ep_id) {
-            eprintln!("set_default_render_endpoint at creation failed: {}", e);
-          } else {
-            eprintln!(
-              "create_virtual_device: default render endpoint switched to '{}'",
-              ep_id
-            );
-          }
         }
       }
       Ok(ep_id)
@@ -513,9 +501,9 @@ fn hex_to_device_id(hex: &str) -> Result<common::DeviceId, String> {
 /// identify the new endpoint by set-difference after creation.
 #[cfg(windows)]
 fn snapshot_endpoint_ids() -> std::collections::HashSet<String> {
-  use windows::Win32::Media::Audio::{DEVICE_STATE, IMMDeviceEnumerator, MMDeviceEnumerator, eAll};
+  use windows::Win32::Media::Audio::{eAll, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE};
   use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
   };
 
   let mut ids = std::collections::HashSet::new();
@@ -582,9 +570,9 @@ fn find_new_endpoint_id(
   max_retries: u32,
   retry_delay_ms: u64,
 ) -> Result<String, String> {
-  use windows::Win32::Media::Audio::{DEVICE_STATE, IMMDeviceEnumerator, MMDeviceEnumerator, eAll};
+  use windows::Win32::Media::Audio::{eAll, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE};
   use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
   };
 
   unsafe {
@@ -648,7 +636,7 @@ fn find_new_endpoint_id(
 fn endpoint_exists(endpoint_id: &str) -> bool {
   use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator};
   use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
   };
 
   unsafe {
@@ -675,80 +663,6 @@ fn endpoint_exists(endpoint_id: &str) -> bool {
   }
 }
 
-#[cfg(windows)]
-fn set_default_render_endpoint(endpoint_id: &str) -> Result<(), String> {
-  let escaped = endpoint_id.replace("'", "''");
-  let script = format!(
-    r#"
-$ErrorActionPreference = 'Stop'
-
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-[ComImport, Guid("f8679f50-850a-41cf-9c72-430f290290c8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-interface IPolicyConfig
-{{
-    int GetMixFormat();
-    int GetDeviceFormat();
-    int SetDeviceFormat();
-    int GetProcessingPeriod();
-    int SetProcessingPeriod();
-    int GetShareMode();
-    int SetShareMode();
-    int GetPropertyValue();
-    int SetPropertyValue();
-    int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string wszDeviceId, int role);
-    int SetEndpointVisibility();
-}}
-
-[ComImport, Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9")]
-class PolicyConfigClient {{ }}
-
-public static class DefaultAudioSetter
-{{
-    public static void SetDefault(string endpointId)
-    {{
-        var pc = (IPolicyConfig)(new PolicyConfigClient());
-        pc.SetDefaultEndpoint(endpointId, 0); // eConsole
-        pc.SetDefaultEndpoint(endpointId, 1); // eMultimedia
-        pc.SetDefaultEndpoint(endpointId, 2); // eCommunications
-    }}
-}}
-'@
-
-[DefaultAudioSetter]::SetDefault('{0}')
-"#,
-    escaped
-  );
-
-  let output = std::process::Command::new("powershell")
-    .args([
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      &script,
-    ])
-    .output()
-    .map_err(|e| {
-      format!(
-        "Failed to launch PowerShell for default endpoint switch: {}",
-        e
-      )
-    })?;
-
-  if !output.status.success() {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    return Err(format!(
-      "Failed to set default endpoint '{}': {}",
-      endpoint_id, stderr
-    ));
-  }
-
-  Ok(())
-}
-
 /// Write PKEY_Device_DeviceDesc (pid=2) on the MM endpoint identified by
 /// `endpoint_id`. This changes the first component of the FriendlyName that
 /// Windows Audio shows in the Sound control panel and GetFriendlyName().
@@ -758,8 +672,8 @@ fn set_endpoint_device_desc(endpoint_id: &str, new_name: &str) -> Result<(), Str
   use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator};
   use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
   use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemAlloc,
-    CoTaskMemFree, STGM,
+    CoCreateInstance, CoInitializeEx, CoTaskMemAlloc, CoTaskMemFree, CLSCTX_INPROC_SERVER,
+    COINIT_MULTITHREADED, STGM,
   };
   use windows::Win32::System::Variant::VT_LPWSTR;
   use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
@@ -874,10 +788,10 @@ pub fn rename_endpoint_elevated(endpoint_id: &str, new_name: &str) -> Result<(),
 /// the user cancels the UAC prompt or the child exits with a non-zero code.
 #[cfg(windows)]
 fn elevated_set_endpoint_device_desc(endpoint_id: &str, new_name: &str) -> Result<(), String> {
-  use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-  use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
-  use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
   use windows::core::PCWSTR;
+  use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+  use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
+  use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
 
   // Build the argument string: --rename-endpoint <endpoint_id> <new_name>
   // We quote the name component to preserve spaces.
