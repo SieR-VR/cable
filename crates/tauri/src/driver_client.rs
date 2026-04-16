@@ -472,8 +472,8 @@ impl RingBufferMapping {
       let hdr = self.header_ptr();
       let w = ptr::read_volatile(ptr::addr_of!((*hdr).write_index) as *const u64);
       let r = ptr::read_volatile(ptr::addr_of!((*hdr).read_index) as *const u64);
-      let size = ptr::read_unaligned(ptr::addr_of!((*hdr).buffer_size) as *const u32);
-      let status = ptr::read_unaligned(ptr::addr_of!((*hdr).status) as *const u32);
+      let size = ptr::read_volatile(ptr::addr_of!((*hdr).buffer_size) as *const u32);
+      let status = ptr::read_volatile(ptr::addr_of!((*hdr).status) as *const u32);
       (w, r, size, status)
     }
   }
@@ -560,7 +560,7 @@ impl RingBufferMapping {
     }
 
     // Re-read available_bytes after potential snap.
-    let available_bytes = (write_idx - read_idx) as usize;
+    let available_bytes = write_idx.saturating_sub(read_idx) as usize;
     let available_samples = available_bytes / bytes_per_sample;
     let samples_to_read = available_samples.min(out.len());
 

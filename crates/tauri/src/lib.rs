@@ -370,6 +370,16 @@ async fn remove_virtual_device(
   #[cfg(windows)]
   {
     let mut app = state.lock().await;
+
+    // Reject removal while the audio runtime is actively using ring buffers.
+    if app
+      .runtime_running
+      .as_ref()
+      .is_some_and(|r| r.load(std::sync::atomic::Ordering::Relaxed))
+    {
+      return Err("Cannot remove a virtual device while the runtime is running".to_string());
+    }
+
     let driver = app
       .driver_handle
       .as_ref()

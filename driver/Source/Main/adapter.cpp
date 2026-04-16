@@ -966,6 +966,14 @@ CableIoctl_CreateVirtualDevice(
         return STATUS_INVALID_PARAMETER;
     }
 
+    // Validate DeviceType enum range.
+    if (pPayload->DeviceType != CableDeviceTypeRender &&
+        pPayload->DeviceType != CableDeviceTypeCapture)
+    {
+        DPF(D_ERROR, ("CreateVirtualDevice: invalid DeviceType %u", pPayload->DeviceType));
+        return STATUS_INVALID_PARAMETER;
+    }
+
     PortClassDeviceContext* pExtension =
         static_cast<PortClassDeviceContext*>(DeviceObject->DeviceExtension);
 
@@ -1044,6 +1052,28 @@ CableIoctl_SetStreamFormat(
 
     if (pFormat == NULL)
     {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Validate DataType enum range.
+    if (pFormat->DataType < CableAudioDataPcmInt16 ||
+        pFormat->DataType > CableAudioDataFloat32)
+    {
+        DPF(D_ERROR, ("SetStreamFormat: invalid DataType %u", pFormat->DataType));
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    // Validate channel configuration.
+    switch (pFormat->Channels)
+    {
+    case CableChannelMono:
+    case CableChannelStereo:
+    case CableChannelQuad:
+    case CableChannelSurround51:
+    case CableChannelSurround71:
+        break;
+    default:
+        DPF(D_ERROR, ("SetStreamFormat: invalid Channels %u", pFormat->Channels));
         return STATUS_INVALID_PARAMETER;
     }
 

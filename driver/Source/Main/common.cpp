@@ -107,6 +107,10 @@ CableUnmapRingBufferForEntry(
         PsGetCurrentProcess() != pEntry->pMappingProcess)
     {
         DPF(D_TERSE, ("CableUnmapRingBufferForEntry: process mismatch, skipping unmap"));
+        // Release the EPROCESS reference to prevent a leak even though we
+        // cannot safely unmap the user-mode address from another context.
+        ObDereferenceObject(pEntry->pMappingProcess);
+        pEntry->pMappingProcess = NULL;
         return;
     }
 

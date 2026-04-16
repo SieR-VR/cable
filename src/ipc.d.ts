@@ -1,4 +1,4 @@
-import { AudioDevice, AudioGraph } from "./types";
+import { AudioDevice, AudioGraph, VirtualDevice } from "./types";
 
 declare module "@tauri-apps/api/core" {
   declare function invoke(cmd: "get_audio_hosts"): Promise<string[]>;
@@ -26,4 +26,31 @@ declare module "@tauri-apps/api/core" {
   declare function invoke(cmd: "disable_runtime"): Promise<void>;
 
   declare function invoke(cmd: "enable_runtime"): Promise<void>;
+
+  declare function invoke(cmd: "list_virtual_devices"): Promise<VirtualDevice[]>;
+
+  declare function invoke(
+    cmd: "create_virtual_device",
+    args: {
+      name: string;
+      deviceType: "render" | "capture";
+    },
+  ): Promise<VirtualDevice>;
+
+  declare function invoke(
+    cmd: "remove_virtual_device",
+    args: {
+      deviceId: string;
+    },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "rename_virtual_device",
+    args: {
+      deviceId: string;
+      newName: string;
+    },
+  ): Promise<void>;
+
+  declare function invoke(cmd: "open_devtools"): Promise<void>;
 }
