@@ -325,26 +325,9 @@ function Reset-Vm {
         Restart-Service -Name Audiosrv -Force -ErrorAction SilentlyContinue
 '@
 
-    Write-Host "  [VM] Waiting for Cable audio endpoints..." -ForegroundColor DarkCyan
-    $deadline = (Get-Date).AddSeconds(60)
-    $endpointsReady = $false
-    while ((Get-Date) -lt $deadline) {
-        $found = Invoke-Guest -Session $session -Command @'
-            Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue |
-                Where-Object { $_.FriendlyName -like "*Cable Virtual Audio Device*" } |
-                Select-Object -First 1
-'@
-        if ($found) {
-            $endpointsReady = $true
-            Start-Sleep -Seconds 2  # brief extra settle time
-            break
-        }
-        Start-Sleep -Seconds 2
-    }
-    if (-not $endpointsReady) {
-        Write-Warning "Cable audio endpoints did not appear within 60 seconds"
-    }
-
+    # Cable audio endpoints are created dynamically via IOCTL, not at driver
+    # startup.  Individual tests that need WASAPI endpoints create their own
+    # virtual devices.  No polling is needed here.
     Write-Host "  [VM] Ready." -ForegroundColor DarkCyan
     return $session
 }
@@ -432,6 +415,69 @@ function Assert-NoGuestBugCheck {
         $recent = if ($evidence.BugCheckRecent) { ($evidence.BugCheckRecent -join " | ") } else { "(no event text)" }
         throw "$Context failed: Guest bugcheck evidence detected. Boot=$($evidence.BootTime), BugCheckCount=$($evidence.BugCheckCount), DumpCount=$($evidence.DumpCount), Kernel41Count=$($evidence.Kernel41Count), Recent=$recent"
     }
+}
+
+# ---------------------------------------------------------------------------
+# Shared C# interop library loader and guest test runner.
+# ---------------------------------------------------------------------------
+
+function Get-CSharpLib {
+    param([string]$Name)
+    $path = Join-Path $PSScriptRoot "lib\$Name.cs"
+    if (-not (Test-Path $path)) { throw "C# library not found: $path" }
+    return (Get-Content $path -Raw)
+}
+
+function Invoke-GuestCSharpTest {
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory)]
+        [string[]]$CSharpSources,
+        [string]$HelperFunctions = "",
+        [Parameter(Mandatory)]
+        [object]$Script,
+        [string]$TempFileName = "cable-test"
+    )
+
+    # Concatenate all C# sources, then hoist 'using' directives to the top.
+    # Without this, concatenating CableIoctl.cs (types) + CableWasapi.cs (using + types)
+    # places using directives after type definitions, which is a C# compilation error.
+    $rawCs = $CSharpSources -join "`n`n"
+    $lines = $rawCs -split "`n"
+    $usings = [System.Collections.Generic.List[string]]::new()
+    $body   = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in $lines) {
+        if ($line.TrimStart() -match '^using\s+') {
+            $trimmed = $line.Trim()
+            if (-not $usings.Contains($trimmed)) {
+                $usings.Add($trimmed)
+            }
+        } else {
+            $body.Add($line)
+        }
+    }
+    $combinedCs = ($usings -join "`n") + "`n`n" + ($body -join "`n")
+    $callerBody = if ($Script -is [scriptblock]) { $Script.ToString() } else { [string]$Script }
+
+    # Build the guest script using string concatenation to avoid here-string nesting.
+    $fullScript = '$ErrorActionPreference = "Stop"' + "`n" +
+                  'Add-Type -TypeDefinition @''' + "`n" +
+                  $combinedCs + "`n" +
+                  "'" + '@' + "`n`n"
+
+    if ($HelperFunctions) {
+        $fullScript += $HelperFunctions + "`n`n"
+    }
+
+    $fullScript += '& { ' + $callerBody + ' }'
+
+    return Invoke-Command -Session $Session -ScriptBlock {
+        param($body, $tmpName)
+        $tmp = "C:\CableAudio\$tmpName.ps1"
+        Set-Content -Path $tmp -Value $body -Encoding UTF8
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp
+    } -ArgumentList $fullScript, $TempFileName
 }
 
 function Resolve-GuestAppExePath {
