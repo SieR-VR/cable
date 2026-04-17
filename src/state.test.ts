@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "./state";
 
-const mockedInvoke = vi.mocked(invoke);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockedInvoke = vi.mocked(invoke) as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>;
 
 function resetStore() {
   // Reset the store to its initial state between tests.
