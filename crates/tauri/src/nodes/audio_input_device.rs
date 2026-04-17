@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use cpal::{
-  BufferSize, Stream, StreamConfig,
+  SampleFormat, Stream, StreamConfig,
   traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use ringbuf::{
@@ -38,6 +38,10 @@ impl std::fmt::Debug for AudioInputDeviceNode {
 }
 
 impl NodeTrait for AudioInputDeviceNode {
+  fn id(&self) -> &str {
+    &self.id
+  }
+
   fn init(&mut self, runtime: &Runtime) -> Result<(), String> {
     println!(
       "Initializing audio input device: {} ({})",
@@ -55,30 +59,75 @@ impl NodeTrait for AudioInputDeviceNode {
       })
       .ok_or_else(|| format!("Audio input device not found: {}", self.device.id))?;
 
+    let default_cfg = device
+      .default_input_config()
+      .map_err(|e| format!("Failed to get default input config: {}", e))?;
+
     let config = StreamConfig {
-      channels: self.device.channels,
-      sample_rate: self.device.frequency,
-      buffer_size: BufferSize::Fixed(runtime.buffer_size),
+      channels: default_cfg.channels(),
+      sample_rate: default_cfg.sample_rate(),
+      buffer_size: cpal::BufferSize::Default,
     };
+
+    let sample_format = default_cfg.sample_format();
 
     // 링 버퍼 생성: buffer_size * channels * 4 (여유 배수)
     let rb_size = runtime.buffer_size as usize * self.device.channels as usize * 4;
     let rb = HeapRb::<f32>::new(rb_size);
     let (mut producer, consumer) = rb.split();
 
-    let stream = device
-      .build_input_stream(
-        &config,
-        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-          // cpal 콜백 스레드에서 lock-free로 데이터 push
-          producer.push_slice(data);
-        },
-        move |err| {
-          eprintln!("Audio input stream error: {}", err);
-        },
-        None,
-      )
-      .map_err(|e| format!("Failed to build audio input stream: {}", e))?;
+    let stream = match sample_format {
+      SampleFormat::F32 => device
+        .build_input_stream(
+          &config,
+          move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            producer.push_slice(data);
+          },
+          move |err| {
+            eprintln!("Audio input stream error: {}", err);
+          },
+          None,
+        )
+        .map_err(|e| format!("Failed to build f32 input stream: {}", e))?,
+      SampleFormat::I16 => device
+        .build_input_stream(
+          &config,
+          move |data: &[i16], _: &cpal::InputCallbackInfo| {
+            let mut temp = vec![0.0f32; data.len()];
+            for (i, s) in data.iter().enumerate() {
+              temp[i] = (*s as f32) / i16::MAX as f32;
+            }
+            producer.push_slice(&temp);
+          },
+          move |err| {
+            eprintln!("Audio input stream error: {}", err);
+          },
+          None,
+        )
+        .map_err(|e| format!("Failed to build i16 input stream: {}", e))?,
+      SampleFormat::U16 => device
+        .build_input_stream(
+          &config,
+          move |data: &[u16], _: &cpal::InputCallbackInfo| {
+            let mut temp = vec![0.0f32; data.len()];
+            for (i, s) in data.iter().enumerate() {
+              temp[i] = ((*s as f32 / u16::MAX as f32) * 2.0) - 1.0;
+            }
+            producer.push_slice(&temp);
+          },
+          move |err| {
+            eprintln!("Audio input stream error: {}", err);
+          },
+          None,
+        )
+        .map_err(|e| format!("Failed to build u16 input stream: {}", e))?,
+      _ => {
+        return Err(format!(
+          "Unsupported input sample format for {}: {:?}",
+          self.device.readable_name, sample_format
+        ));
+      }
+    };
 
     stream
       .play()
@@ -88,8 +137,8 @@ impl NodeTrait for AudioInputDeviceNode {
     self.ring_consumer = Some(consumer);
 
     println!(
-      "Audio input device initialized: {} (rb_size={})",
-      self.device.readable_name, rb_size
+      "Audio input device initialized: {} (rb_size={}, sample_format={:?}, cfg={}ch/{}Hz)",
+      self.device.readable_name, rb_size, sample_format, config.channels, config.sample_rate
     );
 
     Ok(())

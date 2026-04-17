@@ -1,0 +1,6 @@
+*.qcow2
+*.iso
+*.log
+
+cable-vm/
+vm-logs/

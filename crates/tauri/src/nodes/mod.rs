@@ -4,8 +4,12 @@ use crate::runtime::{Runtime, RuntimeState};
 
 pub mod audio_input_device;
 pub mod audio_output_device;
+pub mod virtual_audio_input;
+pub mod virtual_audio_output;
 
 pub(crate) trait NodeTrait {
+  fn id(&self) -> &str;
+
   fn init(&mut self, runtime: &Runtime) -> Result<(), String>;
 
   fn dispose(&mut self, runtime: &Runtime) -> Result<(), String>;

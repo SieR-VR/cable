@@ -14,12 +14,18 @@ Cable은 실시간 오디오 라우팅을 위한 Tauri v2 데스크톱 애플리
 ├─────────────────────────────────────────────────────────────┤
 │                    IPC (Tauri Commands)                      │
 │  invoke() 기반 동기 요청-응답 통신                              │
-│  5개 커맨드: get_audio_hosts, get_audio_devices,              │
-│             setup_runtime, enable_runtime, disable_runtime   │
+│  12개 커맨드: get_audio_hosts, get_audio_devices,             │
+│              connect_driver, is_driver_connected,            │
+│              list_virtual_devices, create_virtual_device,    │
+│              remove_virtual_device, rename_virtual_device,   │
+│              setup_runtime, enable_runtime, disable_runtime, │
+│              open_devtools                                    │
 ├─────────────────────────────────────────────────────────────┤
 │                    Backend (Rust/Tauri)                      │
 │  Runtime: 오디오 그래프 처리 엔진                               │
-│  Nodes: NodeTrait 구현체 (AudioInput/OutputDeviceNode)       │
+│  Nodes: NodeTrait 구현체 (AudioInput/OutputDeviceNode,       │
+│         VirtualAudioInput/OutputNode)                        │
+│  DriverClient: CableAudio.sys IOCTL 통신                     │
 │  cpal 0.17: 크로스 플랫폼 오디오 I/O                          │
 ├─────────────────────────────────────────────────────────────┤
 │                    Common Crate (no_std)                     │
@@ -37,7 +43,7 @@ src/
 ├── App.tsx                 # ReactFlow 캔버스, Apply/Enable 버튼
 ├── main.tsx                # React 엔트리포인트
 ├── state.ts                # Zustand 스토어: 앱 상태, IPC 호출
-├── types.ts                # AudioDevice, AudioGraph, AudioNode, AudioEdge 타입
+├── types.ts                # AudioDevice, AudioGraph, AudioNode, AudioEdge, VirtualDevice 타입
 ├── ipc.d.ts                # Tauri invoke() 타입 오버로드
 ├── lib/utils.ts            # cn(), formatAudioEdgeType() 유틸리티
 ├── nodes/
@@ -45,7 +51,7 @@ src/
 │   ├── AudioInputDevice.tsx # 입력 장치 노드 컴포넌트
 │   └── AudioOutputDevice.tsx# 출력 장치 노드 컴포넌트
 └── components/
-    ├── Menu.tsx             # 사이드 메뉴: 오디오 호스트 선택
+    ├── Menu.tsx             # 사이드 메뉴: 가상 장치 생성/이름 변경/삭제
     └── ContextMenu.tsx      # 우클릭 컨텍스트 메뉴 (미구현)
 ```
 
@@ -106,11 +112,18 @@ const graph: AudioGraph = {
 
 | 커맨드 | Rust 위치 | 설명 | 인자 | 반환 |
 |--------|-----------|------|------|------|
-| `get_audio_hosts` | `lib.rs:55` | 사용 가능한 오디오 호스트 목록 | 없음 | `Vec<String>` |
-| `get_audio_devices` | `lib.rs:63` | 특정 호스트의 입력/출력 장치 목록 | `host: String` | `(Vec<AudioDevice>, Vec<AudioDevice>)` |
-| `setup_runtime` | `lib.rs:116` | 오디오 그래프로 런타임 생성 | `graph, host, buffer_size` | `()` |
-| `enable_runtime` | `lib.rs:148` | 런타임 처리 스레드 시작 | 없음 | `()` |
-| `disable_runtime` | `lib.rs:162` | 런타임 처리 스레드 중지 | 없음 | `()` |
+| `get_audio_hosts` | `lib.rs:95` | 사용 가능한 오디오 호스트 목록 | 없음 | `Vec<String>` |
+| `get_audio_devices` | `lib.rs:103` | 특정 호스트의 입력/출력 장치 목록 | `host: String` | `(Vec<AudioDevice>, Vec<AudioDevice>)` |
+| `connect_driver` | `lib.rs:158` | CableAudio.sys 드라이버 핸들 열기 | 없음 | `bool` |
+| `is_driver_connected` | `lib.rs:184` | 드라이버 연결 상태 확인 | 없음 | `bool` |
+| `list_virtual_devices` | `lib.rs:199` | 생성된 가상 장치 목록 | 없음 | `Vec<VirtualDevice>` |
+| `create_virtual_device` | `lib.rs:209` | 가상 오디오 장치 생성 (IOCTL + 엔드포인트 이름 지정) | `name, device_type` | `VirtualDevice` |
+| `remove_virtual_device` | `lib.rs:306` | 가상 오디오 장치 제거 | `device_id` | `()` |
+| `rename_virtual_device` | `lib.rs:339` | 가상 장치 이름 변경 (elevated UAC) | `device_id, new_name` | `()` |
+| `setup_runtime` | `lib.rs:757` | 오디오 그래프로 런타임 생성 | `graph, host, buffer_size` | `()` |
+| `enable_runtime` | `lib.rs:811` | 런타임 처리 스레드 시작 | 없음 | `()` |
+| `disable_runtime` | `lib.rs:849` | 런타임 처리 스레드 중지 | 없음 | `()` |
+| `open_devtools` | `lib.rs:844` | WebView 개발자 도구 열기 | 없음 | `()` |
 
 ### 4.2 타입 안전성
 
@@ -128,12 +141,30 @@ declare module "@tauri-apps/api/core" {
 
 ### 4.3 공유 상태
 
-`Mutex<AppData>`가 Tauri의 `State`로 관리된다 (`lib.rs:175`):
+`Mutex<AppData>`가 Tauri의 `State`로 관리된다 (`lib.rs:43`):
 
 ```rust
 struct AppData {
   runtime: Option<runtime::Runtime>,
   runtime_thread: Option<std::thread::JoinHandle<()>>,
+  runtime_running: Option<Arc<AtomicBool>>,
+  #[cfg(windows)]
+  driver_handle: Option<Arc<driver_client::DriverHandle>>,
+  /// 메뉴 패널에서 생성한 가상 장치 (hex_device_id -> VirtualDevice).
+  virtual_devices: BTreeMap<String, VirtualDevice>,
+}
+```
+
+`VirtualDevice` 구조체 (`lib.rs:24`):
+
+```rust
+pub(crate) struct VirtualDevice {
+  pub id: String,           // 드라이버 할당 16바이트 ID (hex 인코딩)
+  pub name: String,         // 사용자 지정 표시 이름
+  pub device_type: String,  // "render" | "capture"
+  // 내부 필드 (프론트엔드로 직렬화되지 않음):
+  pub wave_symbolic_link: String,  // KS 오디오 인터페이스 심볼릭 링크
+  pub endpoint_id: String,         // Windows MM 엔드포인트 ID (캐시)
 }
 ```
 
@@ -143,13 +174,16 @@ struct AppData {
 
 ```
 crates/tauri/src/
-├── main.rs         # 엔트리포인트: ui::run() 호출
-├── lib.rs          # Tauri 커맨드, AudioDevice/Graph/Node/Edge 타입, AppData 상태
+├── main.rs         # 엔트리포인트: --rename-endpoint CLI 모드 처리 또는 ui::run() 호출
+├── lib.rs          # Tauri 커맨드, 가상 장치 관리, COM 헬퍼, elevated rename
+├── driver_client.rs# CableAudio.sys IOCTL 래퍼 (DriverHandle, CreatedDevice)
 ├── runtime.rs      # Runtime 구조체, RuntimeState, process() 루프
 └── nodes/
-    ├── mod.rs                  # NodeTrait 정의
-    ├── audio_input_device.rs   # AudioInputDeviceNode
-    └── audio_output_device.rs  # AudioOutputDeviceNode
+    ├── mod.rs                      # NodeTrait 정의
+    ├── audio_input_device.rs       # AudioInputDeviceNode
+    ├── audio_output_device.rs      # AudioOutputDeviceNode
+    ├── virtual_audio_input.rs      # VirtualAudioInputNode (driver ring buffer 읽기)
+    └── virtual_audio_output.rs     # VirtualAudioOutputNode (driver ring buffer 쓰기)
 ```
 
 ### 5.2 핵심 타입
@@ -282,17 +316,17 @@ pub(crate) struct Runtime {
 
 ## 8. Common Crate
 
-`crates/common`은 `#![no_std]` 크레이트로, 향후 Windows WDM 가상 오디오 드라이버와 공유할 데이터 타입을 정의한다:
+`crates/common`은 `#![no_std]` 크레이트로, CableAudio.sys 커널 드라이버와 공유하는 데이터 타입을 정의한다:
 
 - `AudioDataType`: PCM Int16/24/32, Float32
 - `ChannelConfig`: Mono ~ 7.1 Surround
 - `AudioFormat`: 샘플 레이트, 채널 구성, 데이터 타입
 - `RingBufferHeader`: 커널-유저스페이스 공유 메모리 링 버퍼 헤더
-- `DeviceControlPayload`: 가상 장치 생성/관리 명령
-- `IoctlRequest`: IOCTL 통신용 유니온 타입
+- `DeviceControlPayload`: 가상 장치 생성/관리 명령 (662 bytes, `wave_symbolic_link: [u16; 256]` 포함)
+- `IoctlRequest`: IOCTL 통신용 유니온 타입 (768 bytes)
 - IOCTL 상수: `IOCTL_CREATE_VIRTUAL_DEVICE` 등
 
-현재 `cable-tauri` 크레이트에서 import하고 있으나 실제 사용되지 않는다.
+`cable-tauri` 크레이트의 `driver_client.rs`에서 IOCTL 송수신에 실제로 사용된다. C++ 미러: `driver/Source/Inc/cable_common.h`.
 
 ## 9. 의존성
 
@@ -316,3 +350,11 @@ pub(crate) struct Runtime {
 | @tauri-apps/api | ^2 | Tauri IPC |
 | react | ^19.1.0 | UI 프레임워크 |
 | tailwindcss | ^4.1.12 | CSS 프레임워크 |
+
+## 10. 드라이버 안정성 노트
+
+커널 모드 드라이버 안정성/하드닝 변경 사항은 `docs/driver-hardening.md`에 별도로 기록한다.
+
+- 동적 장치 제거 정책: 사용 중 장치 제거 시 `STATUS_DEVICE_BUSY`
+- 링 버퍼 수명 관리: 스트림 참조/해제 기반으로 UAF 방지
+- 사용자 매핑 검증: map/unmap 주소/프로세스 소유자 검증 강화

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use cpal::{
-  BufferSize, Stream, StreamConfig,
+  SampleFormat, Stream, StreamConfig,
   traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use ringbuf::{
@@ -25,6 +25,8 @@ pub(crate) struct AudioOutputDeviceNode {
   stream: Option<Stream>,
   #[serde(skip)]
   ring_producer: Option<HeapProd<f32>>,
+  #[serde(skip)]
+  debug_tick: u64,
 }
 
 impl std::fmt::Debug for AudioOutputDeviceNode {
@@ -38,6 +40,10 @@ impl std::fmt::Debug for AudioOutputDeviceNode {
 }
 
 impl NodeTrait for AudioOutputDeviceNode {
+  fn id(&self) -> &str {
+    &self.id
+  }
+
   fn init(&mut self, runtime: &Runtime) -> Result<(), String> {
     println!(
       "Initializing audio output device: {} ({})",
@@ -55,34 +61,86 @@ impl NodeTrait for AudioOutputDeviceNode {
       })
       .ok_or_else(|| format!("Audio output device not found: {}", self.device.id))?;
 
+    let default_cfg = device
+      .default_output_config()
+      .map_err(|e| format!("Failed to get default output config: {}", e))?;
+
     let config = StreamConfig {
-      channels: self.device.channels,
-      sample_rate: self.device.frequency,
-      buffer_size: BufferSize::Fixed(runtime.buffer_size),
+      channels: default_cfg.channels(),
+      sample_rate: runtime.sample_rate,
+      buffer_size: cpal::BufferSize::Fixed(runtime.buffer_size),
     };
 
+    let sample_format = default_cfg.sample_format();
+
     // 링 버퍼 생성: buffer_size * channels * 4 (여유 배수)
-    let rb_size = runtime.buffer_size as usize * self.device.channels as usize * 4;
+    let rb_size = runtime.buffer_size as usize * self.device.channels as usize * 16;
     let rb = HeapRb::<f32>::new(rb_size);
     let (producer, mut consumer) = rb.split();
 
-    let stream = device
-      .build_output_stream(
-        &config,
-        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-          // cpal 콜백 스레드에서 lock-free로 데이터 pop
-          let read = consumer.pop_slice(data);
-          // 데이터 부족 시 나머지를 silence(0.0)로 채움
-          for sample in &mut data[read..] {
-            *sample = 0.0;
-          }
-        },
-        move |err| {
-          eprintln!("Audio output stream error: {}", err);
-        },
-        None,
-      )
-      .map_err(|e| format!("Failed to build audio output stream: {}", e))?;
+    let stream = match sample_format {
+      SampleFormat::F32 => device
+        .build_output_stream(
+          &config,
+          move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let read = consumer.pop_slice(data);
+            for sample in &mut data[read..] {
+              *sample = 0.0;
+            }
+          },
+          move |err| {
+            eprintln!("Audio output stream error: {}", err);
+          },
+          None,
+        )
+        .map_err(|e| format!("Failed to build f32 output stream: {}", e))?,
+      SampleFormat::I16 => device
+        .build_output_stream(
+          &config,
+          move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+            let mut temp = vec![0.0f32; data.len()];
+            let read = consumer.pop_slice(&mut temp);
+            for i in 0..read {
+              let s = temp[i].clamp(-1.0, 1.0);
+              data[i] = (s * i16::MAX as f32) as i16;
+            }
+            for sample in &mut data[read..] {
+              *sample = 0;
+            }
+          },
+          move |err| {
+            eprintln!("Audio output stream error: {}", err);
+          },
+          None,
+        )
+        .map_err(|e| format!("Failed to build i16 output stream: {}", e))?,
+      SampleFormat::U16 => device
+        .build_output_stream(
+          &config,
+          move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
+            let mut temp = vec![0.0f32; data.len()];
+            let read = consumer.pop_slice(&mut temp);
+            for i in 0..read {
+              let s = temp[i].clamp(-1.0, 1.0);
+              data[i] = (((s + 1.0) * 0.5) * u16::MAX as f32) as u16;
+            }
+            for sample in &mut data[read..] {
+              *sample = u16::MAX / 2;
+            }
+          },
+          move |err| {
+            eprintln!("Audio output stream error: {}", err);
+          },
+          None,
+        )
+        .map_err(|e| format!("Failed to build u16 output stream: {}", e))?,
+      _ => {
+        return Err(format!(
+          "Unsupported output sample format for {}: {:?}",
+          self.device.readable_name, sample_format
+        ));
+      }
+    };
 
     stream
       .play()
@@ -92,8 +150,8 @@ impl NodeTrait for AudioOutputDeviceNode {
     self.ring_producer = Some(producer);
 
     println!(
-      "Audio output device initialized: {} (rb_size={})",
-      self.device.readable_name, rb_size
+      "Audio output device initialized: {} (rb_size={}, sample_format={:?}, cfg={}ch/{}Hz)",
+      self.device.readable_name, rb_size, sample_format, config.channels, config.sample_rate
     );
 
     Ok(())
@@ -126,7 +184,22 @@ impl NodeTrait for AudioOutputDeviceNode {
     for edge in &runtime.edges {
       if edge.to == self.id {
         if let Some(data) = state.edge_values.get(&edge.id) {
-          producer.push_slice(data);
+          let pushed = producer.push_slice(data);
+          self.debug_tick = self.debug_tick.wrapping_add(1);
+          if self.debug_tick % 200 == 0 {
+            println!(
+              "AudioOutputDevice[{}] pushed {}/{} samples from edge {}{}",
+              self.id,
+              pushed,
+              data.len(),
+              edge.id,
+              if pushed < data.len() {
+                " [OVERFLOW: samples dropped]"
+              } else {
+                ""
+              },
+            );
+          }
         }
       }
     }
