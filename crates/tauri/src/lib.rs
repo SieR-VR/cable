@@ -967,7 +967,10 @@ async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> 
 /// Works in debug builds; in release builds requires the `devtools` Cargo feature.
 #[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) {
+  #[cfg(debug_assertions)]
   window.open_devtools();
+  #[cfg(not(debug_assertions))]
+  let _ = window;
 }
 
 #[tauri::command]
