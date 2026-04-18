@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { useAppStore } from "./state";
+import { useAppStore } from "../state";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockedInvoke = vi.mocked(invoke) as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>;
+const mockedInvoke = vi.mocked(invoke) as unknown as ReturnType<
+  typeof vi.fn<(...args: any[]) => any>
+>;
 
 function resetStore() {
   // Reset the store to its initial state between tests.
@@ -32,12 +34,9 @@ describe("useAppStore — synchronous actions", () => {
   });
 
   it("setContextMenuOpen updates position and target node", () => {
-    useAppStore.getState().setContextMenuOpen(
-      true,
-      { x: 100, y: 200 },
-      { x: 50, y: 75 },
-      "node-1",
-    );
+    useAppStore
+      .getState()
+      .setContextMenuOpen(true, { x: 100, y: 200 }, { x: 50, y: 75 }, "node-1");
     const state = useAppStore.getState();
     expect(state.contextMenuOpen).toBe(true);
     expect(state.contextMenuPosition).toEqual({ x: 100, y: 200 });
