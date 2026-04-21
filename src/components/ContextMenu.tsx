@@ -30,7 +30,10 @@ const NODE_CATEGORIES: NodeCategory[] = [
   },
   {
     label: "Visualizers",
-    items: [{ type: "spectrumAnalyzer", label: "Spectrum Analyzer" }],
+    items: [
+      { type: "spectrumAnalyzer", label: "Spectrum Analyzer" },
+      { type: "waveformMonitor", label: "Waveform Monitor" },
+    ],
   },
 ];
 

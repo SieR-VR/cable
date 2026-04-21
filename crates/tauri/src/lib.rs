@@ -18,6 +18,7 @@ use nodes::audio_output_device::AudioOutputDeviceNode;
 use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
 use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
+use nodes::waveform_monitor::WaveformMonitorNode;
 use nodes::NodeTrait;
 
 /// A virtual audio device managed by the driver, independent of the audio graph.
@@ -47,6 +48,8 @@ struct AppData {
   virtual_devices: BTreeMap<String, VirtualDevice>,
   /// Spectrum buffers for SpectrumAnalyzer nodes (node_id -> magnitude bins).
   spectrum_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
+  /// Waveform buffers for WaveformMonitor nodes (node_id -> rolling sample window).
+  waveform_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
 }
 
 fn start_runtime_thread(state: &mut AppData, mut runtime: runtime::Runtime) {
@@ -142,6 +145,7 @@ pub(crate) enum AudioNode {
   VirtualAudioInput(VirtualAudioInputNode),
   VirtualAudioOutput(VirtualAudioOutputNode),
   SpectrumAnalyzer(SpectrumAnalyzerNode),
+  WaveformMonitor(WaveformMonitorNode),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -935,8 +939,6 @@ async fn setup_runtime(
   let driver_handle: Option<()> = None;
 
   // Build spectrum buffers for any SpectrumAnalyzer nodes in the new graph.
-  // Each node gets a dedicated Arc<Mutex<Vec<f32>>> shared between the Runtime
-  // thread and the get_spectrum_data command.
   let mut spectrum_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>> = BTreeMap::new();
   for node in &graph.nodes {
     if let AudioNode::SpectrumAnalyzer(n) = node {
@@ -944,6 +946,15 @@ async fn setup_runtime(
     }
   }
   app_state.spectrum_buffers = spectrum_buffers.clone();
+
+  // Build waveform buffers for any WaveformMonitor nodes in the new graph.
+  let mut waveform_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>> = BTreeMap::new();
+  for node in &graph.nodes {
+    if let AudioNode::WaveformMonitor(n) = node {
+      waveform_buffers.insert(n.id().to_string(), Arc::new(std::sync::Mutex::new(Vec::new())));
+    }
+  }
+  app_state.waveform_buffers = waveform_buffers.clone();
 
   drop(app_state);
 
@@ -955,6 +966,7 @@ async fn setup_runtime(
     audio_host,
     driver_handle,
     spectrum_buffers,
+    waveform_buffers,
   );
 
   runtime.init_nodes()?;
@@ -994,6 +1006,20 @@ async fn get_spectrum_data(
   }
 }
 
+/// Return the latest waveform sample window for a WaveformMonitor node.
+/// Returns an empty Vec if the node hasn't processed any audio yet.
+#[tauri::command]
+async fn get_waveform_data(
+  state: State<'_, Mutex<AppData>>,
+  node_id: String,
+) -> Result<Vec<f32>, String> {
+  let app = state.lock().await;
+  match app.waveform_buffers.get(&node_id) {
+    Some(buf) => Ok(buf.lock().unwrap().clone()),
+    None => Ok(Vec::new()),
+  }
+}
+
 /// Open the WebView developer tools (browser devtools).
 /// Works in debug builds; in release builds requires the `devtools` Cargo feature.
 #[tauri::command]
@@ -1025,6 +1051,7 @@ pub fn run() {
       driver_handle: None,
       virtual_devices: BTreeMap::new(),
       spectrum_buffers: BTreeMap::new(),
+      waveform_buffers: BTreeMap::new(),
     }))
     .invoke_handler(tauri::generate_handler![
       get_audio_hosts,
@@ -1040,6 +1067,7 @@ pub fn run() {
       disable_runtime,
       open_devtools,
       get_spectrum_data,
+      get_waveform_data,
     ])
     .run(tauri::generate_context!())
     .unwrap();

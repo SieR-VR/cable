@@ -20,8 +20,9 @@ pub(crate) struct Runtime {
   pub driver_handle: Option<Arc<DriverHandle>>,
 
   /// Shared spectrum buffers for SpectrumAnalyzer nodes.
-  /// node_id -> Arc<Mutex<Vec<f32>>> shared with AppData.spectrum_buffers
   pub spectrum_buffers: BTreeMap<String, Arc<Mutex<Vec<f32>>>>,
+  /// Shared waveform buffers for WaveformMonitor nodes.
+  pub waveform_buffers: BTreeMap<String, Arc<Mutex<Vec<f32>>>>,
 }
 
 pub struct RuntimeState {
@@ -92,6 +93,7 @@ impl Runtime {
       AudioNode::VirtualAudioInput(n) => n.id(),
       AudioNode::VirtualAudioOutput(n) => n.id(),
       AudioNode::SpectrumAnalyzer(n) => n.id(),
+      AudioNode::WaveformMonitor(n) => n.id(),
     }
   }
 
@@ -114,6 +116,7 @@ impl Runtime {
     #[cfg(windows)] driver_handle: Option<Arc<DriverHandle>>,
     #[cfg(not(windows))] _driver_handle: Option<()>,
     spectrum_buffers: BTreeMap<String, Arc<Mutex<Vec<f32>>>>,
+    waveform_buffers: BTreeMap<String, Arc<Mutex<Vec<f32>>>>,
   ) -> Self {
     Self {
       buffer_size,
@@ -124,6 +127,7 @@ impl Runtime {
       #[cfg(windows)]
       driver_handle,
       spectrum_buffers,
+      waveform_buffers,
     }
   }
 
@@ -136,6 +140,7 @@ impl Runtime {
         AudioNode::VirtualAudioInput(n) => n.init(self)?,
         AudioNode::VirtualAudioOutput(n) => n.init(self)?,
         AudioNode::SpectrumAnalyzer(n) => n.init(self)?,
+        AudioNode::WaveformMonitor(n) => n.init(self)?,
       }
     }
     self.nodes = nodes;
@@ -151,6 +156,7 @@ impl Runtime {
         AudioNode::VirtualAudioInput(n) => n.dispose(self)?,
         AudioNode::VirtualAudioOutput(n) => n.dispose(self)?,
         AudioNode::SpectrumAnalyzer(n) => n.dispose(self)?,
+        AudioNode::WaveformMonitor(n) => n.dispose(self)?,
       }
     }
     self.nodes = nodes;
@@ -176,6 +182,7 @@ impl Runtime {
         AudioNode::VirtualAudioInput(n) => n.process(self, &state)?,
         AudioNode::VirtualAudioOutput(n) => n.process(self, &state)?,
         AudioNode::SpectrumAnalyzer(n) => n.process(self, &state)?,
+        AudioNode::WaveformMonitor(n) => n.process(self, &state)?,
       };
       for (edge_id, values) in node_output {
         state.edge_values.insert(edge_id, values);

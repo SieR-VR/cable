@@ -72,7 +72,8 @@ export interface AppState {
       | "audioOutputDevice"
       | "virtualAudioInput"
       | "virtualAudioOutput"
-      | "spectrumAnalyzer",
+      | "spectrumAnalyzer"
+      | "waveformMonitor",
   ) => void;
   removeNodeAtContextMenu: () => void;
 
@@ -138,12 +139,15 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
     const isVirtual = type === "virtualAudioInput" || type === "virtualAudioOutput";
     const isSpectrumAnalyzer = type === "spectrumAnalyzer";
+    const isWaveformMonitor = type === "waveformMonitor";
 
     const data = isVirtual
       ? { deviceId: "", name: "", edgeType: null }
       : isSpectrumAnalyzer
         ? { fftSize: 1024, edgeType: null }
-        : { device: null, edgeType: null };
+        : isWaveformMonitor
+          ? { windowSize: 2048, edgeType: null }
+          : { device: null, edgeType: null };
 
     const newNode: NodeType = {
       id: `node-${nextId}`,

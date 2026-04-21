@@ -60,4 +60,11 @@ declare module "@tauri-apps/api/core" {
       nodeId: string;
     },
   ): Promise<number[]>;
+
+  declare function invoke(
+    cmd: "get_waveform_data",
+    args: {
+      nodeId: string;
+    },
+  ): Promise<number[]>;
 }
