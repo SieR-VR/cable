@@ -34,9 +34,7 @@ describe("useAppStore — synchronous actions", () => {
   });
 
   it("setContextMenuOpen updates position and target node", () => {
-    useAppStore
-      .getState()
-      .setContextMenuOpen(true, { x: 100, y: 200 }, { x: 50, y: 75 }, "node-1");
+    useAppStore.getState().setContextMenuOpen(true, { x: 100, y: 200 }, { x: 50, y: 75 }, "node-1");
     const state = useAppStore.getState();
     expect(state.contextMenuOpen).toBe(true);
     expect(state.contextMenuPosition).toEqual({ x: 100, y: 200 });
@@ -166,9 +164,9 @@ describe("useAppStore — async virtual device actions", () => {
 
   it("addVirtualDevice propagates errors", async () => {
     mockedInvoke.mockRejectedValueOnce(new Error("Driver failed"));
-    await expect(
-      useAppStore.getState().addVirtualDevice("Fail", "render"),
-    ).rejects.toThrow("Driver failed");
+    await expect(useAppStore.getState().addVirtualDevice("Fail", "render")).rejects.toThrow(
+      "Driver failed",
+    );
   });
 });
 

@@ -85,10 +85,10 @@ export const nodeTypes = {
 // src/App.tsx:39-55
 const graph: AudioGraph = {
   nodes: nodes.map((node) => ({
-    type: node.type,              // "audioInputDevice" | "audioOutputDevice"
+    type: node.type, // "audioInputDevice" | "audioOutputDevice"
     data: {
       id: node.id,
-      device: node.data.device,   // 선택된 AudioDevice 또는 null
+      device: node.data.device, // 선택된 AudioDevice 또는 null
     },
   })),
   edges: edges.map((edge) => ({
@@ -110,20 +110,20 @@ const graph: AudioGraph = {
 
 모든 IPC는 Tauri v2의 `#[tauri::command]` + `invoke()` 패턴을 사용한다. 이벤트 시스템(`listen`/`emit`)은 사용하지 않는다.
 
-| 커맨드 | Rust 위치 | 설명 | 인자 | 반환 |
-|--------|-----------|------|------|------|
-| `get_audio_hosts` | `lib.rs:95` | 사용 가능한 오디오 호스트 목록 | 없음 | `Vec<String>` |
-| `get_audio_devices` | `lib.rs:103` | 특정 호스트의 입력/출력 장치 목록 | `host: String` | `(Vec<AudioDevice>, Vec<AudioDevice>)` |
-| `connect_driver` | `lib.rs:158` | CableAudio.sys 드라이버 핸들 열기 | 없음 | `bool` |
-| `is_driver_connected` | `lib.rs:184` | 드라이버 연결 상태 확인 | 없음 | `bool` |
-| `list_virtual_devices` | `lib.rs:199` | 생성된 가상 장치 목록 | 없음 | `Vec<VirtualDevice>` |
-| `create_virtual_device` | `lib.rs:209` | 가상 오디오 장치 생성 (IOCTL + 엔드포인트 이름 지정) | `name, device_type` | `VirtualDevice` |
-| `remove_virtual_device` | `lib.rs:306` | 가상 오디오 장치 제거 | `device_id` | `()` |
-| `rename_virtual_device` | `lib.rs:339` | 가상 장치 이름 변경 (elevated UAC) | `device_id, new_name` | `()` |
-| `setup_runtime` | `lib.rs:757` | 오디오 그래프로 런타임 생성 | `graph, host, buffer_size` | `()` |
-| `enable_runtime` | `lib.rs:811` | 런타임 처리 스레드 시작 | 없음 | `()` |
-| `disable_runtime` | `lib.rs:849` | 런타임 처리 스레드 중지 | 없음 | `()` |
-| `open_devtools` | `lib.rs:844` | WebView 개발자 도구 열기 | 없음 | `()` |
+| 커맨드                  | Rust 위치    | 설명                                                 | 인자                       | 반환                                   |
+| ----------------------- | ------------ | ---------------------------------------------------- | -------------------------- | -------------------------------------- |
+| `get_audio_hosts`       | `lib.rs:95`  | 사용 가능한 오디오 호스트 목록                       | 없음                       | `Vec<String>`                          |
+| `get_audio_devices`     | `lib.rs:103` | 특정 호스트의 입력/출력 장치 목록                    | `host: String`             | `(Vec<AudioDevice>, Vec<AudioDevice>)` |
+| `connect_driver`        | `lib.rs:158` | CableAudio.sys 드라이버 핸들 열기                    | 없음                       | `bool`                                 |
+| `is_driver_connected`   | `lib.rs:184` | 드라이버 연결 상태 확인                              | 없음                       | `bool`                                 |
+| `list_virtual_devices`  | `lib.rs:199` | 생성된 가상 장치 목록                                | 없음                       | `Vec<VirtualDevice>`                   |
+| `create_virtual_device` | `lib.rs:209` | 가상 오디오 장치 생성 (IOCTL + 엔드포인트 이름 지정) | `name, device_type`        | `VirtualDevice`                        |
+| `remove_virtual_device` | `lib.rs:306` | 가상 오디오 장치 제거                                | `device_id`                | `()`                                   |
+| `rename_virtual_device` | `lib.rs:339` | 가상 장치 이름 변경 (elevated UAC)                   | `device_id, new_name`      | `()`                                   |
+| `setup_runtime`         | `lib.rs:757` | 오디오 그래프로 런타임 생성                          | `graph, host, buffer_size` | `()`                                   |
+| `enable_runtime`        | `lib.rs:811` | 런타임 처리 스레드 시작                              | 없음                       | `()`                                   |
+| `disable_runtime`       | `lib.rs:849` | 런타임 처리 스레드 중지                              | 없음                       | `()`                                   |
+| `open_devtools`         | `lib.rs:844` | WebView 개발자 도구 열기                             | 없음                       | `()`                                   |
 
 ### 4.2 타입 안전성
 
@@ -133,8 +133,14 @@ const graph: AudioGraph = {
 // src/ipc.d.ts
 declare module "@tauri-apps/api/core" {
   declare function invoke(cmd: "get_audio_hosts"): Promise<string[]>;
-  declare function invoke(cmd: "get_audio_devices", args: { host: string }): Promise<[AudioDevice[], AudioDevice[]]>;
-  declare function invoke(cmd: "setup_runtime", args: { graph: AudioGraph; buffer_size: number }): Promise<void>;
+  declare function invoke(
+    cmd: "get_audio_devices",
+    args: { host: string },
+  ): Promise<[AudioDevice[], AudioDevice[]]>;
+  declare function invoke(
+    cmd: "setup_runtime",
+    args: { graph: AudioGraph; buffer_size: number },
+  ): Promise<void>;
   // ...
 }
 ```
@@ -243,6 +249,7 @@ pub(crate) struct Runtime {
 ```
 
 `Runtime::process()`:
+
 1. 모든 `AudioNode`을 `&mut dyn NodeTrait`로 변환
 2. 순서대로 순회하며 `process()` 호출
 3. 각 노드의 출력(`BTreeMap<String, Vec<f32>>`)을 `RuntimeState.edge_values`에 누적
@@ -255,6 +262,7 @@ pub(crate) struct Runtime {
 `lib.rs`의 `get_audio_hosts()`와 `get_audio_devices()`에서 cpal의 `available_hosts()`, `host_from_id()`, `input_devices()`, `output_devices()`를 사용하여 시스템의 오디오 장치를 열거한다.
 
 각 장치에서 추출하는 정보:
+
 - `d.id()` - 장치 고유 ID
 - `d.description().name()` - 사람이 읽을 수 있는 이름
 - `d.description().extended()` - 확장 설명 목록
@@ -332,24 +340,24 @@ pub(crate) struct Runtime {
 
 ### Rust (crates/tauri)
 
-| 의존성 | 버전 | 용도 |
-|--------|------|------|
-| tauri | 2 | 프레임워크 |
-| cpal | 0.17 | 크로스 플랫폼 오디오 I/O |
-| ringbuf | 0.4 | lock-free 링 버퍼 (스레드 간 오디오 데이터 전달) |
-| serde / serde_json | 1 | 직렬화 |
-| windows | 0.62.2 | Win32 오디오/COM API |
-| common | path | 공유 타입 |
+| 의존성             | 버전   | 용도                                             |
+| ------------------ | ------ | ------------------------------------------------ |
+| tauri              | 2      | 프레임워크                                       |
+| cpal               | 0.17   | 크로스 플랫폼 오디오 I/O                         |
+| ringbuf            | 0.4    | lock-free 링 버퍼 (스레드 간 오디오 데이터 전달) |
+| serde / serde_json | 1      | 직렬화                                           |
+| windows            | 0.62.2 | Win32 오디오/COM API                             |
+| common             | path   | 공유 타입                                        |
 
 ### Frontend (package.json)
 
-| 패키지 | 버전 | 용도 |
-|--------|------|------|
-| @xyflow/react | ^12.10.0 | 노드 그래프 UI |
-| zustand | ^5.0.11 | 상태 관리 |
-| @tauri-apps/api | ^2 | Tauri IPC |
-| react | ^19.1.0 | UI 프레임워크 |
-| tailwindcss | ^4.1.12 | CSS 프레임워크 |
+| 패키지          | 버전     | 용도           |
+| --------------- | -------- | -------------- |
+| @xyflow/react   | ^12.10.0 | 노드 그래프 UI |
+| zustand         | ^5.0.11  | 상태 관리      |
+| @tauri-apps/api | ^2       | Tauri IPC      |
+| react           | ^19.1.0  | UI 프레임워크  |
+| tailwindcss     | ^4.1.12  | CSS 프레임워크 |
 
 ## 10. 드라이버 안정성 노트
 

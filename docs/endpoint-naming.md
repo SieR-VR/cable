@@ -7,6 +7,7 @@
 CableAudio.sys 드라이버는 동적 가상 장치를 생성할 때 `FriendlyName` 속성을 드라이버 레벨에서 설정한다. 그러나 Windows Multimedia(MM) 레이어는 이 값을 **AudioEndpointBuilder 서비스**가 관리하는 별도의 property store에 캐시하며, 비관리자 프로세스에서는 이 store에 쓰기가 불가능하다.
 
 결론적으로:
+
 - **드라이버 IOCTL `IOCTL_CABLE_UPDATE_DEVICE_NAME`**: Tauri 앱에서 사용하지 않는다. 드라이버 내부 `FriendlyName` 필드를 갱신하지만 MM 엔드포인트 FriendlyName에는 반영되지 않는다.
 - **`PKEY_Device_FriendlyName` (pid=14)**: AudioEndpointBuilder COM 서버가 관리자 권한으로도 외부 쓰기를 차단한다.
 - **`PKEY_Device_DeviceDesc` (pid=2)**: 관리자 권한으로 `IPropertyStore::SetValue`를 호출하면 쓰기 가능하며, Windows Audio가 이 값을 FriendlyName으로 노출한다.
@@ -26,11 +27,11 @@ snapshot_endpoint_ids()           find_new_endpoint_id(pre_snapshot)
 
 **과거에 실패한 접근법들:**
 
-| 접근법 | 실패 원인 |
-|--------|-----------|
-| `PKEY_AudioEndpoint_Path` 직접 비교 | SWD 경로로, KS 경로(`ROOT#MEDIA#0000`)와 무관 |
-| `CM_Get_Parent` PnP 트리 탐색 | `CONFIGRET(13)` = `CR_INVALID_DEVNODE` — SWD 엔드포인트 노드는 표준 PnP 부모 링크 없음 |
-| `PKEY_Device_InstanceId` (pid=256) 비교 | `SWD\MMDEVAPI\{ep-guid}` 형태로 KS 필터 경로 포함 안 함 |
+| 접근법                                  | 실패 원인                                                                              |
+| --------------------------------------- | -------------------------------------------------------------------------------------- |
+| `PKEY_AudioEndpoint_Path` 직접 비교     | SWD 경로로, KS 경로(`ROOT#MEDIA#0000`)와 무관                                          |
+| `CM_Get_Parent` PnP 트리 탐색           | `CONFIGRET(13)` = `CR_INVALID_DEVNODE` — SWD 엔드포인트 노드는 표준 PnP 부모 링크 없음 |
+| `PKEY_Device_InstanceId` (pid=256) 비교 | `SWD\MMDEVAPI\{ep-guid}` 형태로 KS 필터 경로 포함 안 함                                |
 
 Snapshot-Diff는 PnP 트리 탐색이 전혀 필요 없으며, 완전히 신뢰할 수 있다.
 
@@ -132,9 +133,9 @@ rename_virtual_device (Tauri 커맨드)
 
 ## 관련 파일
 
-| 파일 | 역할 |
-|------|------|
-| `crates/tauri/src/lib.rs` | 엔드포인트 탐색, COM 쓰기, elevated 헬퍼 전체 구현 |
-| `crates/tauri/src/main.rs` | `--rename-endpoint` CLI 모드 진입점 |
-| `src/components/Menu.tsx` | 프론트엔드: 이름 변경 UI, UAC 취소 에러 표시 |
-| `docs/virtual-driver.md` | IOCTL 코드 및 데이터 구조 상세 |
+| 파일                       | 역할                                               |
+| -------------------------- | -------------------------------------------------- |
+| `crates/tauri/src/lib.rs`  | 엔드포인트 탐색, COM 쓰기, elevated 헬퍼 전체 구현 |
+| `crates/tauri/src/main.rs` | `--rename-endpoint` CLI 모드 진입점                |
+| `src/components/Menu.tsx`  | 프론트엔드: 이름 변경 UI, UAC 취소 에러 표시       |
+| `docs/virtual-driver.md`   | IOCTL 코드 및 데이터 구조 상세                     |

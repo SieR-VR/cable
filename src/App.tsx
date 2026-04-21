@@ -1,11 +1,5 @@
 import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
-import {
-  ReactFlow,
-  Background,
-  BackgroundVariant,
-  Panel,
-  ReactFlowInstance,
-} from "@xyflow/react";
+import { ReactFlow, Background, BackgroundVariant, Panel, ReactFlowInstance } from "@xyflow/react";
 
 import "@xyflow/react/dist/style.css";
 
@@ -31,16 +25,18 @@ function App() {
 
   const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
   const [applyStatus, setApplyStatus] = useState<string | null>(null);
-  const [reactFlowInstance, setReactFlowInstance] =
-    useState<ReactFlowInstance<NodeType, EdgeType> | null>(null);
+  const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<
+    NodeType,
+    EdgeType
+  > | null>(null);
 
   const onPaneContextMenu = useCallback(
     (event: MouseEvent | ReactMouseEvent<Element, MouseEvent>) => {
-    event.preventDefault();
+      event.preventDefault();
 
-    const screenPosition = { x: event.clientX, y: event.clientY };
-    const flowPosition =
-      reactFlowInstance?.screenToFlowPosition(screenPosition) || screenPosition;
+      const screenPosition = { x: event.clientX, y: event.clientY };
+      const flowPosition =
+        reactFlowInstance?.screenToFlowPosition(screenPosition) || screenPosition;
 
       setContextMenuOpen(true, screenPosition, flowPosition);
     },
@@ -48,10 +44,7 @@ function App() {
   );
 
   const onNodeContextMenu = useCallback(
-    (
-      event: MouseEvent | ReactMouseEvent<Element, MouseEvent>,
-      node: NodeType,
-    ) => {
+    (event: MouseEvent | ReactMouseEvent<Element, MouseEvent>, node: NodeType) => {
       event.preventDefault();
 
       const screenPosition = { x: event.clientX, y: event.clientY };
@@ -73,10 +66,7 @@ function App() {
     setApplyStatus("Applying...");
     const graph: AudioGraph = {
       nodes: nodes.map((node) => {
-        if (
-          node.type === "virtualAudioInput" ||
-          node.type === "virtualAudioOutput"
-        ) {
+        if (node.type === "virtualAudioInput" || node.type === "virtualAudioOutput") {
           return {
             type: node.type,
             data: {
@@ -144,17 +134,18 @@ function App() {
       <Panel position="bottom-center">
         <div className="flex flex-col items-center gap-1">
           {applyStatus && (
-            <div className={`text-xs px-2 py-1 rounded ${applyStatus.startsWith('Error') ? 'bg-red-800 text-red-200' : applyStatus === 'Applying...' ? 'bg-yellow-800 text-yellow-200' : 'bg-green-800 text-green-200'}`}>
+            <div
+              className={`text-xs px-2 py-1 rounded ${applyStatus.startsWith("Error") ? "bg-red-800 text-red-200" : applyStatus === "Applying..." ? "bg-yellow-800 text-yellow-200" : "bg-green-800 text-green-200"}`}
+            >
               {applyStatus}
             </div>
           )}
           <div className="flex gap-2 items-center text-sm text-gray-500">
-            <span className={`inline-block w-2 h-2 rounded-full ${driverConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-            <span>{driverConnected ? 'Driver connected' : 'Driver offline'}</span>
-            <button
-              className="bg-gray-700 text-white px-2 py-1 rounded"
-              onClick={onApply}
-            >
+            <span
+              className={`inline-block w-2 h-2 rounded-full ${driverConnected ? "bg-green-400" : "bg-red-400"}`}
+            />
+            <span>{driverConnected ? "Driver connected" : "Driver offline"}</span>
+            <button className="bg-gray-700 text-white px-2 py-1 rounded" onClick={onApply}>
               Apply
             </button>
           </div>

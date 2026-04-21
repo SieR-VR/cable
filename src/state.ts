@@ -67,11 +67,7 @@ export interface AppState {
   ) => void;
 
   addNodeAtContextMenu: (
-    type:
-      | "audioInputDevice"
-      | "audioOutputDevice"
-      | "virtualAudioInput"
-      | "virtualAudioOutput",
+    type: "audioInputDevice" | "audioOutputDevice" | "virtualAudioInput" | "virtualAudioOutput",
   ) => void;
   removeNodeAtContextMenu: () => void;
 
@@ -135,8 +131,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       nextId += 1;
     }
 
-    const isVirtual =
-      type === "virtualAudioInput" || type === "virtualAudioOutput";
+    const isVirtual = type === "virtualAudioInput" || type === "virtualAudioOutput";
 
     const data = isVirtual
       ? { deviceId: "", name: "", edgeType: null }
@@ -164,8 +159,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       nodes: nodes.filter((node) => node.id !== contextMenuTargetNodeId),
       edges: edges.filter(
         (edge) =>
-          edge.source !== contextMenuTargetNodeId &&
-          edge.target !== contextMenuTargetNodeId,
+          edge.source !== contextMenuTargetNodeId && edge.target !== contextMenuTargetNodeId,
       ),
     });
   },
@@ -186,9 +180,10 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
         return;
       }
 
-      const [inputDevices, outputDevices] = await invoke<
-        [AudioDevice[], AudioDevice[]]
-      >("get_audio_devices", { host });
+      const [inputDevices, outputDevices] = await invoke<[AudioDevice[], AudioDevice[]]>(
+        "get_audio_devices",
+        { host },
+      );
       set({
         availableAudioInputDevices: inputDevices,
         availableAudioOutputDevices: outputDevices,
@@ -217,9 +212,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       console.warn("Failed to initialize audio hosts:", e);
     }
     await Promise.all([
-      initDevices(host).catch((e) =>
-        console.warn("Failed to initialize audio devices:", e),
-      ),
+      initDevices(host).catch((e) => console.warn("Failed to initialize audio devices:", e)),
       initDriver(),
     ]);
   },
@@ -282,18 +275,12 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     const targetNode = nodes.find((node) => node.id === connection.target);
 
     const fromType =
-      sourceNode?.data && "edgeType" in sourceNode.data
-        ? sourceNode.data.edgeType
-        : null;
+      sourceNode?.data && "edgeType" in sourceNode.data ? sourceNode.data.edgeType : null;
     const toType =
-      targetNode?.data && "edgeType" in targetNode.data
-        ? targetNode.data.edgeType
-        : null;
+      targetNode?.data && "edgeType" in targetNode.data ? targetNode.data.edgeType : null;
 
     if (fromType && toType && fromType !== toType) {
-      console.warn(
-        `Cannot connect nodes with different audio formats: ${fromType} -> ${toType}`,
-      );
+      console.warn(`Cannot connect nodes with different audio formats: ${fromType} -> ${toType}`);
       return;
     }
 

@@ -19,20 +19,13 @@ export type VirtualAudioOutputNodeData = {
   edgeType: string | null;
 };
 
-export type VirtualAudioOutputNode = Node<
-  VirtualAudioOutputNodeData,
-  "virtualAudioOutput"
->;
+export type VirtualAudioOutputNode = Node<VirtualAudioOutputNodeData, "virtualAudioOutput">;
 
 const selector = (id: string) => (store: AppState) => ({
-  setDevice: (deviceId: string, name: string) =>
-    store.updateNode(id, { deviceId, name }),
+  setDevice: (deviceId: string, name: string) => store.updateNode(id, { deviceId, name }),
 });
 
-export default function VirtualAudioOutput({
-  id,
-  data,
-}: NodeProps<VirtualAudioOutputNode>) {
+export default function VirtualAudioOutput({ id, data }: NodeProps<VirtualAudioOutputNode>) {
   const { setDevice } = useAppStore(selector(id));
   const { driverConnected, virtualDevices } = useAppStore();
 
@@ -60,9 +53,7 @@ export default function VirtualAudioOutput({
             </option>
           ))}
         </select>
-        {!driverConnected && (
-          <div className="text-xs text-yellow-400">Driver not connected</div>
-        )}
+        {!driverConnected && <div className="text-xs text-yellow-400">Driver not connected</div>}
         {renderDevices.length === 0 && driverConnected && (
           <div className="text-xs text-gray-400">
             No render devices. Create one in the menu panel.

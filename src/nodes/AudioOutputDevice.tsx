@@ -9,29 +9,18 @@ export type AudioOutputDeviceNodeData = {
   edgeType: string | null;
 };
 
-export type AudioOutputDeviceNode = Node<
-  AudioOutputDeviceNodeData,
-  "audioOutputDevice"
->;
+export type AudioOutputDeviceNode = Node<AudioOutputDeviceNodeData, "audioOutputDevice">;
 
 const selector = (id: string) => (store: AppState) => ({
   setDevice: (device: AudioDevice | null) => {
     const edgeType =
-      device &&
-      formatAudioEdgeType(
-        device.frequency,
-        device.channels,
-        device.bitsPerSample,
-      );
+      device && formatAudioEdgeType(device.frequency, device.channels, device.bitsPerSample);
 
     store.updateNode(id, { device, edgeType });
   },
 });
 
-export default function AudioOutputDevice({
-  id,
-  data,
-}: NodeProps<AudioOutputDeviceNode>) {
+export default function AudioOutputDevice({ id, data }: NodeProps<AudioOutputDeviceNode>) {
   const { availableAudioOutputDevices } = useAppStore();
 
   const { setDevice } = useAppStore(selector(id));
@@ -49,9 +38,7 @@ export default function AudioOutputDevice({
             className="w-full p-1 rounded bg-gray-500"
             onChange={(e) => {
               setDevice(
-                availableAudioOutputDevices?.find(
-                  (device) => device.id === e.target.value,
-                ) || null,
+                availableAudioOutputDevices?.find((device) => device.id === e.target.value) || null,
               );
             }}
           >

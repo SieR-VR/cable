@@ -19,20 +19,13 @@ export type VirtualAudioInputNodeData = {
   edgeType: string | null;
 };
 
-export type VirtualAudioInputNode = Node<
-  VirtualAudioInputNodeData,
-  "virtualAudioInput"
->;
+export type VirtualAudioInputNode = Node<VirtualAudioInputNodeData, "virtualAudioInput">;
 
 const selector = (id: string) => (store: AppState) => ({
-  setDevice: (deviceId: string, name: string) =>
-    store.updateNode(id, { deviceId, name }),
+  setDevice: (deviceId: string, name: string) => store.updateNode(id, { deviceId, name }),
 });
 
-export default function VirtualAudioInput({
-  id,
-  data,
-}: NodeProps<VirtualAudioInputNode>) {
+export default function VirtualAudioInput({ id, data }: NodeProps<VirtualAudioInputNode>) {
   const { setDevice } = useAppStore(selector(id));
   const { driverConnected, virtualDevices } = useAppStore();
 
@@ -60,9 +53,7 @@ export default function VirtualAudioInput({
             </option>
           ))}
         </select>
-        {!driverConnected && (
-          <div className="text-xs text-yellow-400">Driver not connected</div>
-        )}
+        {!driverConnected && <div className="text-xs text-yellow-400">Driver not connected</div>}
         {captureDevices.length === 0 && driverConnected && (
           <div className="text-xs text-gray-400">
             No capture devices. Create one in the menu panel.

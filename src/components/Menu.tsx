@@ -55,7 +55,10 @@ function DeviceItem({
               onChange={(e) => setEditName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleConfirm();
-                if (e.key === "Escape") { setEditing(false); setRenameError(null); }
+                if (e.key === "Escape") {
+                  setEditing(false);
+                  setRenameError(null);
+                }
               }}
               disabled={renaming}
               autoFocus
@@ -95,9 +98,7 @@ function DeviceItem({
           </>
         )}
       </div>
-      {renameError && (
-        <span className="text-xs text-red-500 pl-1">{renameError}</span>
-      )}
+      {renameError && <span className="text-xs text-red-500 pl-1">{renameError}</span>}
     </div>
   );
 }
@@ -256,9 +257,7 @@ export default function Menu() {
               <span
                 className={cn(
                   "text-xs px-1.5 py-0.5 rounded",
-                  driverConnected
-                    ? "bg-green-100 text-green-700"
-                    : "bg-red-100 text-red-700",
+                  driverConnected ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700",
                 )}
               >
                 {driverConnected ? "connected" : "offline"}

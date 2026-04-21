@@ -41,7 +41,8 @@ export function ContextMenu() {
       </button>
       <div className="my-2 h-px bg-gray-200" />
       <div className="px-2 pb-1 text-xs font-semibold text-gray-500">
-        Virtual Devices {!driverConnected && <span className="text-yellow-500">(driver offline)</span>}
+        Virtual Devices{" "}
+        {!driverConnected && <span className="text-yellow-500">(driver offline)</span>}
       </div>
       <button
         className="w-full text-left px-4 py-2 hover:bg-gray-100 cursor-pointer rounded disabled:opacity-40 disabled:cursor-not-allowed"

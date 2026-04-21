@@ -227,5 +227,6 @@ Run from repository root (`C:\Users\nwh63\cable`).
 ```
 
 Notes:
+
 - `scripts/build.ps1` now fails early when MSBuild returns non-zero.
 - Removed stale `tonegenerator.cpp` entry from `driver/Source/Utilities/Utilities.vcxproj` to unblock analysis.

@@ -53,9 +53,9 @@ User-mode opens this interface via `CreateFile` on the symbolic link path. The T
 
 Two endpoints are created at driver start (PnP `StartDevice`):
 
-| Endpoint | Type | Topo Name | Wave Name | Template |
-|---|---|---|---|---|
-| Speakers (Cable Virtual Audio Device) | Render | `TopologySpeaker` | `WaveSpeaker` | `SpeakerMiniports` |
+| Endpoint                                      | Type    | Topo Name           | Wave Name       | Template             |
+| --------------------------------------------- | ------- | ------------------- | --------------- | -------------------- |
+| Speakers (Cable Virtual Audio Device)         | Render  | `TopologySpeaker`   | `WaveSpeaker`   | `SpeakerMiniports`   |
 | Microphone Array (Cable Virtual Audio Device) | Capture | `TopologyMicArray1` | `WaveMicArray1` | `MicArray1Miniports` |
 
 These always exist while the driver is loaded. They appear in Windows Sound Settings as regular audio devices.
@@ -81,18 +81,18 @@ g_MaxMiniports = (g_cRenderEndpoints + g_cCaptureEndpoints) * 2 + CABLE_MAX_DYNA
 
 Dynamic devices are tracked in `CAdapterCommon::m_VirtualDevices[16]`, an array of `CABLE_VIRTUAL_DEVICE_ENTRY`:
 
-| Field | Type | Description |
-|---|---|---|
-| `InUse` | BOOLEAN | Slot is occupied |
-| `Id` | UINT8[16] | Unique device ID |
-| `DeviceType` | CABLE_DEVICE_TYPE | Render (0) or Capture (1) |
-| `FriendlyName` | WCHAR[64] | Display name |
-| `TopoName` | WCHAR[MAX_PATH] | e.g. `"TopologyCable_03"` |
-| `WaveName` | WCHAR[MAX_PATH] | e.g. `"WaveCable_03"` |
-| `UnknownTopology` | PUNKNOWN | Topology port interface |
-| `UnknownWave` | PUNKNOWN | Wave port interface |
-| `pRingBuffer` | CableRingBuffer* | Shared memory ring buffer |
-| `pMappedUserAddress` | PVOID | Current user-mode mapping (or NULL) |
+| Field                | Type              | Description                         |
+| -------------------- | ----------------- | ----------------------------------- |
+| `InUse`              | BOOLEAN           | Slot is occupied                    |
+| `Id`                 | UINT8[16]         | Unique device ID                    |
+| `DeviceType`         | CABLE_DEVICE_TYPE | Render (0) or Capture (1)           |
+| `FriendlyName`       | WCHAR[64]         | Display name                        |
+| `TopoName`           | WCHAR[MAX_PATH]   | e.g. `"TopologyCable_03"`           |
+| `WaveName`           | WCHAR[MAX_PATH]   | e.g. `"WaveCable_03"`               |
+| `UnknownTopology`    | PUNKNOWN          | Topology port interface             |
+| `UnknownWave`        | PUNKNOWN          | Wave port interface                 |
+| `pRingBuffer`        | CableRingBuffer\* | Shared memory ring buffer           |
+| `pMappedUserAddress` | PVOID             | Current user-mode mapping (or NULL) |
 
 ### Creation Flow (Work Item Pattern)
 
@@ -148,14 +148,14 @@ Custom device type: `CABLE_FILE_DEVICE_TYPE = 0x00008000`
 
 All IOCTLs use `METHOD_BUFFERED` and `FILE_ANY_ACCESS`.
 
-| IOCTL | Function | Code | Input | Output | Notes |
-|---|---|---|---|---|---|
-| `IOCTL_CABLE_CREATE_VIRTUAL_DEVICE` | 0x0001 | `0x80000004` | `CABLE_IOCTL_REQUEST` (768 bytes) | `CABLE_DEVICE_CONTROL_PAYLOAD` (662 bytes) | Response includes `WaveSymbolicLink` |
-| `IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE` | 0x0002 | `0x80000008` | `CABLE_IOCTL_REQUEST` (768 bytes) | None | |
-| `IOCTL_CABLE_UPDATE_DEVICE_NAME` | 0x0003 | `0x8000000C` | `CABLE_IOCTL_REQUEST` (768 bytes) | None | Tauri 앱에서 사용하지 않음 — 이름 변경은 elevated IPropertyStore COM 호출로 수행 (`docs/endpoint-naming.md` 참고) |
-| `IOCTL_CABLE_SET_STREAM_FORMAT` | 0x0004 | `0x80000010` | `CABLE_IOCTL_REQUEST` (768 bytes) | None | |
-| `IOCTL_CABLE_MAP_RING_BUFFER` | 0x0005 | `0x80000014` | `CABLE_RING_BUFFER_MAP_REQUEST` (16 bytes) | `CABLE_RING_BUFFER_MAP_RESPONSE` (16 bytes) | |
-| `IOCTL_CABLE_UNMAP_RING_BUFFER` | 0x0006 | `0x80000018` | `CABLE_RING_BUFFER_UNMAP_REQUEST` (24 bytes) | None | |
+| IOCTL                               | Function | Code         | Input                                        | Output                                      | Notes                                                                                                             |
+| ----------------------------------- | -------- | ------------ | -------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `IOCTL_CABLE_CREATE_VIRTUAL_DEVICE` | 0x0001   | `0x80000004` | `CABLE_IOCTL_REQUEST` (768 bytes)            | `CABLE_DEVICE_CONTROL_PAYLOAD` (662 bytes)  | Response includes `WaveSymbolicLink`                                                                              |
+| `IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE` | 0x0002   | `0x80000008` | `CABLE_IOCTL_REQUEST` (768 bytes)            | None                                        |                                                                                                                   |
+| `IOCTL_CABLE_UPDATE_DEVICE_NAME`    | 0x0003   | `0x8000000C` | `CABLE_IOCTL_REQUEST` (768 bytes)            | None                                        | Tauri 앱에서 사용하지 않음 — 이름 변경은 elevated IPropertyStore COM 호출로 수행 (`docs/endpoint-naming.md` 참고) |
+| `IOCTL_CABLE_SET_STREAM_FORMAT`     | 0x0004   | `0x80000010` | `CABLE_IOCTL_REQUEST` (768 bytes)            | None                                        |                                                                                                                   |
+| `IOCTL_CABLE_MAP_RING_BUFFER`       | 0x0005   | `0x80000014` | `CABLE_RING_BUFFER_MAP_REQUEST` (16 bytes)   | `CABLE_RING_BUFFER_MAP_RESPONSE` (16 bytes) |                                                                                                                   |
+| `IOCTL_CABLE_UNMAP_RING_BUFFER`     | 0x0006   | `0x80000018` | `CABLE_RING_BUFFER_UNMAP_REQUEST` (24 bytes) | None                                        |                                                                                                                   |
 
 ### IOCTL Code Calculation
 
@@ -223,15 +223,15 @@ typedef UINT8 CABLE_DEVICE_ID[16];    // 16 bytes
 
 Used for Create and Remove; also returned as the output buffer of Create. The `WaveSymbolicLink` field is populated by the driver only in the Create response — it is zeroed in all request payloads.
 
-| Offset | Field | Type | Size | Notes |
-|---|---|---|---|---|
-| 0 | `Id` | UINT8[16] | 16 | |
-| 16 | `FriendlyName` | WCHAR[64] | 128 | |
-| 144 | `DeviceType` | UINT32 | 4 | |
-| 148 | `IsEnabled` | UINT8 (BOOLEAN) | 1 | |
-| 149 | `Persistent` | UINT8 (BOOLEAN) | 1 | |
-| 150 | `WaveSymbolicLink` | WCHAR[256] | 512 | **Create response only.** Kernel-form KS audio interface path, e.g. `\??\ROOT#MEDIA#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\WaveCable_NN` (null-terminated). Used by the Tauri app to locate the new MM audio endpoint. |
-| **Total** | | | **662** | |
+| Offset    | Field              | Type            | Size    | Notes                                                                                                                                                                                                                       |
+| --------- | ------------------ | --------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0         | `Id`               | UINT8[16]       | 16      |                                                                                                                                                                                                                             |
+| 16        | `FriendlyName`     | WCHAR[64]       | 128     |                                                                                                                                                                                                                             |
+| 144       | `DeviceType`       | UINT32          | 4       |                                                                                                                                                                                                                             |
+| 148       | `IsEnabled`        | UINT8 (BOOLEAN) | 1       |                                                                                                                                                                                                                             |
+| 149       | `Persistent`       | UINT8 (BOOLEAN) | 1       |                                                                                                                                                                                                                             |
+| 150       | `WaveSymbolicLink` | WCHAR[256]      | 512     | **Create response only.** Kernel-form KS audio interface path, e.g. `\??\ROOT#MEDIA#0000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\WaveCable_NN` (null-terminated). Used by the Tauri app to locate the new MM audio endpoint. |
+| **Total** |                    |                 | **662** |                                                                                                                                                                                                                             |
 
 Rust mirror: `common::DeviceControlPayload` (`crates/common/src/lib.rs`), field `wave_symbolic_link: [u16; 256]`.
 
@@ -247,82 +247,82 @@ typedef union {
 
 ### CABLE_AUDIO_FORMAT -- 12 bytes
 
-| Offset | Field | Type | Size |
-|---|---|---|---|
-| 0 | `SampleRate` | UINT32 | 4 |
-| 4 | `Channels` | CABLE_CHANNEL_CONFIG (UINT32) | 4 |
-| 8 | `DataType` | CABLE_AUDIO_DATA_TYPE (UINT32) | 4 |
+| Offset | Field        | Type                           | Size |
+| ------ | ------------ | ------------------------------ | ---- |
+| 0      | `SampleRate` | UINT32                         | 4    |
+| 4      | `Channels`   | CABLE_CHANNEL_CONFIG (UINT32)  | 4    |
+| 8      | `DataType`   | CABLE_AUDIO_DATA_TYPE (UINT32) | 4    |
 
 ### CABLE_RING_BUFFER_MAP_REQUEST -- 16 bytes
 
-| Offset | Field | Type | Size |
-|---|---|---|---|
-| 0 | `DeviceId` | UINT8[16] | 16 |
+| Offset | Field      | Type      | Size |
+| ------ | ---------- | --------- | ---- |
+| 0      | `DeviceId` | UINT8[16] | 16   |
 
 ### CABLE_RING_BUFFER_MAP_RESPONSE -- 16 bytes
 
-| Offset | Field | Type | Size |
-|---|---|---|---|
-| 0 | `UserAddress` | UINT64 | 8 |
-| 8 | `TotalSize` | UINT32 | 4 |
-| 12 | `DataBufferSize` | UINT32 | 4 |
+| Offset | Field            | Type   | Size |
+| ------ | ---------------- | ------ | ---- |
+| 0      | `UserAddress`    | UINT64 | 8    |
+| 8      | `TotalSize`      | UINT32 | 4    |
+| 12     | `DataBufferSize` | UINT32 | 4    |
 
 ### CABLE_RING_BUFFER_UNMAP_REQUEST -- 24 bytes
 
-| Offset | Field | Type | Size |
-|---|---|---|---|
-| 0 | `DeviceId` | UINT8[16] | 16 |
-| 16 | `UserAddress` | UINT64 | 8 |
+| Offset | Field         | Type      | Size |
+| ------ | ------------- | --------- | ---- |
+| 0      | `DeviceId`    | UINT8[16] | 16   |
+| 16     | `UserAddress` | UINT64    | 8    |
 
 ### CABLE_RING_BUFFER_HEADER -- 40 bytes
 
-| Offset | Field | Type | Size |
-|---|---|---|---|
-| 0 | `WriteIndex` | UINT64 | 8 |
-| 8 | `ReadIndex` | UINT64 | 8 |
-| 16 | `BufferSize` | UINT32 | 4 |
-| 20 | `Status` | UINT32 | 4 |
-| 24 | `SampleRate` | UINT32 | 4 |
-| 28 | `Channels` | UINT16 | 2 |
-| 30 | `BitsPerSample` | UINT16 | 2 |
-| 32 | `DataType` | UINT32 (`CABLE_AUDIO_DATA_TYPE`) | 4 |
-| 36 | `Magic` | UINT32 (0x43424C45 = "CBLE") | 4 |
+| Offset | Field           | Type                             | Size |
+| ------ | --------------- | -------------------------------- | ---- |
+| 0      | `WriteIndex`    | UINT64                           | 8    |
+| 8      | `ReadIndex`     | UINT64                           | 8    |
+| 16     | `BufferSize`    | UINT32                           | 4    |
+| 20     | `Status`        | UINT32                           | 4    |
+| 24     | `SampleRate`    | UINT32                           | 4    |
+| 28     | `Channels`      | UINT16                           | 2    |
+| 30     | `BitsPerSample` | UINT16                           | 2    |
+| 32     | `DataType`      | UINT32 (`CABLE_AUDIO_DATA_TYPE`) | 4    |
+| 36     | `Magic`         | UINT32 (0x43424C45 = "CBLE")     | 4    |
 
 Status values:
 
-| Value | Name |
-|---|---|
-| 0 | `CABLE_RING_BUFFER_STATUS_OK` |
-| 1 | `CABLE_RING_BUFFER_STATUS_OVERRUN` |
-| 2 | `CABLE_RING_BUFFER_STATUS_UNDERRUN` |
+| Value | Name                                |
+| ----- | ----------------------------------- |
+| 0     | `CABLE_RING_BUFFER_STATUS_OK`       |
+| 1     | `CABLE_RING_BUFFER_STATUS_OVERRUN`  |
+| 2     | `CABLE_RING_BUFFER_STATUS_UNDERRUN` |
 
 ### Enumerations
 
 **CABLE_DEVICE_TYPE** (UINT32):
 
-| Value | Name |
-|---|---|
-| 0 | `CableDeviceTypeRender` (speakers) |
-| 1 | `CableDeviceTypeCapture` (microphone) |
+| Value | Name                                  |
+| ----- | ------------------------------------- |
+| 0     | `CableDeviceTypeRender` (speakers)    |
+| 1     | `CableDeviceTypeCapture` (microphone) |
 
 **CABLE_AUDIO_DATA_TYPE** (UINT32):
 
-| Value | Name |
-|---|---|
-| 0 | `CableAudioDataPcmInt16` |
-| 1 | `CableAudioDataPcmInt24` |
-| 2 | `CableAudioDataPcmInt32` |
-| 3 | `CableAudioDataFloat32` |
+| Value | Name                     |
+| ----- | ------------------------ |
+| 0     | `CableAudioDataPcmInt16` |
+| 1     | `CableAudioDataPcmInt24` |
+| 2     | `CableAudioDataPcmInt32` |
+| 3     | `CableAudioDataFloat32`  |
 
 **CABLE_CHANNEL_CONFIG** (UINT32):
 
-| Value | Name |
-|---|---|
-| 1 | `CableChannelMono` |
-| 2 | `CableChannelStereo` |
-| 4 | `CableChannelQuad` |
-| 6 | `CableChannelSurround51` |
-| 8 | `CableChannelSurround71` |
+| Value | Name                     |
+| ----- | ------------------------ |
+| 1     | `CableChannelMono`       |
+| 2     | `CableChannelStereo`     |
+| 4     | `CableChannelQuad`       |
+| 6     | `CableChannelSurround51` |
+| 8     | `CableChannelSurround71` |
 
 ## Ring Buffer
 
@@ -363,6 +363,7 @@ The ring buffer uses monotonically increasing indices (not modular). The actual 
 - **Memory barriers**: `KeMemoryBarrier()` after index updates for cross-core visibility.
 
 **Write path** (kernel, DISPATCH_LEVEL safe):
+
 ```
 writePos = WriteIndex % BufferSize
 copy data to m_pDataBuffer[writePos..] (wrapping at boundary)
@@ -371,6 +372,7 @@ WriteIndex += bytesWritten    // monotonically increasing
 ```
 
 **Read path** (kernel or user-mode):
+
 ```
 available = WriteIndex - ReadIndex
 if available > BufferSize:
@@ -383,17 +385,17 @@ ReadIndex += bytesRead        // monotonically increasing
 
 ## Key Source Files
 
-| File | Description |
-|---|---|
-| `driver/Source/Inc/cable_common.h` | Shared IOCTL codes, structs, enums (mirrors Rust `crates/common/src/lib.rs`) |
-| `driver/Source/Inc/definitions.h` | GUIDs, pool tags, constants, PortCls device extension layout |
-| `driver/Source/Main/adapter.cpp` | DriverEntry, IRP hooks, IOCTL dispatch, PnP handler |
-| `driver/Source/Main/common.cpp` | CAdapterCommon: virtual device CRUD, ring buffer management, subdevice cache |
-| `driver/Source/Utilities/CableRingBuffer.h` | Ring buffer class declaration |
-| `driver/Source/Utilities/CableRingBuffer.cpp` | Ring buffer: allocate, map, read, write, cleanup |
-| `driver/Source/Main/minwavert.cpp` | WaveRT miniport stream implementation |
-| `driver/Source/Inc/minipairs.h` | Static endpoint templates (SpeakerMiniports, MicArray1Miniports) |
-| `docs/driver-hardening.md` | Kernel hardening changes, risk analysis, and validation checklist |
+| File                                          | Description                                                                  |
+| --------------------------------------------- | ---------------------------------------------------------------------------- |
+| `driver/Source/Inc/cable_common.h`            | Shared IOCTL codes, structs, enums (mirrors Rust `crates/common/src/lib.rs`) |
+| `driver/Source/Inc/definitions.h`             | GUIDs, pool tags, constants, PortCls device extension layout                 |
+| `driver/Source/Main/adapter.cpp`              | DriverEntry, IRP hooks, IOCTL dispatch, PnP handler                          |
+| `driver/Source/Main/common.cpp`               | CAdapterCommon: virtual device CRUD, ring buffer management, subdevice cache |
+| `driver/Source/Utilities/CableRingBuffer.h`   | Ring buffer class declaration                                                |
+| `driver/Source/Utilities/CableRingBuffer.cpp` | Ring buffer: allocate, map, read, write, cleanup                             |
+| `driver/Source/Main/minwavert.cpp`            | WaveRT miniport stream implementation                                        |
+| `driver/Source/Inc/minipairs.h`               | Static endpoint templates (SpeakerMiniports, MicArray1Miniports)             |
+| `docs/driver-hardening.md`                    | Kernel hardening changes, risk analysis, and validation checklist            |
 
 ## Build
 
@@ -404,6 +406,7 @@ ReadIndex += bytesRead        // monotonically increasing
 ```
 
 Output files in `driver/x64/Debug/package/`:
+
 - `CableAudio.sys` -- the driver binary
 - `CableAudio.inf` -- installation INF
 - `cableaudio.cat` -- signed catalog

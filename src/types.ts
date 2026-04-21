@@ -1,16 +1,8 @@
 import { Edge, NodeTypes } from "@xyflow/react";
-import AudioInputDevice, {
-  AudioInputDeviceNode,
-} from "./nodes/AudioInputDevice";
-import AudioOutputDevice, {
-  AudioOutputDeviceNode,
-} from "./nodes/AudioOutputDevice";
-import VirtualAudioInput, {
-  VirtualAudioInputNode,
-} from "./nodes/VirtualAudioInput";
-import VirtualAudioOutput, {
-  VirtualAudioOutputNode,
-} from "./nodes/VirtualAudioOutput";
+import AudioInputDevice, { AudioInputDeviceNode } from "./nodes/AudioInputDevice";
+import AudioOutputDevice, { AudioOutputDeviceNode } from "./nodes/AudioOutputDevice";
+import VirtualAudioInput, { VirtualAudioInputNode } from "./nodes/VirtualAudioInput";
+import VirtualAudioOutput, { VirtualAudioOutputNode } from "./nodes/VirtualAudioOutput";
 
 export interface AudioDevice {
   id: string;
@@ -53,14 +45,8 @@ export interface AudioGraph {
 }
 
 export type AudioNode = {
-  type:
-    | "audioInputDevice"
-    | "audioOutputDevice"
-    | "virtualAudioInput"
-    | "virtualAudioOutput";
-  data:
-    | { device: AudioDevice | null; id: string }
-    | { deviceId: string; name: string; id: string };
+  type: "audioInputDevice" | "audioOutputDevice" | "virtualAudioInput" | "virtualAudioOutput";
+  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string };
 };
 
 export type AudioEdge = {

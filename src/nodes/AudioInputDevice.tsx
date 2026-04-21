@@ -9,29 +9,18 @@ export type AudioInputDeviceNodeData = {
   edgeType: string | null;
 };
 
-export type AudioInputDeviceNode = Node<
-  AudioInputDeviceNodeData,
-  "audioInputDevice"
->;
+export type AudioInputDeviceNode = Node<AudioInputDeviceNodeData, "audioInputDevice">;
 
 const selector = (id: string) => (store: AppState) => ({
   setDevice: (device: AudioDevice | null) => {
     const edgeType =
-      device &&
-      formatAudioEdgeType(
-        device.frequency,
-        device.channels,
-        device.bitsPerSample,
-      );
+      device && formatAudioEdgeType(device.frequency, device.channels, device.bitsPerSample);
 
     store.updateNode(id, { device, edgeType });
   },
 });
 
-export default function AudioInputDevice({
-  id,
-  data,
-}: NodeProps<AudioInputDeviceNode>) {
+export default function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) {
   const { availableAudioInputDevices } = useAppStore();
 
   const { setDevice } = useAppStore(selector(id));
@@ -49,9 +38,7 @@ export default function AudioInputDevice({
             className="w-full p-1 rounded bg-gray-500"
             onChange={(e) => {
               setDevice(
-                availableAudioInputDevices?.find(
-                  (device) => device.id === e.target.value,
-                ) || null,
+                availableAudioInputDevices?.find((device) => device.id === e.target.value) || null,
               );
             }}
           >
@@ -69,9 +56,7 @@ export default function AudioInputDevice({
             )}
           </select>
         </div>
-        {!availableAudioInputDevices && (
-          <div className="text-xs text-gray-400">{"Loading..."}</div>
-        )}
+        {!availableAudioInputDevices && <div className="text-xs text-gray-400">{"Loading..."}</div>}
         {selectedDevice && (
           <div className="flex flex-row gap-2 items-center">
             <span className="rounded-md text-xs bg-amber-200 p-1">{`${selectedDevice.frequency}Hz`}</span>

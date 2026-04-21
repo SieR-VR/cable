@@ -17,17 +17,17 @@ Cable is a Tauri v2 desktop application for real-time audio routing on Windows. 
 
 ## Build commands
 
-| Task | Command |
-|------|---------|
-| Full Tauri dev (recommended) | `pnpm tauri dev` |
-| Frontend dev only | `pnpm dev` |
-| Frontend production build | `pnpm build` |
-| Tauri production build | `pnpm tauri build` |
-| Full project (driver + app) | `.\scripts\build.ps1` |
-| Driver only | `.\scripts\build.ps1 -Target Driver` |
-| App only (no driver) | `.\scripts\build.ps1 -Target App` |
-| Rust check | `cargo check` |
-| Format Rust | `cargo fmt` |
+| Task                         | Command                              |
+| ---------------------------- | ------------------------------------ |
+| Full Tauri dev (recommended) | `pnpm tauri dev`                     |
+| Frontend dev only            | `pnpm dev`                           |
+| Frontend production build    | `pnpm build`                         |
+| Tauri production build       | `pnpm tauri build`                   |
+| Full project (driver + app)  | `.\scripts\build.ps1`                |
+| Driver only                  | `.\scripts\build.ps1 -Target Driver` |
+| App only (no driver)         | `.\scripts\build.ps1 -Target App`    |
+| Rust check                   | `cargo check`                        |
+| Format Rust                  | `cargo fmt`                          |
 
 Use **pnpm** — `pnpm-lock.yaml` is the lockfile.
 
