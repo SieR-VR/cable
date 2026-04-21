@@ -1,8 +1,8 @@
 import { Handle, Node, NodeProps, Position } from "@xyflow/react";
-import { AppState, useAppStore } from "@/state";
 
-import { AudioDevice } from "@/types";
 import { formatAudioEdgeType } from "@/lib/utils";
+import { AppState, useAppStore } from "@/state";
+import { AudioDevice } from "@/types";
 
 export type AudioInputDeviceNodeData = {
   device: AudioDevice | null;

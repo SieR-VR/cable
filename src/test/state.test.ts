@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
 import { useAppStore } from "../state";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

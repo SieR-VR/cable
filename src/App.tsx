@@ -1,13 +1,24 @@
-import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
-import { ReactFlow, Background, BackgroundVariant, Panel, ReactFlowInstance } from "@xyflow/react";
-
-import "@xyflow/react/dist/style.css";
-
-import Menu from "./components/Menu";
-import { useAppStore } from "./state";
-import { ContextMenu } from "./components/ContextMenu";
-import { AudioGraph, EdgeType, NodeType, nodeTypes } from "./types";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  ReactFlow,
+  Background,
+  BackgroundVariant,
+  Panel,
+  ReactFlowInstance,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import {
+  MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
+
+import { ContextMenu } from "./components/ContextMenu";
+import Menu from "./components/Menu";
+
+import { useAppStore } from "./state";
+import { AudioGraph, EdgeType, NodeType, nodeTypes } from "./types";
 
 function App() {
   const {
@@ -36,7 +47,8 @@ function App() {
 
       const screenPosition = { x: event.clientX, y: event.clientY };
       const flowPosition =
-        reactFlowInstance?.screenToFlowPosition(screenPosition) || screenPosition;
+        reactFlowInstance?.screenToFlowPosition(screenPosition) ||
+        screenPosition;
 
       setContextMenuOpen(true, screenPosition, flowPosition);
     },
@@ -44,12 +56,16 @@ function App() {
   );
 
   const onNodeContextMenu = useCallback(
-    (event: MouseEvent | ReactMouseEvent<Element, MouseEvent>, node: NodeType) => {
+    (
+      event: MouseEvent | ReactMouseEvent<Element, MouseEvent>,
+      node: NodeType,
+    ) => {
       event.preventDefault();
 
       const screenPosition = { x: event.clientX, y: event.clientY };
       const flowPosition =
-        reactFlowInstance?.screenToFlowPosition(screenPosition) || screenPosition;
+        reactFlowInstance?.screenToFlowPosition(screenPosition) ||
+        screenPosition;
 
       setContextMenuOpen(true, screenPosition, flowPosition, node.id);
     },
@@ -66,7 +82,10 @@ function App() {
     setApplyStatus("Applying...");
     const graph: AudioGraph = {
       nodes: nodes.map((node) => {
-        if (node.type === "virtualAudioInput" || node.type === "virtualAudioOutput") {
+        if (
+          node.type === "virtualAudioInput" ||
+          node.type === "virtualAudioOutput"
+        ) {
           return {
             type: node.type,
             data: {
@@ -97,7 +116,11 @@ function App() {
     console.log("Applying graph:", graph);
 
     try {
-      await invoke("setup_runtime", { graph, host: selectedAudioHost, buffer_size: 512 });
+      await invoke("setup_runtime", {
+        graph,
+        host: selectedAudioHost,
+        buffer_size: 512,
+      });
       setIsRuntimeEnabled(true);
       setApplyStatus("Applied successfully");
       setTimeout(() => setApplyStatus(null), 3000);
@@ -110,7 +133,7 @@ function App() {
   useEffect(() => {
     document.title = "Cable";
     initializeApp();
-  }, []);
+  }, [initializeApp]);
 
   return (
     <div className="h-full w-full">
@@ -144,8 +167,13 @@ function App() {
             <span
               className={`inline-block w-2 h-2 rounded-full ${driverConnected ? "bg-green-400" : "bg-red-400"}`}
             />
-            <span>{driverConnected ? "Driver connected" : "Driver offline"}</span>
-            <button className="bg-gray-700 text-white px-2 py-1 rounded" onClick={onApply}>
+            <span>
+              {driverConnected ? "Driver connected" : "Driver offline"}
+            </span>
+            <button
+              className="bg-gray-700 text-white px-2 py-1 rounded"
+              onClick={onApply}
+            >
               Apply
             </button>
           </div>

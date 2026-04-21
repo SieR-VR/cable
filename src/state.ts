@@ -1,4 +1,3 @@
-import { createWithEqualityFn } from "zustand/traditional";
 import { invoke } from "@tauri-apps/api/core";
 import {
   addEdge,
@@ -9,6 +8,7 @@ import {
   NodeChange,
   XYPosition,
 } from "@xyflow/react";
+import { createWithEqualityFn } from "zustand/traditional";
 
 import { AudioDevice, EdgeType, NodeType, VirtualDevice } from "./types";
 
