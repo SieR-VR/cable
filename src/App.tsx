@@ -95,6 +95,15 @@ function App() {
             },
           };
         }
+        if (node.type === "spectrumAnalyzer") {
+          return {
+            type: node.type,
+            data: {
+              id: node.id,
+              fftSize: (node.data as any).fftSize ?? 1024,
+            },
+          };
+        }
         return {
           type: node.type,
           data: {
