@@ -23,6 +23,7 @@ common = { path = "../common" }
 cpal = "0.17"
 ringbuf = "0.4"
 hex = "0.4"
+rustfft = "6"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62.2"

@@ -4,6 +4,8 @@ import AudioInputDevice, { AudioInputDeviceNode } from "./nodes/AudioInputDevice
 import AudioOutputDevice, { AudioOutputDeviceNode } from "./nodes/AudioOutputDevice";
 import VirtualAudioInput, { VirtualAudioInputNode } from "./nodes/VirtualAudioInput";
 import VirtualAudioOutput, { VirtualAudioOutputNode } from "./nodes/VirtualAudioOutput";
+import SpectrumAnalyzer, { SpectrumAnalyzerNode } from "./nodes/SpectrumAnalyzer";
+import WaveformMonitor, { WaveformMonitorNode } from "./nodes/WaveformMonitor";
 
 export interface AudioDevice {
   id: string;
@@ -30,13 +32,17 @@ export const nodeTypes = {
   audioOutputDevice: AudioOutputDevice,
   virtualAudioInput: VirtualAudioInput,
   virtualAudioOutput: VirtualAudioOutput,
+  spectrumAnalyzer: SpectrumAnalyzer,
+  waveformMonitor: WaveformMonitor,
 } satisfies NodeTypes;
 
 export type NodeType =
   | AudioInputDeviceNode
   | AudioOutputDeviceNode
   | VirtualAudioInputNode
-  | VirtualAudioOutputNode;
+  | VirtualAudioOutputNode
+  | SpectrumAnalyzerNode
+  | WaveformMonitorNode;
 
 export type EdgeType = Edge<AudioEdge>;
 
@@ -46,8 +52,14 @@ export interface AudioGraph {
 }
 
 export type AudioNode = {
-  type: "audioInputDevice" | "audioOutputDevice" | "virtualAudioInput" | "virtualAudioOutput";
-  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string };
+  type:
+    | "audioInputDevice"
+    | "audioOutputDevice"
+    | "virtualAudioInput"
+    | "virtualAudioOutput"
+    | "spectrumAnalyzer"
+    | "waveformMonitor";
+  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string } | { fftSize: number; id: string } | { windowSize: number; id: string };
 };
 
 export type AudioEdge = {

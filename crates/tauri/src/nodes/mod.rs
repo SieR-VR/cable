@@ -6,6 +6,8 @@ pub mod audio_input_device;
 pub mod audio_output_device;
 pub mod virtual_audio_input;
 pub mod virtual_audio_output;
+pub mod spectrum_analyzer;
+pub mod waveform_monitor;
 
 pub(crate) trait NodeTrait {
   fn id(&self) -> &str;

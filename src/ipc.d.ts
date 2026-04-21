@@ -53,4 +53,18 @@ declare module "@tauri-apps/api/core" {
   ): Promise<void>;
 
   declare function invoke(cmd: "open_devtools"): Promise<void>;
+
+  declare function invoke(
+    cmd: "get_spectrum_data",
+    args: {
+      nodeId: string;
+    },
+  ): Promise<number[]>;
+
+  declare function invoke(
+    cmd: "get_waveform_data",
+    args: {
+      nodeId: string;
+    },
+  ): Promise<number[]>;
 }
