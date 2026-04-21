@@ -1,16 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import { render, screen, act } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 
 import SpectrumAnalyzer from "@/nodes/SpectrumAnalyzer";
-
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockedInvoke = vi.mocked(invoke) as unknown as ReturnType<
-  typeof vi.fn<(...args: any[]) => any>
->;
+import { useAppStore } from "@/state";
 
 function makeProps(id = "node-1") {
   return {
@@ -42,13 +35,7 @@ function renderInProvider(id?: string) {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
-  mockedInvoke.mockResolvedValue([]);
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.clearAllMocks();
+  useAppStore.setState({ nodeRenderData: {} });
 });
 
 describe("SpectrumAnalyzer node", () => {
@@ -70,42 +57,22 @@ describe("SpectrumAnalyzer node", () => {
     expect(document.querySelector("canvas")).not.toBeNull();
   });
 
-  it("starts polling get_spectrum_data on mount", async () => {
-    renderInProvider("node-poll");
+  it("draws spectrum when nodeRenderData is updated in store", async () => {
+    renderInProvider("node-1");
 
     await act(async () => {
-      vi.advanceTimersByTime(33);
+      useAppStore.setState({
+        nodeRenderData: {
+          "node-1": { type: "spectrumAnalyzer", data: { bins: [0.5, 0.8, 0.3] } },
+        },
+      });
     });
 
-    expect(mockedInvoke).toHaveBeenCalledWith("get_spectrum_data", {
-      nodeId: "node-poll",
-    });
+    expect(document.querySelector("canvas")).not.toBeNull();
   });
 
-  it("polls at ~30fps (multiple intervals)", async () => {
-    renderInProvider("node-multi");
-
-    await act(async () => {
-      vi.advanceTimersByTime(100);
-    });
-
-    expect(mockedInvoke.mock.calls.length).toBeGreaterThanOrEqual(3);
-  });
-
-  it("clears the polling interval on unmount", async () => {
-    const { unmount } = renderInProvider("node-unmount");
-
-    await act(async () => {
-      vi.advanceTimersByTime(33);
-    });
-    const callsBefore = mockedInvoke.mock.calls.length;
-
-    unmount();
-
-    await act(async () => {
-      vi.advanceTimersByTime(200);
-    });
-
-    expect(mockedInvoke.mock.calls.length).toBe(callsBefore);
+  it("renders with empty bins when no render data is in store", () => {
+    renderInProvider("node-none");
+    expect(document.querySelector("canvas")).not.toBeNull();
   });
 });

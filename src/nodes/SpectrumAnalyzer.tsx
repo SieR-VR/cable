@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+
+import { useAppStore } from "../state";
 
 export type SpectrumAnalyzerNodeData = {
   /** FFT window size. Must be a power of two. Default: 1024 */
@@ -10,7 +11,6 @@ export type SpectrumAnalyzerNodeData = {
 
 export type SpectrumAnalyzerNode = Node<SpectrumAnalyzerNodeData, "spectrumAnalyzer">;
 
-const POLL_INTERVAL_MS = 33; // ~30fps
 const CANVAS_WIDTH = 240;
 const CANVAS_HEIGHT = 80;
 const BAR_COLOR = "#a855f7"; // purple-500
@@ -39,19 +39,12 @@ function drawSpectrum(canvas: HTMLCanvasElement | null, bins: number[]): void {
 
 export default function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderData = useAppStore((s) => s.nodeRenderData[id]);
+  const bins = renderData?.type === "spectrumAnalyzer" ? renderData.data.bins : [];
 
   useEffect(() => {
-    const intervalId = setInterval(async () => {
-      try {
-        const bins = await invoke<number[]>("get_spectrum_data", { nodeId: id });
-        drawSpectrum(canvasRef.current, bins);
-      } catch {
-        // Node may not be initialized yet; ignore errors during polling.
-      }
-    }, POLL_INTERVAL_MS);
-
-    return () => clearInterval(intervalId);
-  }, [id]);
+    drawSpectrum(canvasRef.current, bins);
+  }, [bins]);
 
   return (
     <div className="bg-gray-700 rounded-lg flex flex-col text-white min-w-64">

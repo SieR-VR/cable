@@ -21,6 +21,8 @@ function App() {
     onNodesChange,
     onEdgesChange,
     onConnect,
+    startRenderPolling,
+    stopRenderPolling,
   } = useAppStore();
 
   const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
@@ -120,6 +122,7 @@ function App() {
         host: selectedAudioHost,
         bufferSize: 512,
       });
+      startRenderPolling();
       setIsRuntimeEnabled(true);
       setApplyStatus("Applied successfully");
       setTimeout(() => setApplyStatus(null), 3000);
@@ -180,9 +183,11 @@ function App() {
             onClick={async () => {
               if (isRuntimeEnabled) {
                 await invoke("disable_runtime");
+                stopRenderPolling();
                 setIsRuntimeEnabled(false);
               } else {
                 await invoke("enable_runtime");
+                startRenderPolling();
                 setIsRuntimeEnabled(true);
               }
             }}

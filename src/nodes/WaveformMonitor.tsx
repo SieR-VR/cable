@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+
+import { useAppStore } from "../state";
 
 export type WaveformMonitorNodeData = {
   /** Number of samples in the rolling display window. Default: 2048 */
@@ -10,7 +11,6 @@ export type WaveformMonitorNodeData = {
 
 export type WaveformMonitorNode = Node<WaveformMonitorNodeData, "waveformMonitor">;
 
-const POLL_INTERVAL_MS = 33; // ~30fps
 const CANVAS_WIDTH = 240;
 const CANVAS_HEIGHT = 80;
 const WAVE_COLOR = "#34d399"; // emerald-400
@@ -55,19 +55,12 @@ function drawWaveform(canvas: HTMLCanvasElement | null, samples: number[]): void
 
 export default function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const renderData = useAppStore((s) => s.nodeRenderData[id]);
+  const samples = renderData?.type === "waveformMonitor" ? renderData.data.samples : [];
 
   useEffect(() => {
-    const intervalId = setInterval(async () => {
-      try {
-        const samples = await invoke<number[]>("get_waveform_data", { nodeId: id });
-        drawWaveform(canvasRef.current, samples);
-      } catch {
-        // Node may not be initialized yet; ignore errors during polling.
-      }
-    }, POLL_INTERVAL_MS);
-
-    return () => clearInterval(intervalId);
-  }, [id]);
+    drawWaveform(canvasRef.current, samples);
+  }, [samples]);
 
   return (
     <div className="bg-gray-700 rounded-lg flex flex-col text-white min-w-64">

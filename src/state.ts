@@ -10,7 +10,10 @@ import {
 } from "@xyflow/react";
 import { createWithEqualityFn } from "zustand/traditional";
 
-import { AudioDevice, EdgeType, NodeType, VirtualDevice } from "./types";
+import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice } from "./types";
+
+/** Module-level interval ID for the global render polling loop. */
+let renderPollIntervalId: ReturnType<typeof setInterval> | null = null;
 
 const initialNodes: NodeType[] = [
   {
@@ -54,6 +57,9 @@ export interface AppState {
   /** Virtual devices created via the driver (managed in the menu panel). */
   virtualDevices: VirtualDevice[];
 
+  /** Latest per-frame render data for all active visualizer nodes. */
+  nodeRenderData: Record<string, NodeRenderData>;
+
   nodes: NodeType[];
   edges: EdgeType[];
 
@@ -91,6 +97,11 @@ export interface AppState {
   onEdgesChange: (changes: EdgeChange<EdgeType>[]) => void;
   onConnect: (connection: Connection) => void;
   updateNode: (id: string, data: any) => void;
+
+  /** Start the single global 30fps polling loop for visualizer render data. */
+  startRenderPolling: () => void;
+  /** Stop the polling loop and clear cached render data. */
+  stopRenderPolling: () => void;
 }
 
 export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
@@ -109,6 +120,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
   driverConnected: false,
   virtualDevices: [],
+  nodeRenderData: {},
 
   nodes: initialNodes,
   edges: [],
@@ -307,4 +319,24 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
         node.id === id ? { ...node, data: { ...node.data, ...data } } : node,
       ),
     }),
+
+  startRenderPolling: () => {
+    if (renderPollIntervalId !== null) clearInterval(renderPollIntervalId);
+    renderPollIntervalId = setInterval(async () => {
+      try {
+        const data = await invoke("get_node_render_data");
+        set({ nodeRenderData: data });
+      } catch {
+        // Runtime may not be initialized yet; ignore.
+      }
+    }, 33);
+  },
+
+  stopRenderPolling: () => {
+    if (renderPollIntervalId !== null) {
+      clearInterval(renderPollIntervalId);
+      renderPollIntervalId = null;
+    }
+    set({ nodeRenderData: {} });
+  },
 }));

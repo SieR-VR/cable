@@ -1,4 +1,4 @@
-import { AudioDevice, AudioGraph, VirtualDevice } from "./types";
+import { AudioDevice, AudioGraph, NodeRenderData, VirtualDevice } from "./types";
 
 declare module "@tauri-apps/api/core" {
   declare function invoke(cmd: "get_audio_hosts"): Promise<string[]>;
@@ -54,17 +54,5 @@ declare module "@tauri-apps/api/core" {
 
   declare function invoke(cmd: "open_devtools"): Promise<void>;
 
-  declare function invoke(
-    cmd: "get_spectrum_data",
-    args: {
-      nodeId: string;
-    },
-  ): Promise<number[]>;
-
-  declare function invoke(
-    cmd: "get_waveform_data",
-    args: {
-      nodeId: string;
-    },
-  ): Promise<number[]>;
+  declare function invoke(cmd: "get_node_render_data"): Promise<Record<string, NodeRenderData>>;
 }

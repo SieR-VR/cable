@@ -71,3 +71,8 @@ export type AudioEdge = {
   channels?: number;
   bitsPerSample?: number;
 };
+
+/** Per-frame render data returned by `get_node_render_data` for visualizer nodes. */
+export type NodeRenderData =
+  | { type: "spectrumAnalyzer"; data: { bins: number[] } }
+  | { type: "waveformMonitor"; data: { samples: number[] } };

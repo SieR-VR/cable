@@ -137,6 +137,14 @@ struct AudioGraph {
   edges: Vec<AudioEdge>,
 }
 
+/// Per-frame render data returned by `get_node_render_data` for visualizer nodes.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+pub(crate) enum NodeRenderData {
+  SpectrumAnalyzer { bins: Vec<f32> },
+  WaveformMonitor { samples: Vec<f32> },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub(crate) enum AudioNode {
@@ -992,32 +1000,32 @@ async fn enable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> 
   Ok(())
 }
 
-/// Return the latest FFT magnitude spectrum for a SpectrumAnalyzer node.
-/// Returns an empty Vec if the node hasn't processed any audio yet.
+/// Return per-frame render data for all active visualizer nodes.
+/// Returns a map of node_id → NodeRenderData covering every visualizer buffer.
+/// A single call fetches data for all visualizer nodes in the current graph.
 #[tauri::command]
-async fn get_spectrum_data(
+async fn get_node_render_data(
   state: State<'_, Mutex<AppData>>,
-  node_id: String,
-) -> Result<Vec<f32>, String> {
+) -> Result<BTreeMap<String, NodeRenderData>, String> {
   let app = state.lock().await;
-  match app.spectrum_buffers.get(&node_id) {
-    Some(buf) => Ok(buf.lock().unwrap().clone()),
-    None => Ok(Vec::new()),
+  let mut result: BTreeMap<String, NodeRenderData> = BTreeMap::new();
+  for (id, buf) in &app.spectrum_buffers {
+    result.insert(
+      id.clone(),
+      NodeRenderData::SpectrumAnalyzer {
+        bins: buf.lock().unwrap().clone(),
+      },
+    );
   }
-}
-
-/// Return the latest waveform sample window for a WaveformMonitor node.
-/// Returns an empty Vec if the node hasn't processed any audio yet.
-#[tauri::command]
-async fn get_waveform_data(
-  state: State<'_, Mutex<AppData>>,
-  node_id: String,
-) -> Result<Vec<f32>, String> {
-  let app = state.lock().await;
-  match app.waveform_buffers.get(&node_id) {
-    Some(buf) => Ok(buf.lock().unwrap().clone()),
-    None => Ok(Vec::new()),
+  for (id, buf) in &app.waveform_buffers {
+    result.insert(
+      id.clone(),
+      NodeRenderData::WaveformMonitor {
+        samples: buf.lock().unwrap().clone(),
+      },
+    );
   }
+  Ok(result)
 }
 
 /// Open the WebView developer tools (browser devtools).
@@ -1066,8 +1074,7 @@ pub fn run() {
       enable_runtime,
       disable_runtime,
       open_devtools,
-      get_spectrum_data,
-      get_waveform_data,
+      get_node_render_data,
     ])
     .run(tauri::generate_context!())
     .unwrap();
