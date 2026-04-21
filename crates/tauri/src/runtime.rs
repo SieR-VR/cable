@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::{AudioEdge, AudioNode, nodes::NodeTrait};
 use cpal::Host;
@@ -18,6 +18,10 @@ pub(crate) struct Runtime {
 
   #[cfg(windows)]
   pub driver_handle: Option<Arc<DriverHandle>>,
+
+  /// Shared spectrum buffers for SpectrumAnalyzer nodes.
+  /// node_id -> Arc<Mutex<Vec<f32>>> shared with AppData.spectrum_buffers
+  pub spectrum_buffers: BTreeMap<String, Arc<Mutex<Vec<f32>>>>,
 }
 
 pub struct RuntimeState {
@@ -87,6 +91,7 @@ impl Runtime {
       AudioNode::AudioOutputDevice(n) => n.id(),
       AudioNode::VirtualAudioInput(n) => n.id(),
       AudioNode::VirtualAudioOutput(n) => n.id(),
+      AudioNode::SpectrumAnalyzer(n) => n.id(),
     }
   }
 
@@ -108,6 +113,7 @@ impl Runtime {
     audio_host: Host,
     #[cfg(windows)] driver_handle: Option<Arc<DriverHandle>>,
     #[cfg(not(windows))] _driver_handle: Option<()>,
+    spectrum_buffers: BTreeMap<String, Arc<Mutex<Vec<f32>>>>,
   ) -> Self {
     Self {
       buffer_size,
@@ -117,6 +123,7 @@ impl Runtime {
       audio_host,
       #[cfg(windows)]
       driver_handle,
+      spectrum_buffers,
     }
   }
 
@@ -128,6 +135,7 @@ impl Runtime {
         AudioNode::AudioOutputDevice(n) => n.init(self)?,
         AudioNode::VirtualAudioInput(n) => n.init(self)?,
         AudioNode::VirtualAudioOutput(n) => n.init(self)?,
+        AudioNode::SpectrumAnalyzer(n) => n.init(self)?,
       }
     }
     self.nodes = nodes;
@@ -142,6 +150,7 @@ impl Runtime {
         AudioNode::AudioOutputDevice(n) => n.dispose(self)?,
         AudioNode::VirtualAudioInput(n) => n.dispose(self)?,
         AudioNode::VirtualAudioOutput(n) => n.dispose(self)?,
+        AudioNode::SpectrumAnalyzer(n) => n.dispose(self)?,
       }
     }
     self.nodes = nodes;
@@ -166,6 +175,7 @@ impl Runtime {
         AudioNode::AudioOutputDevice(n) => n.process(self, &state)?,
         AudioNode::VirtualAudioInput(n) => n.process(self, &state)?,
         AudioNode::VirtualAudioOutput(n) => n.process(self, &state)?,
+        AudioNode::SpectrumAnalyzer(n) => n.process(self, &state)?,
       };
       for (edge_id, values) in node_output {
         state.edge_values.insert(edge_id, values);
