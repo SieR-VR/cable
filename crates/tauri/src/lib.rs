@@ -1120,6 +1120,13 @@ async fn save_graph(content: String) -> Result<bool, String> {
   }
 }
 
+/// Read the text content of a file at the given path.
+/// Used to load a dropped graph JSON file.
+#[tauri::command]
+async fn read_text_file(path: String) -> Result<String, String> {
+  std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn disable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
@@ -1159,6 +1166,7 @@ pub fn run() {
       open_devtools,
       get_node_render_data,
       save_graph,
+      read_text_file,
     ])
     .run(tauri::generate_context!())
     .unwrap();

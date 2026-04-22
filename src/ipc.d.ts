@@ -61,4 +61,9 @@ declare module "@tauri-apps/api/core" {
     cmd: "save_graph",
     args: { content: string },
   ): Promise<boolean>;
+
+  declare function invoke(
+    cmd: "read_text_file",
+    args: { path: string },
+  ): Promise<string>;
 }

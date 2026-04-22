@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ReactFlow, Background, BackgroundVariant, Panel, ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { DragEvent, MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
+import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
 
 import { ContextMenu } from "./components/ContextMenu";
 import Menu from "./components/Menu";
@@ -148,21 +149,23 @@ function App() {
     await invoke("save_graph", { content: JSON.stringify(file, null, 2) });
   }, [nodes, edges]);
 
-  const onDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-  }, []);
+  useEffect(() => {
+    document.title = "Cable";
+    initializeApp();
+  }, [initializeApp]);
 
-  const onDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const file = event.dataTransfer.files[0];
-      if (!file) return;
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
 
-      const reader = new FileReader();
-      reader.onload = async (e) => {
+    getCurrentWebview()
+      .onDragDropEvent(async (event) => {
+        if (event.payload.type !== "drop") return;
+        const jsonPath = event.payload.paths.find((p) => p.endsWith(".json"));
+        if (!jsonPath) return;
+
         try {
-          const parsed = JSON.parse(e.target?.result as string) as CableGraphFile;
+          const content = await invoke("read_text_file", { path: jsonPath });
+          const parsed = JSON.parse(content) as CableGraphFile;
           if (
             parsed.version !== 1 ||
             !Array.isArray(parsed.nodes) ||
@@ -171,30 +174,27 @@ function App() {
             setApplyStatus("Error: 올바르지 않은 그래프 파일 형식입니다.");
             return;
           }
-          if (isRuntimeEnabled) {
-            await invoke("disable_runtime");
-            stopRenderPolling();
-            setIsRuntimeEnabled(false);
-          }
+          await invoke("disable_runtime");
+          stopRenderPolling();
+          setIsRuntimeEnabled(false);
           loadGraph(parsed.nodes, parsed.edges);
           setApplyStatus("그래프를 불러왔습니다. Apply를 눌러 적용하세요.");
           setTimeout(() => setApplyStatus(null), 4000);
         } catch {
-          setApplyStatus("Error: JSON 파싱 실패");
+          setApplyStatus("Error: 파일을 불러올 수 없습니다.");
         }
-      };
-      reader.readAsText(file);
-    },
-    [isRuntimeEnabled, loadGraph, stopRenderPolling],
-  );
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
 
-  useEffect(() => {
-    document.title = "Cable";
-    initializeApp();
-  }, [initializeApp]);
+    return () => {
+      unlisten?.();
+    };
+  }, [loadGraph, stopRenderPolling]);
 
   return (
-    <div className="h-full w-full" onDragOver={onDragOver} onDrop={onDrop}>
+    <div className="h-full w-full">
       <ReactFlow
         nodes={nodes}
         edges={edges}
