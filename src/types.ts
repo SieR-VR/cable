@@ -81,6 +81,13 @@ export type AudioEdge = {
   bitsPerSample?: number;
 };
 
+/** Serialized graph file saved to / loaded from disk. */
+export interface CableGraphFile {
+  version: 1;
+  nodes: NodeType[];
+  edges: EdgeType[];
+}
+
 /** Per-frame render data returned by `get_node_render_data` for visualizer nodes. */
 export type NodeRenderData =
   | { type: "spectrumAnalyzer"; data: { bins: number[] } }

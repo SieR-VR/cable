@@ -99,6 +99,9 @@ export interface AppState {
   onConnect: (connection: Connection) => void;
   updateNode: (id: string, data: any) => void;
 
+  /** Replace the entire graph with loaded nodes and edges. */
+  loadGraph: (nodes: NodeType[], edges: EdgeType[]) => void;
+
   /** Start the single global 30fps polling loop for visualizer render data. */
   startRenderPolling: () => void;
   /** Stop the polling loop and clear cached render data. */
@@ -324,7 +327,9 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       ),
     }),
 
-  startRenderPolling: () => {
+  loadGraph: (nodes: NodeType[], edges: EdgeType[]) => set({ nodes, edges }),
+
+  startRenderPolling:() => {
     if (renderPollIntervalId !== null) clearInterval(renderPollIntervalId);
     renderPollIntervalId = setInterval(async () => {
       try {

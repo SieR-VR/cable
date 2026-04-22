@@ -247,3 +247,35 @@ describe("useAppStore — onConnect edge type guard", () => {
     expect(useAppStore.getState().edges).toHaveLength(1);
   });
 });
+
+describe("useAppStore — loadGraph", () => {
+  it("replaces nodes and edges entirely", () => {
+    const newNodes: any[] = [
+      {
+        id: "n-a",
+        type: "audioInputDevice",
+        dragHandle: ".drag-handle__custom",
+        position: { x: 10, y: 20 },
+        data: { device: null, edgeType: null },
+      },
+    ];
+    const newEdges: any[] = [
+      { id: "e-1", source: "n-a", target: "n-b" },
+    ];
+
+    useAppStore.getState().loadGraph(newNodes, newEdges);
+
+    const { nodes, edges } = useAppStore.getState();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].id).toBe("n-a");
+    expect(edges).toHaveLength(1);
+    expect(edges[0].id).toBe("e-1");
+  });
+
+  it("replaces with an empty graph", () => {
+    useAppStore.getState().loadGraph([], []);
+    const { nodes, edges } = useAppStore.getState();
+    expect(nodes).toHaveLength(0);
+    expect(edges).toHaveLength(0);
+  });
+});
