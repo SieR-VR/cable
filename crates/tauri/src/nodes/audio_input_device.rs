@@ -167,14 +167,18 @@ impl NodeTrait for AudioInputDeviceNode {
       None => return Ok(BTreeMap::new()),
     };
 
+    let channels = self.device.channels as usize;
+    let target = runtime.buffer_size as usize * channels;
+
     let available = consumer.occupied_len();
     if available == 0 {
       return Ok(BTreeMap::new());
     }
 
-    // 링 버퍼에서 사용 가능한 데이터를 모두 읽기
-    let mut buffer = vec![0.0f32; available];
-    consumer.pop_slice(&mut buffer);
+    // 정확히 buffer_size * channels 샘플을 드레인 (부족하면 silence 패딩)
+    let drain = available.min(target);
+    let mut buffer = vec![0.0f32; target];
+    consumer.pop_slice(&mut buffer[..drain]);
 
     // 이 노드에서 출발하는 모든 엣지에 대해 데이터를 복제하여 전달
     let mut output = BTreeMap::new();

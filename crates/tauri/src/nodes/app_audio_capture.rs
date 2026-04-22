@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{
   Arc,
-  atomic::{AtomicBool, Ordering},
+  atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use ringbuf::{
@@ -36,6 +36,9 @@ pub(crate) struct AppAudioCaptureNode {
   stop_flag: Option<Arc<AtomicBool>>,
   #[serde(skip)]
   ring_consumer: Option<HeapCons<f32>>,
+  /// 캡처 스레드가 GetMixFormat으로 확인한 채널 수 (기본값 2)
+  #[serde(skip)]
+  channel_count: Option<Arc<AtomicUsize>>,
 }
 
 impl std::fmt::Debug for AppAudioCaptureNode {
@@ -138,12 +141,13 @@ fn spawn_process_loopback_thread(
   process_id: u32,
   rb_size: usize,
   stop_flag: Arc<AtomicBool>,
+  channel_count_out: Arc<AtomicUsize>,
 ) -> (std::thread::JoinHandle<()>, HeapCons<f32>) {
   let rb = HeapRb::<f32>::new(rb_size);
   let (producer, consumer) = rb.split();
 
   let handle = std::thread::spawn(move || unsafe {
-    wasapi_process_loopback_thread(process_id, producer, stop_flag);
+    wasapi_process_loopback_thread(process_id, producer, stop_flag, channel_count_out);
   });
 
   (handle, consumer)
@@ -154,11 +158,12 @@ unsafe fn wasapi_process_loopback_thread(
   process_id: u32,
   mut producer: HeapProd<f32>,
   stop_flag: Arc<AtomicBool>,
+  channel_count_out: Arc<AtomicUsize>,
 ) {
   use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
   let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
-  if let Err(e) = wasapi_process_loopback_inner(process_id, &mut producer, &stop_flag) {
+  if let Err(e) = wasapi_process_loopback_inner(process_id, &mut producer, &stop_flag, &channel_count_out) {
     eprintln!("AppAudioCapture process loopback error for pid {}: {}", process_id, e);
   }
 
@@ -170,6 +175,7 @@ unsafe fn wasapi_process_loopback_inner(
   process_id: u32,
   producer: &mut HeapProd<f32>,
   stop_flag: &AtomicBool,
+  channel_count_out: &AtomicUsize,
 ) -> Result<(), String> {
   use std::mem::ManuallyDrop;
   use std::sync::{Condvar, Mutex};
@@ -286,6 +292,9 @@ unsafe fn wasapi_process_loopback_inner(
   let channels = (*mix_fmt_ptr).nChannels as usize;
   let bits_per_sample = (*mix_fmt_ptr).wBitsPerSample;
 
+  // 확인된 채널 수를 공유 atomic에 저장
+  channel_count_out.store(channels.max(1), Ordering::Relaxed);
+
   // 3. Initialize the process loopback client with the render endpoint's format.
   let init_result = audio_client.Initialize(
     AUDCLNT_SHAREMODE_SHARED,
@@ -367,12 +376,18 @@ impl NodeTrait for AppAudioCaptureNode {
       // determined from GetMixFormat inside the capture thread.
       let rb_size = runtime.buffer_size as usize * 2 * 8;
       let stop_flag = Arc::new(AtomicBool::new(false));
-      let (handle, consumer) =
-        spawn_process_loopback_thread(self.process_id, rb_size, stop_flag.clone());
+      let channel_count = Arc::new(AtomicUsize::new(2));
+      let (handle, consumer) = spawn_process_loopback_thread(
+        self.process_id,
+        rb_size,
+        stop_flag.clone(),
+        channel_count.clone(),
+      );
 
       self.stop_flag = Some(stop_flag);
       self.thread_handle = Some(handle);
       self.ring_consumer = Some(consumer);
+      self.channel_count = Some(channel_count);
       Ok(())
     }
     #[cfg(not(windows))]
@@ -390,6 +405,7 @@ impl NodeTrait for AppAudioCaptureNode {
       let _ = handle.join();
     }
     self.ring_consumer.take();
+    self.channel_count.take();
     Ok(())
   }
 
@@ -408,8 +424,19 @@ impl NodeTrait for AppAudioCaptureNode {
       return Ok(BTreeMap::new());
     }
 
-    let mut buffer = vec![0.0f32; available];
-    consumer.pop_slice(&mut buffer);
+    // 캡처 스레드가 확인한 채널 수로 정확한 목표 길이 계산 (기본값 2)
+    let channels = self
+      .channel_count
+      .as_ref()
+      .map(|c| c.load(Ordering::Relaxed))
+      .unwrap_or(2)
+      .max(1);
+    let target = runtime.buffer_size as usize * channels;
+
+    // 정확히 buffer_size * channels 샘플을 드레인 (부족하면 silence 패딩)
+    let drain = available.min(target);
+    let mut buffer = vec![0.0f32; target];
+    consumer.pop_slice(&mut buffer[..drain]);
 
     let mut output = BTreeMap::new();
     for edge in &runtime.edges {
@@ -434,6 +461,7 @@ mod tests {
       thread_handle: None,
       stop_flag: None,
       ring_consumer: None,
+      channel_count: None,
     }
   }
 
