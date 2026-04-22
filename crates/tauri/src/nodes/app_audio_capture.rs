@@ -119,7 +119,7 @@ unsafe fn wasapi_process_loopback_inner(
   use std::mem::ManuallyDrop;
   use windows::Win32::Media::Audio::{
     IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-    AUDCLNT_SHAREMODE_SHARED, eConsole, eRender,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, eConsole, eRender,
   };
   use windows::Win32::System::Com::{
     CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, CLSCTX_INPROC_SERVER,
@@ -186,11 +186,13 @@ unsafe fn wasapi_process_loopback_inner(
   let channels = (*mix_fmt_ptr).nChannels as usize;
   let bits_per_sample = (*mix_fmt_ptr).wBitsPerSample;
 
-  // 5. Initialize in shared mode. No explicit loopback flag — the activation
-  //    params already configure process loopback routing.
+  // 5. Initialize in shared loopback mode.
+  //    AUDCLNT_STREAMFLAGS_LOOPBACK is required even for process loopback;
+  //    without it the audio client is treated as a render stream and
+  //    GetService(IAudioCaptureClient) fails with AUDCLNT_E_WRONG_ENDPOINT_TYPE.
   let init_result = audio_client.Initialize(
     AUDCLNT_SHAREMODE_SHARED,
-    0,
+    AUDCLNT_STREAMFLAGS_LOOPBACK,
     0i64,
     0i64,
     mix_fmt_ptr,
