@@ -56,4 +56,9 @@ declare module "@tauri-apps/api/core" {
   declare function invoke(cmd: "open_devtools"): Promise<void>;
 
   declare function invoke(cmd: "get_node_render_data"): Promise<Record<string, NodeRenderData>>;
+
+  declare function invoke(
+    cmd: "save_graph",
+    args: { content: string },
+  ): Promise<boolean>;
 }

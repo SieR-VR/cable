@@ -143,15 +143,9 @@ function App() {
     }
   }, [nodes, edges, selectedAudioHost]);
 
-  const onSave = useCallback(() => {
+  const onSave = useCallback(async () => {
     const file: CableGraphFile = { version: 1, nodes, edges };
-    const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "cable-graph.json";
-    a.click();
-    URL.revokeObjectURL(url);
+    await invoke("save_graph", { content: JSON.stringify(file, null, 2) });
   }, [nodes, edges]);
 
   const onDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {

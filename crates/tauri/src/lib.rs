@@ -13,13 +13,13 @@ pub(crate) mod driver_client;
 pub(crate) mod nodes;
 mod runtime;
 
+use nodes::app_audio_capture::AppAudioCaptureNode;
 use nodes::audio_input_device::AudioInputDeviceNode;
 use nodes::audio_output_device::AudioOutputDeviceNode;
+use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
-use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use nodes::waveform_monitor::WaveformMonitorNode;
-use nodes::app_audio_capture::AppAudioCaptureNode;
 use nodes::NodeTrait;
 
 /// A virtual audio device managed by the driver, independent of the audio graph.
@@ -240,8 +240,6 @@ fn get_window_list() -> Vec<WindowInfo> {
 #[tauri::command]
 fn get_audio_hosts() -> Vec<String> {
   let available_hosts = cpal::available_hosts();
-  println!("Available audio hosts: {:?}", available_hosts);
-
   available_hosts.iter().map(|h| format!("{:?}", h)).collect()
 }
 
@@ -291,10 +289,6 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
     })
     .collect();
 
-  println!(
-    "Input devices: {:?}, Output devices: {:?}",
-    input_devices, output_devices
-  );
   (input_devices, output_devices)
 }
 
@@ -997,11 +991,6 @@ async fn setup_runtime(
     .and_then(|e| e.frequency)
     .unwrap_or(48000);
 
-  println!(
-    "Creating runtime with buffer size: {}, sample_rate: {}, host: {:?}",
-    buffer_size, sample_rate, host_id
-  );
-
   let mut app_state = state.lock().await;
 
   let was_running = app_state.runtime_running.is_some();
@@ -1018,7 +1007,10 @@ async fn setup_runtime(
   let mut spectrum_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>> = BTreeMap::new();
   for node in &graph.nodes {
     if let AudioNode::SpectrumAnalyzer(n) = node {
-      spectrum_buffers.insert(n.id().to_string(), Arc::new(std::sync::Mutex::new(Vec::new())));
+      spectrum_buffers.insert(
+        n.id().to_string(),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+      );
     }
   }
   app_state.spectrum_buffers = spectrum_buffers.clone();
@@ -1027,7 +1019,10 @@ async fn setup_runtime(
   let mut waveform_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>> = BTreeMap::new();
   for node in &graph.nodes {
     if let AudioNode::WaveformMonitor(n) = node {
-      waveform_buffers.insert(n.id().to_string(), Arc::new(std::sync::Mutex::new(Vec::new())));
+      waveform_buffers.insert(
+        n.id().to_string(),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+      );
     }
   }
   app_state.waveform_buffers = waveform_buffers.clone();
@@ -1106,6 +1101,25 @@ fn open_devtools(window: tauri::WebviewWindow) {
   let _ = window;
 }
 
+/// Show a native Save As dialog and write the graph JSON to the chosen file.
+/// Returns `true` if saved, `false` if the user cancelled.
+#[tauri::command]
+async fn save_graph(content: String) -> Result<bool, String> {
+  let handle = rfd::AsyncFileDialog::new()
+    .set_file_name("cable-graph.json")
+    .add_filter("Cable Graph", &["json"])
+    .save_file()
+    .await;
+
+  match handle {
+    Some(file) => {
+      std::fs::write(file.path(), content.as_bytes()).map_err(|e| e.to_string())?;
+      Ok(true)
+    }
+    None => Ok(false),
+  }
+}
+
 #[tauri::command]
 async fn disable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
@@ -1144,6 +1158,7 @@ pub fn run() {
       disable_runtime,
       open_devtools,
       get_node_render_data,
+      save_graph,
     ])
     .run(tauri::generate_context!())
     .unwrap();
