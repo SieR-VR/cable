@@ -1,6 +1,7 @@
-import { AudioDevice, AudioGraph, NodeRenderData, VirtualDevice } from "./types";
+import { AudioDevice, AudioGraph, NodeRenderData, VirtualDevice, WindowInfo } from "./types";
 
 declare module "@tauri-apps/api/core" {
+  declare function invoke(cmd: "get_window_list"): Promise<WindowInfo[]>;
   declare function invoke(cmd: "get_audio_hosts"): Promise<string[]>;
 
   declare function invoke(

@@ -18,6 +18,7 @@ const NODE_CATEGORIES: NodeCategory[] = [
     items: [
       { type: "audioInputDevice", label: "Audio Input Device" },
       { type: "audioOutputDevice", label: "Audio Output Device" },
+      { type: "appAudioCapture", label: "App Audio Capture" },
     ],
   },
   {

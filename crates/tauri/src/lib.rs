@@ -19,6 +19,7 @@ use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
 use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use nodes::waveform_monitor::WaveformMonitorNode;
+use nodes::app_audio_capture::AppAudioCaptureNode;
 use nodes::NodeTrait;
 
 /// A virtual audio device managed by the driver, independent of the audio graph.
@@ -118,6 +119,14 @@ fn stop_runtime_thread(state: &mut AppData) -> Result<(), String> {
   Ok(())
 }
 
+/// A visible top-level window enumerated via `EnumWindows`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WindowInfo {
+  pub process_id: u32,
+  pub title: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AudioDevice {
@@ -154,6 +163,7 @@ pub(crate) enum AudioNode {
   VirtualAudioOutput(VirtualAudioOutputNode),
   SpectrumAnalyzer(SpectrumAnalyzerNode),
   WaveformMonitor(WaveformMonitorNode),
+  AppAudioCapture(AppAudioCaptureNode),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +177,64 @@ struct AudioEdge {
   frequency: Option<u32>,
   channels: Option<u16>,
   bits_per_sample: Option<usize>,
+}
+
+/// Return the list of visible top-level windows with non-empty titles.
+/// Used by the AppAudioCapture node to let the user pick a target application.
+#[tauri::command]
+fn get_window_list() -> Vec<WindowInfo> {
+  #[cfg(windows)]
+  {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
+
+    let mut result: Vec<WindowInfo> = Vec::new();
+
+    unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
+      use windows::core::BOOL;
+      use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+      };
+
+      let list = &mut *(lparam.0 as *mut Vec<WindowInfo>);
+
+      if !IsWindowVisible(hwnd).as_bool() {
+        return BOOL(1);
+      }
+
+      let len = GetWindowTextLengthW(hwnd);
+      if len <= 0 {
+        return BOOL(1);
+      }
+
+      let mut buf = vec![0u16; (len + 1) as usize];
+      let written = GetWindowTextW(hwnd, &mut buf);
+      if written <= 0 {
+        return BOOL(1);
+      }
+
+      let title = String::from_utf16_lossy(&buf[..written as usize]);
+
+      let mut process_id: u32 = 0;
+      GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+
+      list.push(WindowInfo { process_id, title });
+
+      BOOL(1)
+    }
+
+    unsafe {
+      let ptr = &mut result as *mut Vec<WindowInfo>;
+      let _ = EnumWindows(Some(enum_callback), LPARAM(ptr as isize));
+    }
+
+    result
+  }
+  #[cfg(not(windows))]
+  {
+    vec![]
+  }
 }
 
 #[tauri::command]
@@ -1062,6 +1130,7 @@ pub fn run() {
       waveform_buffers: BTreeMap::new(),
     }))
     .invoke_handler(tauri::generate_handler![
+      get_window_list,
       get_audio_hosts,
       get_audio_devices,
       connect_driver,

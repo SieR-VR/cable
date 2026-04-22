@@ -6,6 +6,12 @@ import VirtualAudioInput, { VirtualAudioInputNode } from "./nodes/VirtualAudioIn
 import VirtualAudioOutput, { VirtualAudioOutputNode } from "./nodes/VirtualAudioOutput";
 import SpectrumAnalyzer, { SpectrumAnalyzerNode } from "./nodes/SpectrumAnalyzer";
 import WaveformMonitor, { WaveformMonitorNode } from "./nodes/WaveformMonitor";
+import AppAudioCapture, { AppAudioCaptureNode } from "./nodes/AppAudioCapture";
+
+export interface WindowInfo {
+  processId: number;
+  title: string;
+}
 
 export interface AudioDevice {
   id: string;
@@ -34,6 +40,7 @@ export const nodeTypes = {
   virtualAudioOutput: VirtualAudioOutput,
   spectrumAnalyzer: SpectrumAnalyzer,
   waveformMonitor: WaveformMonitor,
+  appAudioCapture: AppAudioCapture,
 } satisfies NodeTypes;
 
 export type NodeType =
@@ -42,7 +49,8 @@ export type NodeType =
   | VirtualAudioInputNode
   | VirtualAudioOutputNode
   | SpectrumAnalyzerNode
-  | WaveformMonitorNode;
+  | WaveformMonitorNode
+  | AppAudioCaptureNode;
 
 export type EdgeType = Edge<AudioEdge>;
 
@@ -58,8 +66,9 @@ export type AudioNode = {
     | "virtualAudioInput"
     | "virtualAudioOutput"
     | "spectrumAnalyzer"
-    | "waveformMonitor";
-  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string } | { fftSize: number; id: string } | { windowSize: number; id: string };
+    | "waveformMonitor"
+    | "appAudioCapture";
+  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string } | { fftSize: number; id: string } | { windowSize: number; id: string } | { processId: number; windowTitle: string; id: string };
 };
 
 export type AudioEdge = {
