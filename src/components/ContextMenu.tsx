@@ -36,6 +36,12 @@ const NODE_CATEGORIES: NodeCategory[] = [
       { type: "waveformMonitor", label: "Waveform Monitor" },
     ],
   },
+  {
+    label: "Processing",
+    items: [
+      { type: "mixer", label: "Mixer" },
+    ],
+  },
 ];
 
 export function ContextMenu() {

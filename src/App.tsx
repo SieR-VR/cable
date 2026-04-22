@@ -109,6 +109,12 @@ function App() {
             },
           };
         }
+        if (node.type === "mixer") {
+          return {
+            type: node.type,
+            data: { id: node.id },
+          };
+        }
         return {
           type: node.type,
           data: {
