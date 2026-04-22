@@ -52,6 +52,87 @@ impl std::fmt::Debug for AppAudioCaptureNode {
 // Windows WASAPI Application Loopback implementation
 // ---------------------------------------------------------------------------
 
+/// AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK (audioclientactivationparams.h)
+#[cfg(windows)]
+const AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK: u32 = 1;
+/// PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE
+#[cfg(windows)]
+const PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE: u32 = 0;
+/// AUDCLNT_BUFFERFLAGS_SILENT
+#[cfg(windows)]
+const BUFFERFLAGS_SILENT: u32 = 0x2;
+
+/// Manual layout of `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS` (C ABI).
+#[cfg(windows)]
+#[repr(C)]
+struct ProcessLoopbackParams {
+  target_process_id: u32,
+  process_loopback_mode: u32,
+}
+
+/// Manual layout of `AUDIOCLIENT_ACTIVATION_PARAMS` (C ABI).
+#[cfg(windows)]
+#[repr(C)]
+struct AudioClientActivationParams {
+  activation_type: u32,
+  process_loopback_params: ProcessLoopbackParams,
+}
+
+/// Shared state between the activation completion handler and the waiting thread.
+#[cfg(windows)]
+struct ActivationState {
+  result: Option<Result<windows::Win32::Media::Audio::IAudioClient, String>>,
+}
+
+// Safety: IAudioClient uses COM ref-counting; sending across MTA threads is safe.
+#[cfg(windows)]
+unsafe impl Send for ActivationState {}
+
+/// COM completion handler for `ActivateAudioInterfaceAsync`.
+#[cfg(windows)]
+#[windows::core::implement(windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler)]
+struct ProcessActivationHandler {
+  data: Arc<(std::sync::Mutex<ActivationState>, std::sync::Condvar)>,
+}
+
+#[cfg(windows)]
+impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
+  for ProcessActivationHandler_Impl
+{
+  fn ActivateCompleted(
+    &self,
+    activateoperation: windows_core::Ref<'_, windows::Win32::Media::Audio::IActivateAudioInterfaceAsyncOperation>,
+  ) -> windows::core::Result<()> {
+    use windows::Win32::Media::Audio::IAudioClient;
+    use windows_core::Interface;
+
+    let result: Result<IAudioClient, String> = (|| {
+      let op = activateoperation
+        .as_ref()
+        .ok_or_else(|| "Null activateoperation in ActivateCompleted".to_string())?;
+      let mut hr = windows::core::HRESULT(0);
+      let mut unk: Option<windows_core::IUnknown> = None;
+      unsafe {
+        op.GetActivateResult(&mut hr, &mut unk)
+          .map_err(|e| format!("GetActivateResult: {e}"))?;
+      }
+      if hr.is_err() {
+        return Err(format!("Activation failed with HRESULT 0x{:08X}", hr.0 as u32));
+      }
+      unk
+        .ok_or_else(|| "Activation returned no interface".to_string())?
+        .cast::<IAudioClient>()
+        .map_err(|e| format!("Cast to IAudioClient: {e}"))
+    })();
+
+    let (mutex, condvar) = &*self.data;
+    let mut guard = mutex.lock().unwrap();
+    guard.result = Some(result);
+    condvar.notify_all();
+    Ok(())
+  }
+}
+
 #[cfg(windows)]
 fn spawn_process_loopback_thread(
   process_id: u32,
@@ -84,32 +165,6 @@ unsafe fn wasapi_process_loopback_thread(
   CoUninitialize();
 }
 
-/// AUDIOCLIENT_ACTIVATION_TYPE values (audioclientactivationparams.h)
-#[cfg(windows)]
-const AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK: u32 = 1;
-/// PROCESS_LOOPBACK_MODE values
-#[cfg(windows)]
-const PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE: u32 = 0;
-/// AUDCLNT_BUFFERFLAGS_SILENT
-#[cfg(windows)]
-const BUFFERFLAGS_SILENT: u32 = 0x2;
-
-/// Manual layout mirrors `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS` (C ABI).
-#[cfg(windows)]
-#[repr(C)]
-struct ProcessLoopbackParams {
-  target_process_id: u32,
-  process_loopback_mode: u32,
-}
-
-/// Manual layout mirrors `AUDIOCLIENT_ACTIVATION_PARAMS` (C ABI).
-#[cfg(windows)]
-#[repr(C)]
-struct AudioClientActivationParams {
-  activation_type: u32,
-  process_loopback_params: ProcessLoopbackParams,
-}
-
 #[cfg(windows)]
 unsafe fn wasapi_process_loopback_inner(
   process_id: u32,
@@ -117,26 +172,27 @@ unsafe fn wasapi_process_loopback_inner(
   stop_flag: &AtomicBool,
 ) -> Result<(), String> {
   use std::mem::ManuallyDrop;
+  use std::sync::{Condvar, Mutex};
   use windows::Win32::Media::Audio::{
-    IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, eConsole, eRender,
+    ActivateAudioInterfaceAsync, IAudioCaptureClient, IAudioClient,
+    IActivateAudioInterfaceCompletionHandler, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_LOOPBACK,
   };
-  use windows::Win32::System::Com::{
-    CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, CLSCTX_INPROC_SERVER,
-  };
+  use windows::Win32::System::Com::CoTaskMemFree;
   use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
   };
   use windows::Win32::System::Variant::VT_BLOB;
+  use windows::core::{Interface, PCWSTR};
 
-  // BLOB type: cbSize (u32) + pBlobData (*mut u8)
+  // BLOB type: cbSize (u32) + padding (4) + pBlobData (*mut u8) on 64-bit.
   #[repr(C)]
   struct BlobData {
     cb_size: u32,
     p_blob_data: *mut u8,
   }
 
-  // Build activation params on the stack; must outlive the PROPVARIANT reference.
+  // Activation params must remain valid until ActivateCompleted fires.
   let mut activation_params = AudioClientActivationParams {
     activation_type: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
     process_loopback_params: ProcessLoopbackParams {
@@ -145,12 +201,9 @@ unsafe fn wasapi_process_loopback_inner(
     },
   };
 
-  // Construct a PROPVARIANT with vt=VT_BLOB pointing at the activation params.
-  //
-  // SAFETY: We wrap in ManuallyDrop to prevent Drop from running. PROPVARIANT's
-  // Drop calls PropVariantClear, which for VT_BLOB calls CoTaskMemFree on
-  // pBlobData. Our pBlobData points to stack memory (activation_params), so
-  // letting PropVariantClear run would free a stack address and corrupt the heap.
+  // Build a VT_BLOB PROPVARIANT pointing at activation_params.
+  // Wrapped in ManuallyDrop so PropVariantClear never runs — it would otherwise
+  // call CoTaskMemFree on our stack pointer and corrupt the heap.
   let prop_variant = ManuallyDrop::new({
     let mut pv: PROPVARIANT = std::mem::zeroed();
     let inner = &mut pv.Anonymous.Anonymous;
@@ -162,23 +215,54 @@ unsafe fn wasapi_process_loopback_inner(
     pv
   });
 
-  // 1. Create device enumerator.
-  let enumerator: IMMDeviceEnumerator =
-    CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER)
-      .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) failed: {e}"))?;
+  // 1. Activate IAudioClient via ActivateAudioInterfaceAsync on the virtual
+  //    process-loopback device.  This is the only supported API for per-process
+  //    capture; IMMDevice::Activate ignores the process filter and captures the
+  //    entire render mix, causing a feedback loop when a Cable output node is
+  //    connected to the same endpoint.
+  let shared_data: Arc<(Mutex<ActivationState>, Condvar)> = Arc::new((
+    Mutex::new(ActivationState { result: None }),
+    Condvar::new(),
+  ));
 
-  // 2. Get the default render endpoint — required as the activation target for
-  //    process loopback (the actual audio is filtered by process ID via params).
-  let device = enumerator
-    .GetDefaultAudioEndpoint(eRender, eConsole)
-    .map_err(|e| format!("GetDefaultAudioEndpoint failed: {e}"))?;
+  let handler: IActivateAudioInterfaceCompletionHandler =
+    ProcessActivationHandler { data: shared_data.clone() }.into();
 
-  // 3. Activate IAudioClient with process-loopback params.
-  let audio_client: IAudioClient = device
-    .Activate(CLSCTX_ALL, Some(&*prop_variant))
-    .map_err(|e| format!("IMMDevice::Activate(process loopback) failed: {e}"))?;
+  // "VAD\Process_Loopback" — virtual device path for process loopback capture.
+  let device_path: Vec<u16> = "VAD\\Process_Loopback\0".encode_utf16().collect();
 
-  // 4. Query mix format (determines channels and sample width).
+  let _async_op = ActivateAudioInterfaceAsync(
+    PCWSTR(device_path.as_ptr()),
+    &IAudioClient::IID,
+    Some(&*prop_variant as *const _),
+    &handler,
+  )
+  .map_err(|e| format!("ActivateAudioInterfaceAsync failed: {e}"))?;
+
+  // Block until the completion handler signals (5 s timeout).
+  let audio_client: IAudioClient = {
+    let (mutex, condvar) = &*shared_data;
+    let mut guard = mutex.lock().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+      if guard.result.is_some() {
+        break;
+      }
+      let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+      if remaining.is_zero() {
+        return Err("ActivateAudioInterfaceAsync timed out".to_string());
+      }
+      let (g, _) = condvar.wait_timeout(guard, remaining).unwrap();
+      guard = g;
+    }
+    guard
+      .result
+      .take()
+      .unwrap()
+      .map_err(|e| format!("Audio client activation failed: {e}"))?
+  };
+
+  // 2. Query the mix format.
   let mix_fmt_ptr = audio_client
     .GetMixFormat()
     .map_err(|e| format!("GetMixFormat failed: {e}"))?;
@@ -186,10 +270,7 @@ unsafe fn wasapi_process_loopback_inner(
   let channels = (*mix_fmt_ptr).nChannels as usize;
   let bits_per_sample = (*mix_fmt_ptr).wBitsPerSample;
 
-  // 5. Initialize in shared loopback mode.
-  //    AUDCLNT_STREAMFLAGS_LOOPBACK is required even for process loopback;
-  //    without it the audio client is treated as a render stream and
-  //    GetService(IAudioCaptureClient) fails with AUDCLNT_E_WRONG_ENDPOINT_TYPE.
+  // 3. Initialize in shared loopback mode.
   let init_result = audio_client.Initialize(
     AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -201,7 +282,7 @@ unsafe fn wasapi_process_loopback_inner(
   CoTaskMemFree(Some(mix_fmt_ptr as *const _));
   init_result.map_err(|e| format!("IAudioClient::Initialize failed: {e}"))?;
 
-  // 6. Obtain capture client and start the stream.
+  // 4. Obtain capture client and start streaming.
   let capture_client: IAudioCaptureClient = audio_client
     .GetService()
     .map_err(|e| format!("GetService(IAudioCaptureClient) failed: {e}"))?;
@@ -210,7 +291,7 @@ unsafe fn wasapi_process_loopback_inner(
     .Start()
     .map_err(|e| format!("IAudioClient::Start failed: {e}"))?;
 
-  // 7. Capture loop.
+  // 5. Capture loop.
   while !stop_flag.load(Ordering::Relaxed) {
     let mut data_ptr: *mut u8 = std::ptr::null_mut();
     let mut frames_available: u32 = 0;
