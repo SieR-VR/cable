@@ -146,18 +146,21 @@ unsafe fn wasapi_process_loopback_inner(
   };
 
   // Construct a PROPVARIANT with vt=VT_BLOB pointing at the activation params.
-  let mut prop_variant: PROPVARIANT = std::mem::zeroed();
-  {
-    let inner = &mut prop_variant.Anonymous.Anonymous;
-    // Write over the ManuallyDrop<PROPVARIANT_0_0> in place.
+  //
+  // SAFETY: We wrap in ManuallyDrop to prevent Drop from running. PROPVARIANT's
+  // Drop calls PropVariantClear, which for VT_BLOB calls CoTaskMemFree on
+  // pBlobData. Our pBlobData points to stack memory (activation_params), so
+  // letting PropVariantClear run would free a stack address and corrupt the heap.
+  let prop_variant = ManuallyDrop::new({
+    let mut pv: PROPVARIANT = std::mem::zeroed();
+    let inner = &mut pv.Anonymous.Anonymous;
     let inner_ref = &mut *(inner as *mut ManuallyDrop<PROPVARIANT_0_0> as *mut PROPVARIANT_0_0);
     inner_ref.vt = VT_BLOB;
-    // PROPVARIANT_0_0_0 is a union; the blob variant starts at the same offset.
-    // We write cbSize and pBlobData directly by casting to our BlobData layout.
     let blob_ptr = &mut inner_ref.Anonymous as *mut PROPVARIANT_0_0_0 as *mut BlobData;
     (*blob_ptr).cb_size = std::mem::size_of::<AudioClientActivationParams>() as u32;
     (*blob_ptr).p_blob_data = &mut activation_params as *mut _ as *mut u8;
-  }
+    pv
+  });
 
   // 1. Create device enumerator.
   let enumerator: IMMDeviceEnumerator =
@@ -172,7 +175,7 @@ unsafe fn wasapi_process_loopback_inner(
 
   // 3. Activate IAudioClient with process-loopback params.
   let audio_client: IAudioClient = device
-    .Activate(CLSCTX_ALL, Some(&prop_variant))
+    .Activate(CLSCTX_ALL, Some(&*prop_variant))
     .map_err(|e| format!("IMMDevice::Activate(process loopback) failed: {e}"))?;
 
   // 4. Query mix format (determines channels and sample width).
