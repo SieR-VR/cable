@@ -11,6 +11,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 
+// Cast to a generic signature so mockResolvedValue accepts any value;
+// the typed overloads in ipc.d.ts cause TypeScript to infer the last
+// overload's return type (Record<string, NodeRenderData>) for vi.mocked.
+const mockInvoke = vi.mocked(invoke as (...args: unknown[]) => Promise<unknown>);
+
 const mockWindows: WindowInfo[] = [
   { processId: 1234, title: "Visual Studio Code" },
   { processId: 5678, title: "Spotify" },
@@ -45,12 +50,12 @@ function renderInProvider(id?: string, data?: object) {
 }
 
 beforeEach(() => {
-  vi.mocked(invoke).mockResolvedValue([]);
+  mockInvoke.mockResolvedValue([]);
 });
 
 describe("AppAudioCapture", () => {
   it("renders source handle only (source node)", async () => {
-    vi.mocked(invoke).mockResolvedValue(mockWindows);
+    mockInvoke.mockResolvedValue(mockWindows);
     renderInProvider();
     expect(document.querySelector('[data-handleid="AppAudioCapture-source"]')).toBeTruthy();
     expect(document.querySelector('[data-handleid="AppAudioCapture-target"]')).toBeFalsy();
@@ -62,20 +67,20 @@ describe("AppAudioCapture", () => {
   });
 
   it("shows loading state initially", () => {
-    vi.mocked(invoke).mockReturnValue(new Promise(() => {}));
+    mockInvoke.mockReturnValue(new Promise(() => {}));
     renderInProvider();
     expect(screen.getByText("Loading windows...")).toBeTruthy();
   });
 
   it("shows window dropdown after invoke resolves", async () => {
-    vi.mocked(invoke).mockResolvedValue(mockWindows);
+    mockInvoke.mockResolvedValue(mockWindows);
     const { findByText } = renderInProvider();
     expect(await findByText("Visual Studio Code")).toBeTruthy();
     expect(await findByText("Spotify")).toBeTruthy();
   });
 
   it("shows PID when a window is selected", () => {
-    vi.mocked(invoke).mockResolvedValue(mockWindows);
+    mockInvoke.mockResolvedValue(mockWindows);
     renderInProvider("node-1", { processId: 1234, windowTitle: "Visual Studio Code" });
     expect(screen.getByText("PID: 1234")).toBeTruthy();
   });
