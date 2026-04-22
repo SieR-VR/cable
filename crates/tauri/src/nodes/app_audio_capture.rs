@@ -175,10 +175,11 @@ unsafe fn wasapi_process_loopback_inner(
   use std::sync::{Condvar, Mutex};
   use windows::Win32::Media::Audio::{
     ActivateAudioInterfaceAsync, IAudioCaptureClient, IAudioClient,
-    IActivateAudioInterfaceCompletionHandler, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_LOOPBACK,
+    IActivateAudioInterfaceCompletionHandler, IMMDeviceEnumerator,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    MMDeviceEnumerator, eRender, eConsole,
   };
-  use windows::Win32::System::Com::CoTaskMemFree;
+  use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
   use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
   };
@@ -262,15 +263,30 @@ unsafe fn wasapi_process_loopback_inner(
       .map_err(|e| format!("Audio client activation failed: {e}"))?
   };
 
-  // 2. Query the mix format.
-  let mix_fmt_ptr = audio_client
+  // 2. Get the mix format from the default render endpoint.
+  //    The process loopback IAudioClient returns E_NOTIMPL for GetMixFormat,
+  //    so we query it from the render endpoint instead (process loopback always
+  //    captures what the render device outputs, so the formats match).
+  let enumerator: IMMDeviceEnumerator =
+    CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+      .map_err(|e| format!("CoCreateInstance(IMMDeviceEnumerator): {e}"))?;
+
+  let render_device = enumerator
+    .GetDefaultAudioEndpoint(eRender, eConsole)
+    .map_err(|e| format!("GetDefaultAudioEndpoint: {e}"))?;
+
+  let render_client: IAudioClient = render_device
+    .Activate(CLSCTX_ALL, None)
+    .map_err(|e| format!("IMMDevice::Activate(IAudioClient): {e}"))?;
+
+  let mix_fmt_ptr = render_client
     .GetMixFormat()
     .map_err(|e| format!("GetMixFormat failed: {e}"))?;
 
   let channels = (*mix_fmt_ptr).nChannels as usize;
   let bits_per_sample = (*mix_fmt_ptr).wBitsPerSample;
 
-  // 3. Initialize in shared loopback mode.
+  // 3. Initialize the process loopback client with the render endpoint's format.
   let init_result = audio_client.Initialize(
     AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_LOOPBACK,
