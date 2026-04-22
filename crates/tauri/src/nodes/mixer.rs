@@ -54,10 +54,15 @@ impl NodeTrait for MixerNode {
     let mixed: Vec<f32> = if inputs.is_empty() {
       Vec::new()
     } else {
-      let len = inputs.iter().map(|s| s.len()).max().unwrap_or(0);
+      // Use the minimum buffer length across all inputs to avoid zero-padding.
+      // Padding shorter inputs up to the longest (max strategy) would insert a
+      // step-function discontinuity mid-buffer when one source runs short,
+      // which causes audible clicks. Capping at the minimum ensures every
+      // position has a real sample from every connected source.
+      let len = inputs.iter().map(|s| s.len()).min().unwrap_or(0);
       let mut buf = vec![0.0f32; len];
       for input in &inputs {
-        for (i, &s) in input.iter().enumerate() {
+        for (i, &s) in input[..len].iter().enumerate() {
           buf[i] += s;
         }
       }
@@ -87,10 +92,10 @@ mod tests {
     if inputs.is_empty() {
       return Vec::new();
     }
-    let len = inputs.iter().map(|s| s.len()).max().unwrap_or(0);
+    let len = inputs.iter().map(|s| s.len()).min().unwrap_or(0);
     let mut buf = vec![0.0f32; len];
     for input in &inputs {
-      for (i, &s) in input.iter().enumerate() {
+      for (i, &s) in input[..len].iter().enumerate() {
         buf[i] += s;
       }
     }
@@ -120,12 +125,13 @@ mod tests {
   }
 
   #[test]
-  fn test_unequal_length_inputs_padded() {
+  fn test_unequal_length_inputs_min_length() {
+    // With min strategy, output length = shortest input (2 samples).
+    // The third sample from the longer input is discarded.
     let result = mix(vec![vec![0.5, 0.5, 0.5], vec![0.1, 0.1]]);
-    assert_eq!(result.len(), 3);
+    assert_eq!(result.len(), 2);
     assert!((result[0] - 0.6).abs() < 1e-5);
     assert!((result[1] - 0.6).abs() < 1e-5);
-    assert!((result[2] - 0.5).abs() < 1e-5);
   }
 
   #[test]
