@@ -19,6 +19,7 @@ use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
 use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use nodes::waveform_monitor::WaveformMonitorNode;
+use nodes::app_audio_capture::AppAudioCaptureNode;
 use nodes::NodeTrait;
 
 /// A virtual audio device managed by the driver, independent of the audio graph.
@@ -154,6 +155,7 @@ pub(crate) enum AudioNode {
   VirtualAudioOutput(VirtualAudioOutputNode),
   SpectrumAnalyzer(SpectrumAnalyzerNode),
   WaveformMonitor(WaveformMonitorNode),
+  AppAudioCapture(AppAudioCaptureNode),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

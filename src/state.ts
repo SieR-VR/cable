@@ -79,7 +79,8 @@ export interface AppState {
       | "virtualAudioInput"
       | "virtualAudioOutput"
       | "spectrumAnalyzer"
-      | "waveformMonitor",
+      | "waveformMonitor"
+      | "appAudioCapture",
   ) => void;
   removeNodeAtContextMenu: () => void;
 

@@ -1,0 +1,79 @@
+import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+
+import { formatAudioEdgeType } from "@/lib/utils";
+import { AppState, useAppStore } from "@/state";
+import { AudioDevice } from "@/types";
+
+export type AppAudioCaptureNodeData = {
+  device: AudioDevice | null;
+  edgeType: string | null;
+};
+
+export type AppAudioCaptureNode = Node<AppAudioCaptureNodeData, "appAudioCapture">;
+
+const selector = (id: string) => (store: AppState) => ({
+  setDevice: (device: AudioDevice | null) => {
+    const edgeType =
+      device && formatAudioEdgeType(device.frequency, device.channels, device.bitsPerSample);
+
+    store.updateNode(id, { device, edgeType });
+  },
+});
+
+export default function AppAudioCapture({ id, data }: NodeProps<AppAudioCaptureNode>) {
+  const { availableAudioOutputDevices } = useAppStore();
+
+  const { setDevice } = useAppStore(selector(id));
+  const selectedDevice = data.device as AudioDevice | null;
+
+  return (
+    <div className="bg-gray-700 rounded-lg flex flex-col text-white">
+      {/* Header */}
+      <div className="w-full h-6 bg-orange-500 rounded-t-lg flex items-center text-sm font-bold p-2 drag-handle__custom">
+        App Audio Capture
+      </div>
+      <div className="flex flex-col gap-2 p-2">
+        <div className="w-full flex flex-col">
+          <select
+            className="w-full p-1 rounded bg-gray-500"
+            onChange={(e) => {
+              setDevice(
+                availableAudioOutputDevices?.find((device) => device.id === e.target.value) ||
+                  null,
+              );
+            }}
+          >
+            {availableAudioOutputDevices !== null ? (
+              <>
+                <option value="">-- Select an audio output device --</option>
+                {availableAudioOutputDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {device.descriptions?.join("\n")}
+                  </option>
+                ))}
+              </>
+            ) : (
+              <option disabled>Loading devices...</option>
+            )}
+          </select>
+        </div>
+        {availableAudioOutputDevices === null && (
+          <div className="text-xs text-gray-400">{"Loading..."}</div>
+        )}
+        {selectedDevice && (
+          <div className="flex flex-row gap-2 items-center">
+            <span className="rounded-md text-xs bg-amber-200 p-1">{`${selectedDevice.frequency}Hz`}</span>
+            <span className="rounded-md text-xs bg-blue-200 p-1">{`${selectedDevice.channels}ch`}</span>
+            <span className="rounded-md text-xs bg-lime-200 p-1">{`${selectedDevice.bitsPerSample}bit`}</span>
+          </div>
+        )}
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="AppAudioCapture-source"
+          className="w-4 h-4 bg-green-500 rounded-full"
+        />
+      </div>
+    </div>
+  );
+}

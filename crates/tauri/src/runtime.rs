@@ -94,6 +94,7 @@ impl Runtime {
       AudioNode::VirtualAudioOutput(n) => n.id(),
       AudioNode::SpectrumAnalyzer(n) => n.id(),
       AudioNode::WaveformMonitor(n) => n.id(),
+      AudioNode::AppAudioCapture(n) => n.id(),
     }
   }
 
@@ -141,6 +142,7 @@ impl Runtime {
         AudioNode::VirtualAudioOutput(n) => n.init(self)?,
         AudioNode::SpectrumAnalyzer(n) => n.init(self)?,
         AudioNode::WaveformMonitor(n) => n.init(self)?,
+        AudioNode::AppAudioCapture(n) => n.init(self)?,
       }
     }
     self.nodes = nodes;
@@ -157,6 +159,7 @@ impl Runtime {
         AudioNode::VirtualAudioOutput(n) => n.dispose(self)?,
         AudioNode::SpectrumAnalyzer(n) => n.dispose(self)?,
         AudioNode::WaveformMonitor(n) => n.dispose(self)?,
+        AudioNode::AppAudioCapture(n) => n.dispose(self)?,
       }
     }
     self.nodes = nodes;
@@ -183,6 +186,7 @@ impl Runtime {
         AudioNode::VirtualAudioOutput(n) => n.process(self, &state)?,
         AudioNode::SpectrumAnalyzer(n) => n.process(self, &state)?,
         AudioNode::WaveformMonitor(n) => n.process(self, &state)?,
+        AudioNode::AppAudioCapture(n) => n.process(self, &state)?,
       };
       for (edge_id, values) in node_output {
         state.edge_values.insert(edge_id, values);
