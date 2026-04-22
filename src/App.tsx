@@ -96,6 +96,16 @@ function App() {
             },
           };
         }
+        if (node.type === "appAudioCapture") {
+          return {
+            type: node.type,
+            data: {
+              id: node.id,
+              processId: (node.data as any).processId ?? 0,
+              windowTitle: (node.data as any).windowTitle ?? "",
+            },
+          };
+        }
         return {
           type: node.type,
           data: {

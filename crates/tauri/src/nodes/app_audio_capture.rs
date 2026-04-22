@@ -14,33 +14,26 @@ use serde::{Deserialize, Serialize};
 use ringbuf::HeapProd;
 
 use crate::{
-  AudioDevice,
   nodes::NodeTrait,
   runtime::{Runtime, RuntimeState},
 };
 
-/// Source node that captures loopback audio from a Windows render endpoint via WASAPI.
-///
-/// Loopback capture lets Cable intercept all audio playing through a selected output
-/// device (speakers, headphones, virtual cable, etc.) and route it into the audio graph
-/// like any other source node.
+/// Source node that captures audio from a specific application process via the
+/// Windows WASAPI Application Loopback API (requires Windows 10 20H1 / build 19041+).
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppAudioCaptureNode {
   /// React Flow node ID.
   id: String,
-  /// The Windows render (output) device to loopback-capture from.
-  device: AudioDevice,
+  /// Target process ID obtained from the window list.
+  process_id: u32,
+  /// Display name of the selected window (informational only).
+  window_title: String,
 
-  /// Background WASAPI loopback capture thread.
   #[serde(skip)]
   thread_handle: Option<std::thread::JoinHandle<()>>,
-
-  /// Signals the capture thread to stop.
   #[serde(skip)]
   stop_flag: Option<Arc<AtomicBool>>,
-
-  /// Consumer end of the lock-free ring buffer fed by the capture thread.
   #[serde(skip)]
   ring_consumer: Option<HeapCons<f32>>,
 }
@@ -49,19 +42,19 @@ impl std::fmt::Debug for AppAudioCaptureNode {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("AppAudioCaptureNode")
       .field("id", &self.id)
-      .field("device", &self.device)
+      .field("process_id", &self.process_id)
+      .field("window_title", &self.window_title)
       .finish()
   }
 }
 
 // ---------------------------------------------------------------------------
-// Windows WASAPI loopback implementation
+// Windows WASAPI Application Loopback implementation
 // ---------------------------------------------------------------------------
 
-/// Spawn the loopback capture thread and return a (JoinHandle, consumer) pair.
 #[cfg(windows)]
-fn spawn_loopback_thread(
-  device_id: String,
+fn spawn_process_loopback_thread(
+  process_id: u32,
   rb_size: usize,
   stop_flag: Arc<AtomicBool>,
 ) -> (std::thread::JoinHandle<()>, HeapCons<f32>) {
@@ -69,109 +62,155 @@ fn spawn_loopback_thread(
   let (producer, consumer) = rb.split();
 
   let handle = std::thread::spawn(move || unsafe {
-    wasapi_loopback_thread(device_id, producer, stop_flag);
+    wasapi_process_loopback_thread(process_id, producer, stop_flag);
   });
 
   (handle, consumer)
 }
 
 #[cfg(windows)]
-unsafe fn wasapi_loopback_thread(
-  device_id: String,
+unsafe fn wasapi_process_loopback_thread(
+  process_id: u32,
   mut producer: HeapProd<f32>,
   stop_flag: Arc<AtomicBool>,
 ) {
   use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
-
-  // Each thread must initialize COM independently.
   let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
-  if let Err(e) = wasapi_loopback_inner(&device_id, &mut producer, &stop_flag) {
-    eprintln!("AppAudioCapture WASAPI error for '{}': {}", device_id, e);
+  if let Err(e) = wasapi_process_loopback_inner(process_id, &mut producer, &stop_flag) {
+    eprintln!("AppAudioCapture process loopback error for pid {}: {}", process_id, e);
   }
 
   CoUninitialize();
 }
 
+/// AUDIOCLIENT_ACTIVATION_TYPE values (audioclientactivationparams.h)
 #[cfg(windows)]
-unsafe fn wasapi_loopback_inner(
-  device_id: &str,
+const AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK: u32 = 1;
+/// PROCESS_LOOPBACK_MODE values
+#[cfg(windows)]
+const PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE: u32 = 0;
+/// AUDCLNT_BUFFERFLAGS_SILENT
+#[cfg(windows)]
+const BUFFERFLAGS_SILENT: u32 = 0x2;
+
+/// Manual layout mirrors `AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS` (C ABI).
+#[cfg(windows)]
+#[repr(C)]
+struct ProcessLoopbackParams {
+  target_process_id: u32,
+  process_loopback_mode: u32,
+}
+
+/// Manual layout mirrors `AUDIOCLIENT_ACTIVATION_PARAMS` (C ABI).
+#[cfg(windows)]
+#[repr(C)]
+struct AudioClientActivationParams {
+  activation_type: u32,
+  process_loopback_params: ProcessLoopbackParams,
+}
+
+#[cfg(windows)]
+unsafe fn wasapi_process_loopback_inner(
+  process_id: u32,
   producer: &mut HeapProd<f32>,
   stop_flag: &AtomicBool,
 ) -> Result<(), String> {
+  use std::mem::ManuallyDrop;
   use windows::Win32::Media::Audio::{
     IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-    AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_SHAREMODE_SHARED, eConsole, eRender,
   };
-  use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, CLSCTX_INPROC_SERVER};
-  use windows::core::PCWSTR;
+  use windows::Win32::System::Com::{
+    CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, CLSCTX_INPROC_SERVER,
+  };
+  use windows::Win32::System::Com::StructuredStorage::{
+    PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
+  };
+  use windows::Win32::System::Variant::VT_BLOB;
 
-  // AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000
-  const STREAMFLAGS_LOOPBACK: u32 = 0x0002_0000;
-  // AUDCLNT_BUFFERFLAGS_SILENT = 0x2
-  const BUFFERFLAGS_SILENT: u32 = 0x2;
+  // BLOB type: cbSize (u32) + pBlobData (*mut u8)
+  #[repr(C)]
+  struct BlobData {
+    cb_size: u32,
+    p_blob_data: *mut u8,
+  }
 
-  // 1. Create device enumerator (matches pattern in lib.rs)
+  // Build activation params on the stack; must outlive the PROPVARIANT reference.
+  let mut activation_params = AudioClientActivationParams {
+    activation_type: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+    process_loopback_params: ProcessLoopbackParams {
+      target_process_id: process_id,
+      process_loopback_mode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+    },
+  };
+
+  // Construct a PROPVARIANT with vt=VT_BLOB pointing at the activation params.
+  let mut prop_variant: PROPVARIANT = std::mem::zeroed();
+  {
+    let inner = &mut prop_variant.Anonymous.Anonymous;
+    // Write over the ManuallyDrop<PROPVARIANT_0_0> in place.
+    let inner_ref = &mut *(inner as *mut ManuallyDrop<PROPVARIANT_0_0> as *mut PROPVARIANT_0_0);
+    inner_ref.vt = VT_BLOB;
+    // PROPVARIANT_0_0_0 is a union; the blob variant starts at the same offset.
+    // We write cbSize and pBlobData directly by casting to our BlobData layout.
+    let blob_ptr = &mut inner_ref.Anonymous as *mut PROPVARIANT_0_0_0 as *mut BlobData;
+    (*blob_ptr).cb_size = std::mem::size_of::<AudioClientActivationParams>() as u32;
+    (*blob_ptr).p_blob_data = &mut activation_params as *mut _ as *mut u8;
+  }
+
+  // 1. Create device enumerator.
   let enumerator: IMMDeviceEnumerator =
     CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER)
-      .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) failed: {}", e))?;
+      .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) failed: {e}"))?;
 
-  // 2. Get the render endpoint by its Windows MM endpoint ID string.
-  //    cpal on Windows returns this string from DeviceId::to_string().
-  let device_id_wide: Vec<u16> = device_id
-    .encode_utf16()
-    .chain(std::iter::once(0))
-    .collect();
+  // 2. Get the default render endpoint — required as the activation target for
+  //    process loopback (the actual audio is filtered by process ID via params).
   let device = enumerator
-    .GetDevice(PCWSTR(device_id_wide.as_ptr()))
-    .map_err(|e| format!("GetDevice('{}') failed: {}", device_id, e))?;
+    .GetDefaultAudioEndpoint(eRender, eConsole)
+    .map_err(|e| format!("GetDefaultAudioEndpoint failed: {e}"))?;
 
-  // 3. Activate an IAudioClient on the render endpoint
+  // 3. Activate IAudioClient with process-loopback params.
   let audio_client: IAudioClient = device
-    .Activate(CLSCTX_ALL, None)
-    .map_err(|e| format!("IMMDevice::Activate(IAudioClient) failed: {}", e))?;
+    .Activate(CLSCTX_ALL, Some(&prop_variant))
+    .map_err(|e| format!("IMMDevice::Activate(process loopback) failed: {e}"))?;
 
-  // 4. Get the engine mix format (heap-allocated, must be freed with CoTaskMemFree)
+  // 4. Query mix format (determines channels and sample width).
   let mix_fmt_ptr = audio_client
     .GetMixFormat()
-    .map_err(|e| format!("IAudioClient::GetMixFormat failed: {}", e))?;
+    .map_err(|e| format!("GetMixFormat failed: {e}"))?;
 
   let channels = (*mix_fmt_ptr).nChannels as usize;
   let bits_per_sample = (*mix_fmt_ptr).wBitsPerSample;
 
-  // 5. Initialize for shared-mode loopback capture
-  //    hnsBufferDuration = 0  → WASAPI chooses the default buffer size
-  //    hnsPeriodicity    = 0  → required for shared mode
+  // 5. Initialize in shared mode. No explicit loopback flag — the activation
+  //    params already configure process loopback routing.
   let init_result = audio_client.Initialize(
     AUDCLNT_SHAREMODE_SHARED,
-    STREAMFLAGS_LOOPBACK,
+    0,
     0i64,
     0i64,
     mix_fmt_ptr,
     None,
   );
   CoTaskMemFree(Some(mix_fmt_ptr as *const _));
-  init_result.map_err(|e| format!("IAudioClient::Initialize(loopback) failed: {}", e))?;
+  init_result.map_err(|e| format!("IAudioClient::Initialize failed: {e}"))?;
 
-  // 6. Obtain the capture client service
+  // 6. Obtain capture client and start the stream.
   let capture_client: IAudioCaptureClient = audio_client
     .GetService()
-    .map_err(|e| format!("IAudioClient::GetService failed: {}", e))?;
+    .map_err(|e| format!("GetService(IAudioCaptureClient) failed: {e}"))?;
 
-  // 7. Start the stream
   audio_client
     .Start()
-    .map_err(|e| format!("IAudioClient::Start failed: {}", e))?;
+    .map_err(|e| format!("IAudioClient::Start failed: {e}"))?;
 
-  // 8. Capture loop — poll until stop_flag is set
+  // 7. Capture loop.
   while !stop_flag.load(Ordering::Relaxed) {
     let mut data_ptr: *mut u8 = std::ptr::null_mut();
     let mut frames_available: u32 = 0;
     let mut flags: u32 = 0;
 
-    // GetBuffer returns AUDCLNT_S_BUFFER_EMPTY (a success code, not an error) when
-    // no new frames are ready; in that case frames_available == 0 and we must NOT
-    // call ReleaseBuffer.
     let _ = capture_client.GetBuffer(&mut data_ptr, &mut frames_available, &mut flags, None, None);
 
     if frames_available == 0 {
@@ -182,35 +221,28 @@ unsafe fn wasapi_loopback_inner(
     let sample_count = frames_available as usize * channels;
 
     if (flags & BUFFERFLAGS_SILENT) != 0 || data_ptr.is_null() {
-      // Audio engine signalled silence (e.g. nothing is playing) — push zeros
       let silence = vec![0.0f32; sample_count];
       producer.push_slice(&silence);
     } else {
       match bits_per_sample {
         32 => {
-          // IEEE float: most common format for WASAPI loopback on Windows 10+
           let slice = std::slice::from_raw_parts(data_ptr as *const f32, sample_count);
           producer.push_slice(slice);
         }
         16 => {
           let slice = std::slice::from_raw_parts(data_ptr as *const i16, sample_count);
-          let f32s: Vec<f32> = slice
-            .iter()
-            .map(|&s| s as f32 / i16::MAX as f32)
-            .collect();
+          let f32s: Vec<f32> = slice.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
           producer.push_slice(&f32s);
         }
         _ => {
-          // Unsupported format — push silence to avoid gaps downstream
-          let silence = vec![0.0f32; sample_count];
-          producer.push_slice(&silence);
+          producer.push_slice(&vec![0.0f32; sample_count]);
         }
       }
     }
 
     capture_client
       .ReleaseBuffer(frames_available)
-      .map_err(|e| format!("IAudioCaptureClient::ReleaseBuffer failed: {}", e))?;
+      .map_err(|e| format!("ReleaseBuffer failed: {e}"))?;
   }
 
   let _ = audio_client.Stop();
@@ -229,39 +261,26 @@ impl NodeTrait for AppAudioCaptureNode {
   fn init(&mut self, runtime: &Runtime) -> Result<(), String> {
     #[cfg(windows)]
     {
-      println!(
-        "Initializing AppAudioCapture node: {} (device={})",
-        self.id, self.device.id
-      );
-
-      let rb_size = runtime.buffer_size as usize * self.device.channels as usize * 8;
+      // 2 channels * 8× headroom is a safe default; actual channel count is
+      // determined from GetMixFormat inside the capture thread.
+      let rb_size = runtime.buffer_size as usize * 2 * 8;
       let stop_flag = Arc::new(AtomicBool::new(false));
-      let (handle, consumer) = spawn_loopback_thread(
-        self.device.id.clone(),
-        rb_size,
-        stop_flag.clone(),
-      );
+      let (handle, consumer) =
+        spawn_process_loopback_thread(self.process_id, rb_size, stop_flag.clone());
 
       self.stop_flag = Some(stop_flag);
       self.thread_handle = Some(handle);
       self.ring_consumer = Some(consumer);
-
-      println!(
-        "AppAudioCapture node '{}' initialized (rb_size={})",
-        self.id, rb_size
-      );
       Ok(())
     }
     #[cfg(not(windows))]
     {
       let _ = runtime;
-      Err("AppAudioCapture node requires Windows".to_string())
+      Err("AppAudioCapture requires Windows".to_string())
     }
   }
 
   fn dispose(&mut self, _runtime: &Runtime) -> Result<(), String> {
-    println!("Disposing AppAudioCapture node: {}", self.id);
-
     if let Some(flag) = self.stop_flag.take() {
       flag.store(true, Ordering::Relaxed);
     }
@@ -269,7 +288,6 @@ impl NodeTrait for AppAudioCaptureNode {
       let _ = handle.join();
     }
     self.ring_consumer.take();
-
     Ok(())
   }
 
@@ -309,14 +327,8 @@ mod tests {
   fn make_node() -> AppAudioCaptureNode {
     AppAudioCaptureNode {
       id: "test-node".to_string(),
-      device: crate::AudioDevice {
-        id: "test-device".to_string(),
-        readable_name: "Test Output".to_string(),
-        frequency: 48000,
-        channels: 2,
-        bits_per_sample: 32,
-        descriptions: vec![],
-      },
+      process_id: 1234,
+      window_title: "Test Window".to_string(),
       thread_handle: None,
       stop_flag: None,
       ring_consumer: None,
@@ -332,7 +344,6 @@ mod tests {
   #[test]
   fn test_dispose_without_init_is_safe() {
     let mut node = make_node();
-    // All runtime fields are None; dispose should be a no-op without panicking.
     assert!(node.stop_flag.is_none());
     assert!(node.thread_handle.is_none());
     assert!(node.ring_consumer.is_none());
@@ -345,7 +356,6 @@ mod tests {
   #[test]
   fn test_ring_consumer_none_before_init() {
     let node = make_node();
-    // Without init(), ring_consumer should be None and process should return empty.
     assert!(node.ring_consumer.is_none());
   }
 
@@ -353,10 +363,9 @@ mod tests {
   fn test_serialization_skips_runtime_fields() {
     let node = make_node();
     let json = serde_json::to_value(&node).unwrap();
-    // id and device are present
-    assert!(json.get("id").is_some());
-    assert!(json.get("device").is_some());
-    // Runtime fields are #[serde(skip)] and must not appear in JSON
+    assert_eq!(json["id"], "test-node");
+    assert_eq!(json["processId"], 1234);
+    assert_eq!(json["windowTitle"], "Test Window");
     assert!(json.get("threadHandle").is_none());
     assert!(json.get("stopFlag").is_none());
     assert!(json.get("ringConsumer").is_none());
@@ -368,14 +377,12 @@ mod tests {
     let flag = Arc::new(AtomicBool::new(false));
     node.stop_flag = Some(flag.clone());
 
-    // Simulate dispose
     if let Some(f) = node.stop_flag.take() {
       f.store(true, Ordering::Relaxed);
     }
     node.thread_handle.take();
     node.ring_consumer.take();
 
-    // The shared Arc should now see the flag set to true
     assert!(flag.load(Ordering::Relaxed));
   }
 }

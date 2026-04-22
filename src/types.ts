@@ -8,6 +8,11 @@ import SpectrumAnalyzer, { SpectrumAnalyzerNode } from "./nodes/SpectrumAnalyzer
 import WaveformMonitor, { WaveformMonitorNode } from "./nodes/WaveformMonitor";
 import AppAudioCapture, { AppAudioCaptureNode } from "./nodes/AppAudioCapture";
 
+export interface WindowInfo {
+  processId: number;
+  title: string;
+}
+
 export interface AudioDevice {
   id: string;
   readableName: string;
@@ -63,7 +68,7 @@ export type AudioNode = {
     | "spectrumAnalyzer"
     | "waveformMonitor"
     | "appAudioCapture";
-  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string } | { fftSize: number; id: string } | { windowSize: number; id: string };
+  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string } | { fftSize: number; id: string } | { windowSize: number; id: string } | { processId: number; windowTitle: string; id: string };
 };
 
 export type AudioEdge = {
