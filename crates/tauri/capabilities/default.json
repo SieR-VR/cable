@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Cable default window capabilities",
+  "platforms": ["windows", "macOS", "linux"],
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}
