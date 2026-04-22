@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ReactFlow, Background, BackgroundVariant, Panel, ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Cpu, Play, Save, Square, Zap } from "lucide-react";
 import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
 
 import { ContextMenu } from "./components/ContextMenu";
@@ -213,46 +214,77 @@ function App() {
       <Menu />
       <ContextMenu />
       <Panel position="bottom-center">
-        <div className="flex flex-col items-center gap-1">
+        <div className="flex flex-col items-center gap-2 mb-2">
           {applyStatus && (
             <div
-              className={`text-xs px-2 py-1 rounded ${applyStatus.startsWith("Error") ? "bg-red-800 text-red-200" : applyStatus === "Applying..." ? "bg-yellow-800 text-yellow-200" : "bg-green-800 text-green-200"}`}
+              className={`text-xs px-3 py-1 rounded-full ${
+                applyStatus.startsWith("Error")
+                  ? "bg-red-900/80 text-red-200"
+                  : applyStatus === "Applying..."
+                    ? "bg-yellow-900/80 text-yellow-200"
+                    : "bg-green-900/80 text-green-200"
+              }`}
             >
               {applyStatus}
             </div>
           )}
-          <div className="flex gap-2 items-center text-sm text-gray-500">
-            <span
-              className={`inline-block w-2 h-2 rounded-full ${driverConnected ? "bg-green-400" : "bg-red-400"}`}
-            />
-            <span>{driverConnected ? "Driver connected" : "Driver offline"}</span>
-            <button className="bg-gray-700 text-white px-2 py-1 rounded" onClick={onApply}>
-              Apply
+          <div className="flex items-center gap-1 bg-gray-900/90 backdrop-blur-sm border border-gray-700 rounded-2xl px-3 py-2 shadow-xl">
+            {/* Driver status */}
+            <div
+              className={`flex items-center gap-1.5 px-2 text-xs font-medium ${
+                driverConnected ? "text-green-400" : "text-red-400"
+              }`}
+              title={driverConnected ? "Driver connected" : "Driver offline"}
+            >
+              <Cpu size={15} />
+              <span>{driverConnected ? "Online" : "Offline"}</span>
+            </div>
+
+            <div className="w-px h-5 bg-gray-700 mx-1" />
+
+            {/* Save */}
+            <button
+              className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              onClick={onSave}
+              title="Save graph"
+            >
+              <Save size={16} />
+            </button>
+
+            {/* Apply */}
+            <button
+              className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              onClick={onApply}
+              title="Apply graph"
+            >
+              <Zap size={16} />
+            </button>
+
+            <div className="w-px h-5 bg-gray-700 mx-1" />
+
+            {/* Enable / Disable Runtime */}
+            <button
+              className={`p-2 rounded-xl transition-colors ${
+                isRuntimeEnabled
+                  ? "text-green-400 hover:text-white hover:bg-gray-700"
+                  : "text-gray-400 hover:text-white hover:bg-gray-700"
+              }`}
+              onClick={async () => {
+                if (isRuntimeEnabled) {
+                  await invoke("disable_runtime");
+                  stopRenderPolling();
+                  setIsRuntimeEnabled(false);
+                } else {
+                  await invoke("enable_runtime");
+                  startRenderPolling();
+                  setIsRuntimeEnabled(true);
+                }
+              }}
+              title={isRuntimeEnabled ? "Disable runtime" : "Enable runtime"}
+            >
+              {isRuntimeEnabled ? <Square size={16} /> : <Play size={16} />}
             </button>
           </div>
-        </div>
-      </Panel>
-      <Panel position="top-right">
-        <div className="text-sm text-gray-500 flex gap-2">
-          <button className="bg-gray-700 text-white px-2 py-1 rounded" onClick={onSave}>
-            Save
-          </button>
-          <button
-            className="bg-gray-700 text-white px-2 py-1 rounded"
-            onClick={async () => {
-              if (isRuntimeEnabled) {
-                await invoke("disable_runtime");
-                stopRenderPolling();
-                setIsRuntimeEnabled(false);
-              } else {
-                await invoke("enable_runtime");
-                startRenderPolling();
-                setIsRuntimeEnabled(true);
-              }
-            }}
-          >
-            {isRuntimeEnabled ? "Disable" : "Enable"} Runtime
-          </button>
         </div>
       </Panel>
     </div>
