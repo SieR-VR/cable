@@ -41,7 +41,7 @@ pub(crate) struct VirtualDevice {
 
 struct AppData {
   runtime: Option<runtime::Runtime>,
-  runtime_thread: Option<std::thread::JoinHandle<()>>,
+  runtime_thread: Option<std::thread::JoinHandle<runtime::Runtime>>,
   runtime_running: Option<Arc<AtomicBool>>,
   #[cfg(windows)]
   driver_handle: Option<Arc<driver_client::DriverHandle>>,
@@ -95,10 +95,8 @@ fn start_runtime_thread(state: &mut AppData, mut runtime: runtime::Runtime) {
       }
     }
 
-    if let Err(e) = runtime.dispose_nodes() {
-      eprintln!("Error disposing nodes: {}", e);
-    }
     println!("Runtime thread stopped.");
+    runtime
   });
 
   state.runtime_running = Some(running);
@@ -111,9 +109,12 @@ fn stop_runtime_thread(state: &mut AppData) -> Result<(), String> {
   }
 
   if let Some(handle) = state.runtime_thread.take() {
-    handle
+    let runtime = handle
       .join()
       .map_err(|_| "Failed to join runtime thread".to_string())?;
+    // Restore the runtime so enable_runtime can restart it without
+    // requiring a full setup_runtime call.
+    state.runtime = Some(runtime);
   }
 
   Ok(())
@@ -996,6 +997,13 @@ async fn setup_runtime(
   let was_running = app_state.runtime_running.is_some();
   if was_running {
     stop_runtime_thread(&mut app_state)?;
+  }
+
+  // Dispose the previous runtime (restored by stop_runtime_thread, or idle).
+  if let Some(mut old_runtime) = app_state.runtime.take() {
+    if let Err(e) = old_runtime.dispose_nodes() {
+      eprintln!("Error disposing previous runtime nodes: {}", e);
+    }
   }
 
   #[cfg(windows)]
