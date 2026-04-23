@@ -304,7 +304,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   },
 
   onConnect: (connection) => {
-    const nodes = get().nodes;
+    const { nodes, edges } = get();
 
     const sourceNode = nodes.find((node) => node.id === connection.source);
     const targetNode = nodes.find((node) => node.id === connection.target);
@@ -319,8 +319,21 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       return;
     }
 
+    // 한 input 핸들에는 하나의 엣지만 허용
+    const isDuplicateInput = edges.some(
+      (edge) =>
+        edge.target === connection.target &&
+        edge.targetHandle === connection.targetHandle,
+    );
+    if (isDuplicateInput) {
+      console.warn(
+        `Input handle already occupied: ${connection.target}:${connection.targetHandle}`,
+      );
+      return;
+    }
+
     set({
-      edges: addEdge(connection, get().edges),
+      edges: addEdge(connection, edges),
     });
   },
 

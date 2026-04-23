@@ -246,6 +246,98 @@ describe("useAppStore — onConnect edge type guard", () => {
 
     expect(useAppStore.getState().edges).toHaveLength(1);
   });
+
+  it("blocks a second connection to the same target handle", () => {
+    useAppStore.setState({
+      nodes: [
+        {
+          id: "src-1",
+          type: "audioInputDevice",
+          dragHandle: ".drag-handle__custom",
+          position: { x: 0, y: 0 },
+          data: { device: null, edgeType: null },
+        } as any,
+        {
+          id: "src-2",
+          type: "audioInputDevice",
+          dragHandle: ".drag-handle__custom",
+          position: { x: 0, y: 100 },
+          data: { device: null, edgeType: null },
+        } as any,
+        {
+          id: "tgt",
+          type: "mixer",
+          dragHandle: ".drag-handle__custom",
+          position: { x: 300, y: 0 },
+          data: { edgeType: null },
+        } as any,
+      ],
+      edges: [],
+    });
+
+    // 첫 번째 연결은 성공
+    useAppStore.getState().onConnect({
+      source: "src-1",
+      target: "tgt",
+      sourceHandle: null,
+      targetHandle: "input-a",
+    });
+    expect(useAppStore.getState().edges).toHaveLength(1);
+
+    // 같은 handle에 두 번째 연결 → 거부
+    useAppStore.getState().onConnect({
+      source: "src-2",
+      target: "tgt",
+      sourceHandle: null,
+      targetHandle: "input-a",
+    });
+    expect(useAppStore.getState().edges).toHaveLength(1);
+  });
+
+  it("allows connections to different target handles on the same node", () => {
+    useAppStore.setState({
+      nodes: [
+        {
+          id: "src-1",
+          type: "audioInputDevice",
+          dragHandle: ".drag-handle__custom",
+          position: { x: 0, y: 0 },
+          data: { device: null, edgeType: null },
+        } as any,
+        {
+          id: "src-2",
+          type: "audioInputDevice",
+          dragHandle: ".drag-handle__custom",
+          position: { x: 0, y: 100 },
+          data: { device: null, edgeType: null },
+        } as any,
+        {
+          id: "tgt",
+          type: "mixer",
+          dragHandle: ".drag-handle__custom",
+          position: { x: 300, y: 0 },
+          data: { edgeType: null },
+        } as any,
+      ],
+      edges: [],
+    });
+
+    useAppStore.getState().onConnect({
+      source: "src-1",
+      target: "tgt",
+      sourceHandle: null,
+      targetHandle: "input-a",
+    });
+    useAppStore.getState().onConnect({
+      source: "src-2",
+      target: "tgt",
+      sourceHandle: null,
+      targetHandle: "input-b",
+    });
+
+    // A, B 각각 하나씩 → 2개 모두 허용
+    expect(useAppStore.getState().edges).toHaveLength(2);
+  });
 });
 
 describe("useAppStore — loadGraph", () => {
