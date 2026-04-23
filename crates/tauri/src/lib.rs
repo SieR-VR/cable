@@ -16,6 +16,7 @@ mod runtime;
 use nodes::app_audio_capture::AppAudioCaptureNode;
 use nodes::audio_input_device::AudioInputDeviceNode;
 use nodes::audio_output_device::AudioOutputDeviceNode;
+use nodes::mixer::MixerNode;
 use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
@@ -165,6 +166,7 @@ pub(crate) enum AudioNode {
   SpectrumAnalyzer(SpectrumAnalyzerNode),
   WaveformMonitor(WaveformMonitorNode),
   AppAudioCapture(AppAudioCaptureNode),
+  Mixer(MixerNode),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +176,7 @@ struct AudioEdge {
 
   from: String,
   to: String,
+  to_handle: Option<String>,
 
   frequency: Option<u32>,
   channels: Option<u16>,
