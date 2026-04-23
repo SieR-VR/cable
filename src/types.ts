@@ -79,6 +79,8 @@ export type AudioEdge = {
   id: string;
   from: string;
   to: string;
+  /** Target handle ID (e.g. "input-a", "input-b" for Mixer node) */
+  toHandle?: string;
 
   frequency?: number;
   channels?: number;

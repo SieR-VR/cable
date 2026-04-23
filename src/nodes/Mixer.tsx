@@ -18,12 +18,26 @@ export default function Mixer({ id }: NodeProps<MixerNodeType>) {
           <span className="rounded-md text-xs bg-orange-300 text-orange-900 p-1">sum + clamp</span>
           <span className="rounded-md text-xs bg-gray-500 p-1">passthrough</span>
         </div>
-        <Handle
-          type="target"
-          position={Position.Left}
-          id="Mixer-target"
-          className="w-4 h-4 bg-orange-400 rounded-full"
-        />
+        {/* Input A */}
+        <div className="flex items-center gap-2 h-6 relative">
+          <Handle
+            type="target"
+            position={Position.Left}
+            id="input-a"
+            className="!static !transform-none w-4 h-4 bg-orange-400 rounded-full"
+          />
+          <span className="text-xs text-gray-300">A</span>
+        </div>
+        {/* Input B */}
+        <div className="flex items-center gap-2 h-6 relative">
+          <Handle
+            type="target"
+            position={Position.Left}
+            id="input-b"
+            className="!static !transform-none w-4 h-4 bg-orange-400 rounded-full"
+          />
+          <span className="text-xs text-gray-300">B</span>
+        </div>
         <Handle
           type="source"
           position={Position.Right}

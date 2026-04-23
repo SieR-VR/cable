@@ -34,7 +34,8 @@ function renderInProvider(id?: string) {
 describe("Mixer", () => {
   it("renders target and source handles", () => {
     renderInProvider();
-    expect(document.querySelector('[data-handleid="Mixer-target"]')).toBeTruthy();
+    expect(document.querySelector('[data-handleid="input-a"]')).toBeTruthy();
+    expect(document.querySelector('[data-handleid="input-b"]')).toBeTruthy();
     expect(document.querySelector('[data-handleid="Mixer-source"]')).toBeTruthy();
   });
 

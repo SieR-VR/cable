@@ -1,8 +1,9 @@
 /// Mixer node.
 ///
-/// Passthrough node: reads audio from all upstream edges, mixes them by
-/// summing element-wise, clamps the result to [-1.0, 1.0], and forwards
-/// the mixed samples to all downstream edges.
+/// Fixed two-input node: reads audio from the edge connected to "input-a"
+/// and the edge connected to "input-b", sums them element-wise, clamps the
+/// result to [-1.0, 1.0], and forwards the mixed samples to all downstream
+/// edges.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -39,44 +40,40 @@ impl NodeTrait for MixerNode {
     runtime: &Runtime,
     state: &RuntimeState,
   ) -> Result<BTreeMap<String, Vec<f32>>, String> {
-    // Collect all incoming sample buffers.
-    let mut inputs: Vec<&Vec<f32>> = Vec::new();
-    for edge in &runtime.edges {
-      if edge.to == self.id {
-        if let Some(samples) = state.edge_values.get(&edge.id) {
-          if !samples.is_empty() {
-            inputs.push(samples);
-          }
-        }
-      }
-    }
+    // Find the edge IDs connected to each named input handle.
+    let find_samples = |handle: &str| -> Option<&Vec<f32>> {
+      runtime
+        .edges
+        .iter()
+        .find(|e| {
+          e.to == self.id
+            && e.to_handle.as_deref() == Some(handle)
+        })
+        .and_then(|e| state.edge_values.get(&e.id))
+        .filter(|s| !s.is_empty())
+    };
 
-    let mixed: Vec<f32> = if inputs.is_empty() {
-      Vec::new()
-    } else {
-      // Use the minimum buffer length across all inputs to avoid zero-padding.
-      // Padding shorter inputs up to the longest (max strategy) would insert a
-      // step-function discontinuity mid-buffer when one source runs short,
-      // which causes audible clicks. Capping at the minimum ensures every
-      // position has a real sample from every connected source.
-      let len = inputs.iter().map(|s| s.len()).min().unwrap_or(0);
-      let mut buf = vec![0.0f32; len];
-      for input in &inputs {
-        for (i, &s) in input[..len].iter().enumerate() {
-          buf[i] += s;
+    let a = find_samples("input-a");
+    let b = find_samples("input-b");
+
+    let mixed: Vec<f32> = match (a, b) {
+      (None, None) => return Ok(BTreeMap::new()),
+      (Some(buf), None) | (None, Some(buf)) => buf.clone(),
+      (Some(a), Some(b)) => {
+        // Use the minimum length to avoid zero-padding discontinuities.
+        let len = a.len().min(b.len());
+        let mut buf = vec![0.0f32; len];
+        for i in 0..len {
+          buf[i] = (a[i] + b[i]).clamp(-1.0, 1.0);
         }
+        buf
       }
-      // Clamp to prevent clipping.
-      buf.iter_mut().for_each(|s| *s = s.clamp(-1.0, 1.0));
-      buf
     };
 
     let mut output = BTreeMap::new();
-    if !mixed.is_empty() {
-      for edge in &runtime.edges {
-        if edge.from == self.id {
-          output.insert(edge.id.clone(), mixed.clone());
-        }
+    for edge in &runtime.edges {
+      if edge.from == self.id {
+        output.insert(edge.id.clone(), mixed.clone());
       }
     }
 
@@ -86,26 +83,24 @@ impl NodeTrait for MixerNode {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-
-  fn mix(inputs: Vec<Vec<f32>>) -> Vec<f32> {
-    if inputs.is_empty() {
-      return Vec::new();
-    }
-    let len = inputs.iter().map(|s| s.len()).min().unwrap_or(0);
-    let mut buf = vec![0.0f32; len];
-    for input in &inputs {
-      for (i, &s) in input[..len].iter().enumerate() {
-        buf[i] += s;
+  fn mix(a: Option<Vec<f32>>, b: Option<Vec<f32>>) -> Vec<f32> {
+    match (a.as_ref(), b.as_ref()) {
+      (None, None) => Vec::new(),
+      (Some(buf), None) | (None, Some(buf)) => buf.clone(),
+      (Some(a), Some(b)) => {
+        let len = a.len().min(b.len());
+        let mut buf = vec![0.0f32; len];
+        for i in 0..len {
+          buf[i] = (a[i] + b[i]).clamp(-1.0, 1.0);
+        }
+        buf
       }
     }
-    buf.iter_mut().for_each(|s| *s = s.clamp(-1.0, 1.0));
-    buf
   }
 
   #[test]
   fn test_mix_two_inputs_sums_element_wise() {
-    let result = mix(vec![vec![0.2, 0.4, 0.6], vec![0.1, 0.1, 0.1]]);
+    let result = mix(Some(vec![0.2, 0.4, 0.6]), Some(vec![0.1, 0.1, 0.1]));
     let expected = [0.3f32, 0.5, 0.7];
     for (a, b) in result.iter().zip(expected.iter()) {
       assert!((a - b).abs() < 1e-5, "got {a}, expected {b}");
@@ -114,21 +109,19 @@ mod tests {
 
   #[test]
   fn test_clipping_clamped_to_one() {
-    let result = mix(vec![vec![0.8, 0.9], vec![0.8, 0.9]]);
+    let result = mix(Some(vec![0.8, 0.9]), Some(vec![0.8, 0.9]));
     assert_eq!(result, vec![1.0, 1.0]);
   }
 
   #[test]
   fn test_empty_input_produces_empty_output() {
-    let result = mix(vec![]);
+    let result = mix(None, None);
     assert!(result.is_empty());
   }
 
   #[test]
   fn test_unequal_length_inputs_min_length() {
-    // With min strategy, output length = shortest input (2 samples).
-    // The third sample from the longer input is discarded.
-    let result = mix(vec![vec![0.5, 0.5, 0.5], vec![0.1, 0.1]]);
+    let result = mix(Some(vec![0.5, 0.5, 0.5]), Some(vec![0.1, 0.1]));
     assert_eq!(result.len(), 2);
     assert!((result[0] - 0.6).abs() < 1e-5);
     assert!((result[1] - 0.6).abs() < 1e-5);
@@ -136,15 +129,24 @@ mod tests {
 
   #[test]
   fn test_negative_clipping() {
-    let result = mix(vec![vec![-0.8, -0.9], vec![-0.8, -0.9]]);
+    let result = mix(Some(vec![-0.8, -0.9]), Some(vec![-0.8, -0.9]));
     assert_eq!(result, vec![-1.0, -1.0]);
   }
 
   #[test]
-  fn test_single_input_passthrough() {
-    let result = mix(vec![vec![0.1, -0.2, 0.3]]);
+  fn test_single_input_a_passthrough() {
+    let result = mix(Some(vec![0.1, -0.2, 0.3]), None);
+    assert!((result[0] - 0.1).abs() < 1e-5);
+    assert!((result[1] - (-0.2)).abs() < 1e-5);
+    assert!((result[2] - 0.3).abs() < 1e-5);
+  }
+
+  #[test]
+  fn test_single_input_b_passthrough() {
+    let result = mix(None, Some(vec![0.1, -0.2, 0.3]));
     assert!((result[0] - 0.1).abs() < 1e-5);
     assert!((result[1] - (-0.2)).abs() < 1e-5);
     assert!((result[2] - 0.3).abs() < 1e-5);
   }
 }
+

@@ -176,6 +176,7 @@ struct AudioEdge {
 
   from: String,
   to: String,
+  to_handle: Option<String>,
 
   frequency: Option<u32>,
   channels: Option<u16>,

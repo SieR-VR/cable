@@ -127,6 +127,7 @@ function App() {
         id: edge.id,
         from: edge.source,
         to: edge.target,
+        toHandle: edge.targetHandle ?? undefined,
         frequency: edge.data?.frequency,
         channels: edge.data?.channels,
         bitsPerSample: edge.data?.bitsPerSample,
