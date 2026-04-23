@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Handle, Node, NodeProps, Position } from "@xyflow/react";
 
 import { useAppStore } from "../state";
+import { NodeDefinition } from "@/node-definition";
 
 export type WaveformMonitorNodeData = {
   /** Number of samples in the rolling display window. Default: 2048 */
@@ -10,13 +11,6 @@ export type WaveformMonitorNodeData = {
 };
 
 export type WaveformMonitorNode = Node<WaveformMonitorNodeData, "waveformMonitor">;
-
-export function toAudioNode(node: WaveformMonitorNode) {
-  return {
-    type: "waveformMonitor" as const,
-    data: { id: node.id, windowSize: node.data.windowSize ?? 2048 },
-  };
-}
 
 const CANVAS_WIDTH = 240;
 const CANVAS_HEIGHT = 80;
@@ -60,7 +54,7 @@ function drawWaveform(canvas: HTMLCanvasElement | null, samples: number[]): void
   ctx.stroke();
 }
 
-export default function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) {
+export function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderData = useAppStore((s) => s.nodeRenderData[id]);
   const samples = renderData?.type === "waveformMonitor" ? renderData.data.samples : [];
@@ -103,3 +97,13 @@ export default function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) 
     </div>
   );
 }
+
+const definition: NodeDefinition<WaveformMonitorNode> = {
+  component: WaveformMonitor,
+  toAudioNode: (node) => ({
+    type: "waveformMonitor",
+    data: { id: node.id, windowSize: node.data.windowSize ?? 2048 },
+  }),
+};
+
+export default definition;

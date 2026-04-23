@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, it, expect } from "vitest";
 
-import Mixer from "@/nodes/Mixer";
+import { Mixer } from "@/nodes/Mixer";
 
 function makeProps(id = "node-1") {
   return {

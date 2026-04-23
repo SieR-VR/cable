@@ -2,7 +2,7 @@ import { render, screen, act } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, it, expect, beforeEach } from "vitest";
 
-import SpectrumAnalyzer from "@/nodes/SpectrumAnalyzer";
+import { SpectrumAnalyzer } from "@/nodes/SpectrumAnalyzer";
 import { useAppStore } from "@/state";
 
 function makeProps(id = "node-1") {

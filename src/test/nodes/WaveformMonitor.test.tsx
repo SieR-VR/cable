@@ -2,7 +2,7 @@ import { render, screen, act } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, it, expect, beforeEach } from "vitest";
 
-import WaveformMonitor from "@/nodes/WaveformMonitor";
+import { WaveformMonitor } from "@/nodes/WaveformMonitor";
 import { useAppStore } from "@/state";
 
 function makeProps(id = "node-1") {

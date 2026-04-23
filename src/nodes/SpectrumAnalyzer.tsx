@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Handle, Node, NodeProps, Position } from "@xyflow/react";
 
 import { useAppStore } from "../state";
+import { NodeDefinition } from "@/node-definition";
 
 export type SpectrumAnalyzerNodeData = {
   /** FFT window size. Must be a power of two. Default: 1024 */
@@ -10,13 +11,6 @@ export type SpectrumAnalyzerNodeData = {
 };
 
 export type SpectrumAnalyzerNode = Node<SpectrumAnalyzerNodeData, "spectrumAnalyzer">;
-
-export function toAudioNode(node: SpectrumAnalyzerNode) {
-  return {
-    type: "spectrumAnalyzer" as const,
-    data: { id: node.id, fftSize: node.data.fftSize ?? 1024 },
-  };
-}
 
 const CANVAS_WIDTH = 240;
 const CANVAS_HEIGHT = 80;
@@ -44,7 +38,7 @@ function drawSpectrum(canvas: HTMLCanvasElement | null, bins: number[]): void {
   }
 }
 
-export default function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>) {
+export function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderData = useAppStore((s) => s.nodeRenderData[id]);
   const bins = renderData?.type === "spectrumAnalyzer" ? renderData.data.bins : [];
@@ -87,3 +81,13 @@ export default function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>
     </div>
   );
 }
+
+const definition: NodeDefinition<SpectrumAnalyzerNode> = {
+  component: SpectrumAnalyzer,
+  toAudioNode: (node) => ({
+    type: "spectrumAnalyzer",
+    data: { id: node.id, fftSize: node.data.fftSize ?? 1024 },
+  }),
+};
+
+export default definition;

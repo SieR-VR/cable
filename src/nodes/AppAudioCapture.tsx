@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { AppState, useAppStore } from "@/state";
 import { WindowInfo } from "@/types";
+import { NodeDefinition } from "@/node-definition";
 
 export type AppAudioCaptureNodeData = {
   processId: number | null;
@@ -13,24 +14,13 @@ export type AppAudioCaptureNodeData = {
 
 export type AppAudioCaptureNode = Node<AppAudioCaptureNodeData, "appAudioCapture">;
 
-export function toAudioNode(node: AppAudioCaptureNode) {
-  return {
-    type: "appAudioCapture" as const,
-    data: {
-      id: node.id,
-      processId: node.data.processId ?? 0,
-      windowTitle: node.data.windowTitle ?? "",
-    },
-  };
-}
-
 const selector = (id: string) => (store: AppState) => ({
   setWindow: (processId: number, windowTitle: string) => {
     store.updateNode(id, { processId, windowTitle });
   },
 });
 
-export default function AppAudioCapture({ id, data }: NodeProps<AppAudioCaptureNode>) {
+export function AppAudioCapture({ id, data }: NodeProps<AppAudioCaptureNode>) {
   const { setWindow } = useAppStore(selector(id));
   const [windowList, setWindowList] = useState<WindowInfo[] | null>(null);
 
@@ -86,3 +76,17 @@ export default function AppAudioCapture({ id, data }: NodeProps<AppAudioCaptureN
     </div>
   );
 }
+
+const definition: NodeDefinition<AppAudioCaptureNode> = {
+  component: AppAudioCapture,
+  toAudioNode: (node) => ({
+    type: "appAudioCapture",
+    data: {
+      id: node.id,
+      processId: node.data.processId ?? 0,
+      windowTitle: node.data.windowTitle ?? "",
+    },
+  }),
+};
+
+export default definition;

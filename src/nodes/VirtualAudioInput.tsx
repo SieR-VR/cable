@@ -1,6 +1,7 @@
 import { Handle, Node, NodeProps, Position } from "@xyflow/react";
 
 import { AppState, useAppStore } from "@/state";
+import { NodeDefinition } from "@/node-definition";
 
 /**
  * Virtual Audio Input node.
@@ -22,22 +23,11 @@ export type VirtualAudioInputNodeData = {
 
 export type VirtualAudioInputNode = Node<VirtualAudioInputNodeData, "virtualAudioInput">;
 
-export function toAudioNode(node: VirtualAudioInputNode) {
-  return {
-    type: "virtualAudioInput" as const,
-    data: {
-      id: node.id,
-      deviceId: node.data.deviceId || "",
-      name: node.data.name || "",
-    },
-  };
-}
-
 const selector = (id: string) => (store: AppState) => ({
   setDevice: (deviceId: string, name: string) => store.updateNode(id, { deviceId, name }),
 });
 
-export default function VirtualAudioInput({ id, data }: NodeProps<VirtualAudioInputNode>) {
+export function VirtualAudioInput({ id, data }: NodeProps<VirtualAudioInputNode>) {
   const { setDevice } = useAppStore(selector(id));
   const { driverConnected, virtualDevices } = useAppStore();
 
@@ -85,3 +75,17 @@ export default function VirtualAudioInput({ id, data }: NodeProps<VirtualAudioIn
     </div>
   );
 }
+
+const definition: NodeDefinition<VirtualAudioInputNode> = {
+  component: VirtualAudioInput,
+  toAudioNode: (node) => ({
+    type: "virtualAudioInput",
+    data: {
+      id: node.id,
+      deviceId: node.data.deviceId || "",
+      name: node.data.name || "",
+    },
+  }),
+};
+
+export default definition;

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-import AppAudioCapture from "@/nodes/AppAudioCapture";
+import { AppAudioCapture } from "@/nodes/AppAudioCapture";
 import { WindowInfo } from "@/types";
 
 vi.mock("@tauri-apps/api/core", () => ({

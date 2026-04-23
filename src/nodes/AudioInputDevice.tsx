@@ -3,6 +3,7 @@ import { Handle, Node, NodeProps, Position } from "@xyflow/react";
 import { formatAudioEdgeType } from "@/lib/utils";
 import { AppState, useAppStore } from "@/state";
 import { AudioDevice } from "@/types";
+import { NodeDefinition } from "@/node-definition";
 
 export type AudioInputDeviceNodeData = {
   device: AudioDevice | null;
@@ -10,13 +11,6 @@ export type AudioInputDeviceNodeData = {
 };
 
 export type AudioInputDeviceNode = Node<AudioInputDeviceNodeData, "audioInputDevice">;
-
-export function toAudioNode(node: AudioInputDeviceNode) {
-  return {
-    type: "audioInputDevice" as const,
-    data: { id: node.id, device: node.data.device },
-  };
-}
 
 const selector = (id: string) => (store: AppState) => ({
   setDevice: (device: AudioDevice | null) => {
@@ -27,7 +21,7 @@ const selector = (id: string) => (store: AppState) => ({
   },
 });
 
-export default function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) {
+export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) {
   const { availableAudioInputDevices } = useAppStore();
 
   const { setDevice } = useAppStore(selector(id));
@@ -81,3 +75,14 @@ export default function AudioInputDevice({ id, data }: NodeProps<AudioInputDevic
     </div>
   );
 }
+
+const definition: NodeDefinition<AudioInputDeviceNode> = {
+  component: AudioInputDevice,
+  toAudioNode: (node) => ({
+    type: "audioInputDevice",
+    data: { id: node.id, device: node.data.device },
+  }),
+};
+
+export default definition;
+

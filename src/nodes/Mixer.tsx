@@ -1,19 +1,14 @@
 import { Handle, Node, NodeProps, Position } from "@xyflow/react";
 
+import { NodeDefinition } from "@/node-definition";
+
 export type MixerNodeData = {
   edgeType: string | null;
 };
 
 export type MixerNodeType = Node<MixerNodeData, "mixer">;
 
-export function toAudioNode(node: MixerNodeType) {
-  return {
-    type: "mixer" as const,
-    data: { id: node.id },
-  };
-}
-
-export default function Mixer({ id }: NodeProps<MixerNodeType>) {
+export function Mixer({ id }: NodeProps<MixerNodeType>) {
   void id;
   return (
     <div className="bg-gray-700 rounded-lg flex flex-col text-white min-w-48">
@@ -55,3 +50,13 @@ export default function Mixer({ id }: NodeProps<MixerNodeType>) {
     </div>
   );
 }
+
+const definition: NodeDefinition<MixerNodeType> = {
+  component: Mixer,
+  toAudioNode: (node) => ({
+    type: "mixer",
+    data: { id: node.id },
+  }),
+};
+
+export default definition;
