@@ -6,6 +6,13 @@ export type MixerNodeData = {
 
 export type MixerNodeType = Node<MixerNodeData, "mixer">;
 
+export function toAudioNode(node: MixerNodeType) {
+  return {
+    type: "mixer" as const,
+    data: { id: node.id },
+  };
+}
+
 export default function Mixer({ id }: NodeProps<MixerNodeType>) {
   void id;
   return (

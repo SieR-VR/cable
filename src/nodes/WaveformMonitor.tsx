@@ -11,6 +11,13 @@ export type WaveformMonitorNodeData = {
 
 export type WaveformMonitorNode = Node<WaveformMonitorNodeData, "waveformMonitor">;
 
+export function toAudioNode(node: WaveformMonitorNode) {
+  return {
+    type: "waveformMonitor" as const,
+    data: { id: node.id, windowSize: node.data.windowSize ?? 2048 },
+  };
+}
+
 const CANVAS_WIDTH = 240;
 const CANVAS_HEIGHT = 80;
 const WAVE_COLOR = "#34d399"; // emerald-400

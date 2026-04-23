@@ -11,6 +11,13 @@ export type AudioOutputDeviceNodeData = {
 
 export type AudioOutputDeviceNode = Node<AudioOutputDeviceNodeData, "audioOutputDevice">;
 
+export function toAudioNode(node: AudioOutputDeviceNode) {
+  return {
+    type: "audioOutputDevice" as const,
+    data: { id: node.id, device: node.data.device },
+  };
+}
+
 const selector = (id: string) => (store: AppState) => ({
   setDevice: (device: AudioDevice | null) => {
     const edgeType =

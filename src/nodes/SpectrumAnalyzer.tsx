@@ -11,6 +11,13 @@ export type SpectrumAnalyzerNodeData = {
 
 export type SpectrumAnalyzerNode = Node<SpectrumAnalyzerNodeData, "spectrumAnalyzer">;
 
+export function toAudioNode(node: SpectrumAnalyzerNode) {
+  return {
+    type: "spectrumAnalyzer" as const,
+    data: { id: node.id, fftSize: node.data.fftSize ?? 1024 },
+  };
+}
+
 const CANVAS_WIDTH = 240;
 const CANVAS_HEIGHT = 80;
 const BAR_COLOR = "#a855f7"; // purple-500

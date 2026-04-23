@@ -13,6 +13,17 @@ export type AppAudioCaptureNodeData = {
 
 export type AppAudioCaptureNode = Node<AppAudioCaptureNodeData, "appAudioCapture">;
 
+export function toAudioNode(node: AppAudioCaptureNode) {
+  return {
+    type: "appAudioCapture" as const,
+    data: {
+      id: node.id,
+      processId: node.data.processId ?? 0,
+      windowTitle: node.data.windowTitle ?? "",
+    },
+  };
+}
+
 const selector = (id: string) => (store: AppState) => ({
   setWindow: (processId: number, windowTitle: string) => {
     store.updateNode(id, { processId, windowTitle });

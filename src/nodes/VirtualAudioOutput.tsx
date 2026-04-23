@@ -22,6 +22,17 @@ export type VirtualAudioOutputNodeData = {
 
 export type VirtualAudioOutputNode = Node<VirtualAudioOutputNodeData, "virtualAudioOutput">;
 
+export function toAudioNode(node: VirtualAudioOutputNode) {
+  return {
+    type: "virtualAudioOutput" as const,
+    data: {
+      id: node.id,
+      deviceId: node.data.deviceId || "",
+      name: node.data.name || "",
+    },
+  };
+}
+
 const selector = (id: string) => (store: AppState) => ({
   setDevice: (deviceId: string, name: string) => store.updateNode(id, { deviceId, name }),
 });

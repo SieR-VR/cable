@@ -9,7 +9,7 @@ import { ContextMenu } from "./components/ContextMenu";
 import Menu from "./components/Menu";
 
 import { useAppStore } from "./state";
-import { AudioGraph, CableGraphFile, EdgeType, NodeType, nodeTypes } from "./types";
+import { AudioGraph, CableGraphFile, EdgeType, NodeType, nodeTypes, serializeNode } from "./types";
 
 function App() {
   const {
@@ -70,59 +70,7 @@ function App() {
   const onApply = useCallback(async () => {
     setApplyStatus("Applying...");
     const graph: AudioGraph = {
-      nodes: nodes.map((node) => {
-        if (node.type === "virtualAudioInput" || node.type === "virtualAudioOutput") {
-          return {
-            type: node.type,
-            data: {
-              id: node.id,
-              deviceId: (node.data as any).deviceId || "",
-              name: (node.data as any).name || "",
-            },
-          };
-        }
-        if (node.type === "spectrumAnalyzer") {
-          return {
-            type: node.type,
-            data: {
-              id: node.id,
-              fftSize: (node.data as any).fftSize ?? 1024,
-            },
-          };
-        }
-        if (node.type === "waveformMonitor") {
-          return {
-            type: node.type,
-            data: {
-              id: node.id,
-              windowSize: (node.data as any).windowSize ?? 2048,
-            },
-          };
-        }
-        if (node.type === "appAudioCapture") {
-          return {
-            type: node.type,
-            data: {
-              id: node.id,
-              processId: (node.data as any).processId ?? 0,
-              windowTitle: (node.data as any).windowTitle ?? "",
-            },
-          };
-        }
-        if (node.type === "mixer") {
-          return {
-            type: node.type,
-            data: { id: node.id },
-          };
-        }
-        return {
-          type: node.type,
-          data: {
-            id: node.id,
-            device: (node.data as any).device,
-          },
-        };
-      }),
+      nodes: nodes.map(serializeNode),
       edges: edges.map((edge) => ({
         id: edge.id,
         from: edge.source,

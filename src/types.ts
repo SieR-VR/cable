@@ -1,13 +1,13 @@
 import { Edge, NodeTypes } from "@xyflow/react";
 
-import AudioInputDevice, { AudioInputDeviceNode } from "./nodes/AudioInputDevice";
-import AudioOutputDevice, { AudioOutputDeviceNode } from "./nodes/AudioOutputDevice";
-import VirtualAudioInput, { VirtualAudioInputNode } from "./nodes/VirtualAudioInput";
-import VirtualAudioOutput, { VirtualAudioOutputNode } from "./nodes/VirtualAudioOutput";
-import SpectrumAnalyzer, { SpectrumAnalyzerNode } from "./nodes/SpectrumAnalyzer";
-import WaveformMonitor, { WaveformMonitorNode } from "./nodes/WaveformMonitor";
-import AppAudioCapture, { AppAudioCaptureNode } from "./nodes/AppAudioCapture";
-import Mixer, { MixerNodeType } from "./nodes/Mixer";
+import AudioInputDevice, { AudioInputDeviceNode, toAudioNode as serializeAudioInputDevice } from "./nodes/AudioInputDevice";
+import AudioOutputDevice, { AudioOutputDeviceNode, toAudioNode as serializeAudioOutputDevice } from "./nodes/AudioOutputDevice";
+import VirtualAudioInput, { VirtualAudioInputNode, toAudioNode as serializeVirtualAudioInput } from "./nodes/VirtualAudioInput";
+import VirtualAudioOutput, { VirtualAudioOutputNode, toAudioNode as serializeVirtualAudioOutput } from "./nodes/VirtualAudioOutput";
+import SpectrumAnalyzer, { SpectrumAnalyzerNode, toAudioNode as serializeSpectrumAnalyzer } from "./nodes/SpectrumAnalyzer";
+import WaveformMonitor, { WaveformMonitorNode, toAudioNode as serializeWaveformMonitor } from "./nodes/WaveformMonitor";
+import AppAudioCapture, { AppAudioCaptureNode, toAudioNode as serializeAppAudioCapture } from "./nodes/AppAudioCapture";
+import Mixer, { MixerNodeType, toAudioNode as serializeMixer } from "./nodes/Mixer";
 
 export interface WindowInfo {
   processId: number;
@@ -44,6 +44,23 @@ export const nodeTypes = {
   appAudioCapture: AppAudioCapture,
   mixer: Mixer,
 } satisfies NodeTypes;
+
+/** 각 노드 타입을 IPC용 AudioNode로 직렬화하는 함수 맵. */
+const nodeSerializers = {
+  audioInputDevice: serializeAudioInputDevice,
+  audioOutputDevice: serializeAudioOutputDevice,
+  virtualAudioInput: serializeVirtualAudioInput,
+  virtualAudioOutput: serializeVirtualAudioOutput,
+  spectrumAnalyzer: serializeSpectrumAnalyzer,
+  waveformMonitor: serializeWaveformMonitor,
+  appAudioCapture: serializeAppAudioCapture,
+  mixer: serializeMixer,
+} satisfies { [K in NodeType["type"]]: (node: Extract<NodeType, { type: K }>) => AudioNode };
+
+export function serializeNode(node: NodeType): AudioNode {
+  const serializer = nodeSerializers[node.type] as (node: NodeType) => AudioNode;
+  return serializer(node);
+}
 
 export type NodeType =
   | AudioInputDeviceNode
