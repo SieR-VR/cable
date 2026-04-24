@@ -98,7 +98,7 @@ function App() {
       console.error("setup_runtime failed:", e);
       setApplyStatus(`Error: ${e}`);
     }
-  }, [nodes, edges, selectedAudioHost]);
+  }, [nodes, edges, selectedAudioHost, startRenderPolling]);
 
   const onSave = useCallback(async () => {
     const file: CableGraphFile = { version: 1, nodes, edges };

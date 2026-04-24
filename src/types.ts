@@ -1,13 +1,14 @@
-import { Edge, NodeTypes } from "@xyflow/react";
+import { Edge, Node, NodeTypes } from "@xyflow/react";
 
-import audioInputDeviceDef, { AudioInputDeviceNode } from "./nodes/AudioInputDevice";
-import audioOutputDeviceDef, { AudioOutputDeviceNode } from "./nodes/AudioOutputDevice";
-import virtualAudioInputDef, { VirtualAudioInputNode } from "./nodes/VirtualAudioInput";
-import virtualAudioOutputDef, { VirtualAudioOutputNode } from "./nodes/VirtualAudioOutput";
-import spectrumAnalyzerDef, { SpectrumAnalyzerNode } from "./nodes/SpectrumAnalyzer";
-import waveformMonitorDef, { WaveformMonitorNode } from "./nodes/WaveformMonitor";
-import appAudioCaptureDef, { AppAudioCaptureNode } from "./nodes/AppAudioCapture";
-import mixerDef, { MixerNodeType } from "./nodes/Mixer";
+import { NodeDefinition } from "./node-definition";
+import appAudioCaptureDef from "./nodes/AppAudioCapture";
+import audioInputDeviceDef from "./nodes/AudioInputDevice";
+import audioOutputDeviceDef from "./nodes/AudioOutputDevice";
+import mixerDef from "./nodes/Mixer";
+import spectrumAnalyzerDef from "./nodes/SpectrumAnalyzer";
+import virtualAudioInputDef from "./nodes/VirtualAudioInput";
+import virtualAudioOutputDef from "./nodes/VirtualAudioOutput";
+import waveformMonitorDef from "./nodes/WaveformMonitor";
 
 export interface WindowInfo {
   processId: number;
@@ -54,15 +55,11 @@ export function serializeNode(node: NodeType): AudioNode {
   return (def.toAudioNode as (n: NodeType) => AudioNode)(node);
 }
 
-export type NodeType =
-  | AudioInputDeviceNode
-  | AudioOutputDeviceNode
-  | VirtualAudioInputNode
-  | VirtualAudioOutputNode
-  | SpectrumAnalyzerNode
-  | WaveformMonitorNode
-  | AppAudioCaptureNode
-  | MixerNodeType;
+export type NodeType = {
+  [K in keyof typeof nodeDefs]: (typeof nodeDefs)[K] extends NodeDefinition<infer TNode>
+    ? TNode
+    : never;
+}[keyof typeof nodeDefs];
 
 export type EdgeType = Edge<AudioEdge>;
 
@@ -72,17 +69,12 @@ export interface AudioGraph {
 }
 
 export type AudioNode = {
-  type:
-    | "audioInputDevice"
-    | "audioOutputDevice"
-    | "virtualAudioInput"
-    | "virtualAudioOutput"
-    | "spectrumAnalyzer"
-    | "waveformMonitor"
-    | "appAudioCapture"
-    | "mixer";
-  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string } | { fftSize: number; id: string } | { windowSize: number; id: string } | { processId: number; windowTitle: string; id: string } | { id: string };
-};
+  [K in keyof typeof nodeDefs]: (typeof nodeDefs)[K] extends NodeDefinition<infer TNode>
+    ? TNode extends Node<infer TData, infer TType>
+      ? { type: TType; data: TData }
+      : never
+    : never;
+}[keyof typeof nodeDefs];
 
 export type AudioEdge = {
   id: string;
@@ -103,53 +95,10 @@ export interface CableGraphFile {
   edges: EdgeType[];
 }
 
-/** Per-frame render data returned by `get_node_render_data` for visualizer nodes. */
-export type NodeRenderData =
-  | { type: "spectrumAnalyzer"; data: { bins: number[] } }
-  | { type: "waveformMonitor"; data: { samples: number[] } };
-
-
-export type NodeType =
-  | AudioInputDeviceNode
-  | AudioOutputDeviceNode
-  | VirtualAudioInputNode
-  | VirtualAudioOutputNode
-  | SpectrumAnalyzerNode
-  | WaveformMonitorNode
-  | AppAudioCaptureNode
-  | MixerNodeType;
-
-export type EdgeType = Edge<AudioEdge>;
-
 export interface AudioGraph {
   nodes: AudioNode[];
   edges: AudioEdge[];
 }
-
-export type AudioNode = {
-  type:
-    | "audioInputDevice"
-    | "audioOutputDevice"
-    | "virtualAudioInput"
-    | "virtualAudioOutput"
-    | "spectrumAnalyzer"
-    | "waveformMonitor"
-    | "appAudioCapture"
-    | "mixer";
-  data: { device: AudioDevice | null; id: string } | { deviceId: string; name: string; id: string } | { fftSize: number; id: string } | { windowSize: number; id: string } | { processId: number; windowTitle: string; id: string } | { id: string };
-};
-
-export type AudioEdge = {
-  id: string;
-  from: string;
-  to: string;
-  /** Target handle ID (e.g. "input-a", "input-b" for Mixer node) */
-  toHandle?: string;
-
-  frequency?: number;
-  channels?: number;
-  bitsPerSample?: number;
-};
 
 /** Serialized graph file saved to / loaded from disk. */
 export interface CableGraphFile {
