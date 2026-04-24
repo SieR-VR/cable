@@ -70,9 +70,7 @@ export function ContextMenu() {
       className="fixed min-w-48 bg-white border border-gray-200 shadow-lg rounded-md py-1"
       style={{ top: contextMenuPosition.y, left: contextMenuPosition.x }}
     >
-      <div className="px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-        Add Node
-      </div>
+      <div className="px-3 py-1 text-xs font-semibold text-gray-400 tracking-wide">Add Node</div>
 
       {NODE_CATEGORIES.map((category, i) => {
         const disabled = category.requiresDriver && !driverConnected;
