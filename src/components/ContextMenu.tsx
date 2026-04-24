@@ -1,8 +1,8 @@
-import { useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { useState } from "react";
 
-import { NodeType } from "@/types";
 import { useAppStore } from "@/state";
+import { NodeType } from "@/types";
 
 type NodeMenuEntry = {
   type: NodeType["type"];
@@ -21,16 +21,11 @@ const NODE_CATEGORIES: NodeCategory[] = [
     items: [
       { type: "audioInputDevice", label: "Audio Input Device" },
       { type: "audioOutputDevice", label: "Audio Output Device" },
-      { type: "appAudioCapture", label: "App Audio Capture" },
     ],
   },
   {
-    label: "Virtual Devices",
-    requiresDriver: true,
-    items: [
-      { type: "virtualAudioInput", label: "Virtual Mic (Capture)" },
-      { type: "virtualAudioOutput", label: "Virtual Speaker (Render)" },
-    ],
+    label: "Sources",
+    items: [{ type: "appAudioCapture", label: "App Audio Capture" }],
   },
   {
     label: "Visualizers",
@@ -41,8 +36,14 @@ const NODE_CATEGORIES: NodeCategory[] = [
   },
   {
     label: "Processing",
+    items: [{ type: "mixer", label: "Mixer" }],
+  },
+  {
+    label: "Virtual Devices",
+    requiresDriver: true,
     items: [
-      { type: "mixer", label: "Mixer" },
+      { type: "virtualAudioInput", label: "Virtual Mic (Capture)" },
+      { type: "virtualAudioOutput", label: "Virtual Speaker (Render)" },
     ],
   },
 ];
@@ -87,17 +88,13 @@ export function ContextMenu() {
             <div
               className={[
                 "flex items-center justify-between px-3 py-2 text-sm rounded mx-1 select-none",
-                disabled
-                  ? "text-gray-400 cursor-not-allowed"
-                  : "cursor-pointer hover:bg-gray-100",
+                disabled ? "text-gray-400 cursor-not-allowed" : "cursor-pointer hover:bg-gray-100",
                 isHovered && !disabled ? "bg-gray-100" : "",
               ].join(" ")}
             >
               <span>{category.label}</span>
               <div className="flex items-center gap-1">
-                {disabled && (
-                  <span className="text-xs text-yellow-500">offline</span>
-                )}
+                {disabled && <span className="text-xs text-yellow-500">offline</span>}
                 <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
               </div>
             </div>
@@ -122,18 +119,20 @@ export function ContextMenu() {
         );
       })}
 
-      <div className="my-1 h-px bg-gray-200" />
-
-      <button
-        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer rounded mx-0 disabled:opacity-40 disabled:cursor-not-allowed"
-        disabled={!contextMenuTargetNodeId}
-        onClick={() => {
-          removeNodeAtContextMenu();
-          setContextMenuOpen(false);
-        }}
-      >
-        Remove Node
-      </button>
+      {contextMenuTargetNodeId && (
+        <>
+          <div className="my-1 h-px bg-gray-200" />
+          <button
+            className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer rounded mx-0"
+            onClick={() => {
+              removeNodeAtContextMenu();
+              setContextMenuOpen(false);
+            }}
+          >
+            Remove Node
+          </button>
+        </>
+      )}
     </div>
   );
 }
