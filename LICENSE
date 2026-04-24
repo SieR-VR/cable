@@ -1,0 +1,10 @@
+Cable is dual-licensed depending on the component:
+
+  - Application code (src/, crates/): GNU General Public License v3.0
+    See LICENSE-GPL for the full license text.
+
+  - Kernel driver code (driver/): Microsoft Public License (MS-PL)
+    See LICENSE-MS-PL for the full license text.
+    The driver code originates from Microsoft's Windows Driver Kit samples
+    and VirtualDrivers/Virtual-Audio-Driver (https://github.com/VirtualDrivers/Virtual-Audio-Driver).
+    Original copyright: Copyright (c) Microsoft Corporation. All Rights Reserved.
