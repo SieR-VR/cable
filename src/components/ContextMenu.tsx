@@ -1,8 +1,11 @@
-import { nodeTypes } from "@/types";
+import { useState } from "react";
+import { ChevronRight } from "lucide-react";
+
+import { NodeType } from "@/types";
 import { useAppStore } from "@/state";
 
 type NodeMenuEntry = {
-  type: keyof typeof nodeTypes;
+  type: NodeType["type"];
   label: string;
 };
 
@@ -55,44 +58,74 @@ export function ContextMenu() {
     driverConnected,
   } = useAppStore();
 
+  const [hoveredCategory, setHoveredCategory] = useState<number | null>(null);
+
   if (!contextMenuOpen) {
     return null;
   }
 
   return (
     <div
-      className="fixed min-w-56 bg-white border border-gray-300 shadow-lg rounded-md p-2"
+      className="fixed min-w-48 bg-white border border-gray-200 shadow-lg rounded-md py-1"
       style={{ top: contextMenuPosition.y, left: contextMenuPosition.x }}
     >
-      <div className="px-2 pb-1 text-xs font-semibold text-gray-500">Add Node</div>
+      <div className="px-3 py-1 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+        Add Node
+      </div>
+
       {NODE_CATEGORIES.map((category, i) => {
         const disabled = category.requiresDriver && !driverConnected;
+        const isHovered = hoveredCategory === i;
+
         return (
-          <div key={category.label}>
-            {i > 0 && <div className="my-2 h-px bg-gray-200" />}
-            <div className="px-2 pb-1 text-xs font-semibold text-gray-500">
-              {category.label}
-              {disabled && <span className="text-yellow-500"> (driver offline)</span>}
+          <div
+            key={category.label}
+            className="relative"
+            onMouseEnter={() => setHoveredCategory(i)}
+            onMouseLeave={() => setHoveredCategory(null)}
+          >
+            <div
+              className={[
+                "flex items-center justify-between px-3 py-2 text-sm rounded mx-1 select-none",
+                disabled
+                  ? "text-gray-400 cursor-not-allowed"
+                  : "cursor-pointer hover:bg-gray-100",
+                isHovered && !disabled ? "bg-gray-100" : "",
+              ].join(" ")}
+            >
+              <span>{category.label}</span>
+              <div className="flex items-center gap-1">
+                {disabled && (
+                  <span className="text-xs text-yellow-500">offline</span>
+                )}
+                <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
+              </div>
             </div>
-            {category.items.map((item) => (
-              <button
-                key={item.type}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 cursor-pointer rounded disabled:opacity-40 disabled:cursor-not-allowed"
-                disabled={!!disabled}
-                onClick={() => {
-                  addNodeAtContextMenu(item.type);
-                  setContextMenuOpen(false);
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
+
+            {isHovered && !disabled && (
+              <div className="absolute left-full top-0 min-w-44 bg-white border border-gray-200 shadow-lg rounded-md py-1 -mt-px ml-px z-10">
+                {category.items.map((item) => (
+                  <button
+                    key={item.type}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer rounded mx-0"
+                    onClick={() => {
+                      addNodeAtContextMenu(item.type);
+                      setContextMenuOpen(false);
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
-      <div className="my-2 h-px bg-gray-200" />
+
+      <div className="my-1 h-px bg-gray-200" />
+
       <button
-        className="w-full text-left px-4 py-2 hover:bg-gray-100 cursor-pointer rounded disabled:opacity-40 disabled:cursor-not-allowed"
+        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-100 cursor-pointer rounded mx-0 disabled:opacity-40 disabled:cursor-not-allowed"
         disabled={!contextMenuTargetNodeId}
         onClick={() => {
           removeNodeAtContextMenu();
