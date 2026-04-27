@@ -1,0 +1,46 @@
+# clangd configuration for CableAudio Windows Kernel Mode Driver
+CompileFlags:
+  Compiler: clang-cl
+  Add:
+    # Project internal headers
+    - "-IC:/Users/nwh63/cable/driver/Source/Inc"
+    - "-IC:/Users/nwh63/cable/driver/Source/Main"
+    - "-IC:/Users/nwh63/cable/driver/Source/Filters"
+    - "-IC:/Users/nwh63/cable/driver/Source/Utilities"
+    # WDK kernel-mode and shared headers (10.0.26100.0)
+    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/km"
+    - "-IC:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared"
+    # WDF KMDF headers
+    - "-IC:/Program Files (x86)/Windows Kits/10/Include/wdf/kmdf/1.33"
+    # MSVC compatibility (for __declspec, SAL annotations, pragma warning, etc.)
+    - "-fms-extensions"
+    - "-fms-compatibility"
+    - "-fms-compatibility-version=19.44"
+    # Kernel mode target defines
+    - "-D_AMD64_"
+    - "-D_KERNEL_MODE"
+    - "-DNTDDI_VERSION=0x0A00000C"
+    - "-D_WIN32_WINNT=0x0A00"
+    - "-DWINVER=0x0A00"
+    - "-DKMDF_VERSION_MAJOR=1"
+    - "-DKMDF_VERSION_MINOR=33"
+    # Project defines (from vcxproj ClCompile PreprocessorDefinitions)
+    - "-D_WIN32"
+    - "-DUNICODE"
+    - "-D_UNICODE"
+    - "-DPC_IMPLEMENTATION"
+    - "-DDEBUG_LEVEL=DEBUGLVL_TERSE"
+    # C++ standard matching vcxproj (MSVC default for WDK drivers)
+    - "-std=c++14"
+    # Suppress MSVC-compatible patterns that clangd flags incorrectly:
+    # - IOCTL codes with high bit set (0x8000xxxx) in ULONG switch cases
+    # - WDK enum forward-declaration style not supported by clang parser
+    - "-Wno-c++11-narrowing"
+    - "-Wno-microsoft-enum-forward-reference"
+
+Diagnostics:
+  Suppress:
+    # wdfdevice.h forward-declares `enum _WDF_REQUEST_TYPE : int` but
+    # wdfrequest.h defines it without `: int` — a WDK 1.33/1.35 header bug.
+    # MSVC accepts this silently; clang treats it as a hard error.
+    - "enum_redeclare_fixed_mismatch"
