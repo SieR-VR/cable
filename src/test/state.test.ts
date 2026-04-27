@@ -275,7 +275,7 @@ describe("useAppStore — onConnect edge type guard", () => {
       edges: [],
     });
 
-    // 첫 번째 연결은 성공
+    // First connection succeeds
     useAppStore.getState().onConnect({
       source: "src-1",
       target: "tgt",
@@ -284,7 +284,7 @@ describe("useAppStore — onConnect edge type guard", () => {
     });
     expect(useAppStore.getState().edges).toHaveLength(1);
 
-    // 같은 handle에 두 번째 연결 → 거부
+    // Second connection to the same handle → rejected
     useAppStore.getState().onConnect({
       source: "src-2",
       target: "tgt",
@@ -335,7 +335,7 @@ describe("useAppStore — onConnect edge type guard", () => {
       targetHandle: "input-b",
     });
 
-    // A, B 각각 하나씩 → 2개 모두 허용
+    // One connection each to A and B → both allowed
     expect(useAppStore.getState().edges).toHaveLength(2);
   });
 });

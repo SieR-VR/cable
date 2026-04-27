@@ -330,7 +330,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       return;
     }
 
-    // 한 input 핸들에는 하나의 엣지만 허용
+    // Only one edge per input handle is allowed.
     const isDuplicateInput = edges.some(
       (edge) =>
         edge.target === connection.target &&

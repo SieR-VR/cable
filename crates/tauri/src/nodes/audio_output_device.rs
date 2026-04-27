@@ -73,7 +73,7 @@ impl NodeTrait for AudioOutputDeviceNode {
 
     let sample_format = default_cfg.sample_format();
 
-    // 링 버퍼 생성: buffer_size * channels * 4 (여유 배수)
+    // Ring buffer: buffer_size * channels * 16 (generous headroom)
     let rb_size = runtime.buffer_size as usize * self.device.channels as usize * 16;
     let rb = HeapRb::<f32>::new(rb_size);
     let (producer, mut consumer) = rb.split();
@@ -163,7 +163,7 @@ impl NodeTrait for AudioOutputDeviceNode {
       self.device.readable_name, self.id
     );
 
-    // Stream을 drop하면 cpal이 자동으로 스트림을 중지함
+    // Dropping the Stream causes cpal to stop it automatically.
     self.stream.take();
     self.ring_producer.take();
 
@@ -180,7 +180,7 @@ impl NodeTrait for AudioOutputDeviceNode {
       None => return Ok(BTreeMap::new()),
     };
 
-    // 이 노드로 향하는 엣지의 데이터를 ring buffer에 push
+    // Push data from edges targeting this node into the ring buffer.
     for edge in &runtime.edges {
       if edge.to == self.id {
         if let Some(buf) = state.edge_values.get(&edge.id) {
@@ -204,7 +204,7 @@ impl NodeTrait for AudioOutputDeviceNode {
       }
     }
 
-    // 출력 노드이므로 하류 엣지 없음 → 빈 맵 반환
+    // Output node has no downstream edges → return empty map.
     Ok(BTreeMap::new())
   }
 }

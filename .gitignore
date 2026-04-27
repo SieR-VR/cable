@@ -6,3 +6,4 @@
 .env.development
 
 node_modules
+package-lock.json

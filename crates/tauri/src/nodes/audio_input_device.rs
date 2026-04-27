@@ -25,10 +25,10 @@ pub(crate) struct AudioInputDeviceNode {
   stream: Option<Stream>,
   #[serde(skip)]
   ring_consumer: Option<HeapCons<f32>>,
-  /// 초기화 시 확인한 실제 채널 수.
+  /// Actual channel count confirmed during init; used in process() to build AudioBuffer.
   #[serde(skip)]
   stream_channels: u16,
-  /// 초기화 시 확인한 실제 샘플레이트.
+  /// Actual sample rate confirmed during init.
   #[serde(skip)]
   stream_sample_rate: u32,
 }
@@ -76,11 +76,11 @@ impl NodeTrait for AudioInputDeviceNode {
     };
 
     let sample_format = default_cfg.sample_format();
-    // 채널/샘플레이트를 process()에서 AudioBuffer 생성에 사용하기 위해 캐시
+    // Cache channel count and sample rate for AudioBuffer construction in process().
     self.stream_channels = config.channels;
     self.stream_sample_rate = default_cfg.sample_rate();
 
-    // 링 버퍼 생성: buffer_size * channels * 4 (여유 배수)
+    // Ring buffer: buffer_size * channels * 4 (generous headroom)
     let rb_size = runtime.buffer_size as usize * self.device.channels as usize * 4;
     let rb = HeapRb::<f32>::new(rb_size);
     let (mut producer, consumer) = rb.split();
@@ -159,7 +159,7 @@ impl NodeTrait for AudioInputDeviceNode {
       self.device.readable_name, self.id
     );
 
-    // Stream을 drop하면 cpal이 자동으로 스트림을 중지함
+    // Dropping the Stream causes cpal to stop it automatically.
     self.stream.take();
     self.ring_consumer.take();
 
@@ -184,7 +184,7 @@ impl NodeTrait for AudioInputDeviceNode {
       return Ok(BTreeMap::new());
     }
 
-    // 정확히 buffer_size * channels 샘플을 드레인 (부족하면 silence 패딩)
+    // Drain exactly buffer_size * channels samples (pad with silence if insufficient).
     let drain = available.min(target);
     let mut samples = vec![0.0f32; target];
     consumer.pop_slice(&mut samples[..drain]);
@@ -196,7 +196,7 @@ impl NodeTrait for AudioInputDeviceNode {
       32,
     );
 
-    // 이 노드에서 출발하는 모든 엣지에 데이터 복제하여 전달
+    // Copy data to all outgoing edges.
     let mut output = BTreeMap::new();
     for edge in &runtime.edges {
       if edge.from == self.id {

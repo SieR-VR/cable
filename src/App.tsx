@@ -127,17 +127,17 @@ function App() {
             !Array.isArray(parsed.nodes) ||
             !Array.isArray(parsed.edges)
           ) {
-            setApplyStatus("Error: 올바르지 않은 그래프 파일 형식입니다.");
+            setApplyStatus("Error: Invalid graph file format.");
             return;
           }
           await invoke("disable_runtime");
           stopRenderPolling();
           setIsRuntimeEnabled(false);
           loadGraph(parsed.nodes, parsed.edges);
-          setApplyStatus("그래프를 불러왔습니다. Apply를 눌러 적용하세요.");
+          setApplyStatus("Graph loaded. Press Apply to activate.");
           setTimeout(() => setApplyStatus(null), 4000);
         } catch {
-          setApplyStatus("Error: 파일을 불러올 수 없습니다.");
+          setApplyStatus("Error: Could not read the file.");
         }
       })
       .then((fn) => {

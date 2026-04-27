@@ -1,17 +1,17 @@
-//! VST3 COM 인터페이스 vtable 정의.
+//! VST3 COM interface vtable definitions.
 //!
-//! Windows x64에서 VST3 DLL은 `GetPluginFactory()` 심볼을 내보내며,
-//! 반환된 IPluginFactory 포인터를 통해 IComponent / IAudioProcessor /
-//! IEditController / IPlugView 인터페이스를 생성한다.
+//! On Windows x64, a VST3 DLL exports the `GetPluginFactory()` symbol.
+//! The returned IPluginFactory pointer is used to create IComponent,
+//! IAudioProcessor, IEditController, and IPlugView interfaces.
 //!
-//! 모든 구조체는 `#[repr(C)]`로 선언되어 C ABI와 정확히 일치한다.
-//! vtable 함수 포인터는 사용하지 않는 메서드도 전부 포함해야 순서가 맞는다.
+//! All structs are declared `#[repr(C)]` to exactly match the C ABI.
+//! Vtable function pointers must include all methods (even unused ones) to preserve ordering.
 #![allow(dead_code)]
 
 use std::ffi::c_void;
 
 // ---------------------------------------------------------------------------
-// 결과 코드
+// Result codes
 // ---------------------------------------------------------------------------
 
 pub const K_RESULT_OK: i32 = 0;
@@ -20,7 +20,7 @@ pub const K_NO_INTERFACE: i32 = 0x80004002u32 as i32;
 pub const K_RESULT_FALSE: i32 = 1;
 
 // ---------------------------------------------------------------------------
-// 상수
+// Constants
 // ---------------------------------------------------------------------------
 
 /// kAudio bus type
@@ -43,17 +43,17 @@ pub const K_MONO: u64 = 1 << 19;
 pub const K_VA_TYPE_AUDIO: &[u8] = b"Audio Module Class\0";
 
 // ---------------------------------------------------------------------------
-// Interface IDs — Windows COM 호환 바이트 순서
+// Interface IDs — Windows COM-compatible byte order
 //
-// VST3 SDK는 Windows에서 COM 호환 GUID 포맷을 사용한다.
-// DECLARE_CLASS_IID(Foo, l1, l2, l3, l4) 로부터 변환:
+// The VST3 SDK uses COM-compatible GUID format on Windows.
+// Conversion from DECLARE_CLASS_IID(Foo, l1, l2, l3, l4):
 //   bytes  0-3  : l1 little-endian
 //   bytes  4-5  : (l2 >> 16) little-endian
 //   bytes  6-7  : (l2 & 0xFFFF) little-endian
 //   bytes  8-15 : l3, l4 big-endian
 // ---------------------------------------------------------------------------
 
-/// DECLARE_CLASS_IID의 4-uint32 값을 Windows COM GUID 바이트 순서로 변환한다.
+/// Converts four uint32 values from DECLARE_CLASS_IID into Windows COM GUID byte order.
 const fn vst3_iid(l1: u32, l2: u32, l3: u32, l4: u32) -> [u8; 16] {
   [
     (l1 & 0xFF) as u8,
@@ -87,10 +87,10 @@ pub const IID_IEDIT_CONTROLLER: [u8; 16] = vst3_iid(0xDCD7BBE3, 0x7742448D, 0xA8
 pub const IID_IPLUG_VIEW: [u8; 16] = vst3_iid(0x5BC32507, 0xD060049E, 0xA6151B52, 0x2B755B29);
 
 // ---------------------------------------------------------------------------
-// 공통 데이터 구조체
+// Common data structures
 // ---------------------------------------------------------------------------
 
-/// IPluginFactory::getFactoryInfo() 결과.
+/// Result of IPluginFactory::getFactoryInfo().
 #[repr(C)]
 pub struct PFactoryInfo {
   pub vendor: [u8; 64],
@@ -105,7 +105,7 @@ impl Default for PFactoryInfo {
   }
 }
 
-/// IPluginFactory::getClassInfo() 결과.
+/// Result of IPluginFactory::getClassInfo().
 #[repr(C)]
 pub struct PClassInfo {
   pub cid: [u8; 16],
@@ -120,8 +120,8 @@ impl Default for PClassInfo {
   }
 }
 
-/// IAudioProcessor::setupProcessing() 파라미터.
-/// C 레이아웃:
+/// Parameters for IAudioProcessor::setupProcessing().
+/// C layout:
 ///   offset  0: process_mode (i32, 4)
 ///   offset  4: symbolic_sample_size (i32, 4)
 ///   offset  8: max_samples_per_block (i32, 4)
@@ -146,8 +146,8 @@ impl ProcessSetup {
   }
 }
 
-/// AudioBusBuffers — ProcessData 에 들어가는 오디오 버스 버퍼 서술자.
-/// C 레이아웃 (64-bit):
+/// AudioBusBuffers — audio bus buffer descriptor passed in ProcessData.
+/// C layout (64-bit):
 ///   offset  0: num_channels (i32, 4)
 ///   offset  4: padding (4)
 ///   offset  8: silence_flags (u64, 8)
@@ -167,8 +167,8 @@ impl AudioBusBuffers {
   }
 }
 
-/// ProcessData — IAudioProcessor::process() 에 전달되는 구조체.
-/// C 레이아웃 (64-bit):
+/// ProcessData — structure passed to IAudioProcessor::process().
+/// C layout (64-bit):
 ///   offset  0: process_mode (i32, 4)
 ///   offset  4: symbolic_sample_size (i32, 4)
 ///   offset  8: num_samples (i32, 4)
@@ -177,7 +177,7 @@ impl AudioBusBuffers {
 ///   offset 20: padding (4)
 ///   offset 24: inputs (*mut AudioBusBuffers, 8)
 ///   offset 32: outputs (*mut AudioBusBuffers, 8)
-///   ... 5개 추가 포인터 (각 8바이트)
+///   ... 5 additional pointers (8 bytes each)
 ///   size: 80
 #[repr(C)]
 pub struct ProcessData {
@@ -216,7 +216,7 @@ impl ProcessData {
   }
 }
 
-/// IPlugView::getSize() / onSize() 에 사용되는 뷰 크기.
+/// View rect used by IPlugView::getSize() / onSize().
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct ViewRect {
@@ -236,8 +236,8 @@ impl ViewRect {
   }
 }
 
-/// IEditController::getParameterInfo() 결과.
-/// 크기: 4 + 256 + 256 + 256 + 4 + 8 + 4 + 4 = 792 bytes
+/// Result of IEditController::getParameterInfo().
+/// Size: 4 + 256 + 256 + 256 + 4 + 8 + 4 + 4 = 792 bytes
 #[repr(C)]
 pub struct ParameterInfo {
   pub id: u32,
@@ -257,23 +257,23 @@ impl Default for ParameterInfo {
 }
 
 // ---------------------------------------------------------------------------
-// UTF-16 문자열 헬퍼
+// UTF-16 string helpers
 // ---------------------------------------------------------------------------
 
-/// VST3 String128 (i16[128]) → Rust String 변환.
+/// Converts a VST3 String128 (i16[128]) to a Rust String.
 pub fn wchar_to_string(chars: &[i16]) -> String {
   let u16s: Vec<u16> = chars.iter().take_while(|&&c| c != 0).map(|&c| c as u16).collect();
   String::from_utf16_lossy(&u16s)
 }
 
-/// C 스타일 ASCII 바이트 배열 → Rust String 변환.
+/// Converts a C-style ASCII byte array to a Rust String.
 pub fn cchar_to_string(bytes: &[u8]) -> String {
   let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
   String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 // ---------------------------------------------------------------------------
-// FUnknown vtable — 모든 VST3 인터페이스의 기반
+// FUnknown vtable — base of all VST3 interfaces
 // ---------------------------------------------------------------------------
 
 #[repr(C)]
@@ -354,7 +354,7 @@ impl IPluginFactory {
     }
   }
 
-  /// cid와 iid로 인터페이스 인스턴스를 생성한다.
+  /// Creates an interface instance from a cid and iid.
   pub unsafe fn create_instance(&mut self, cid: &[u8; 16],
                                 iid: &[u8; 16])
                                 -> Option<*mut c_void> {
@@ -363,7 +363,7 @@ impl IPluginFactory {
     if r == K_RESULT_OK && !obj.is_null() {
       Some(obj)
     } else {
-      println!("create_instance 실패: result={r:#010x}, obj={obj:?}");
+      println!("create_instance failed: result={r:#010x}, obj={obj:?}");
       None
     }
   }
@@ -584,7 +584,7 @@ impl IEditController {
     ((*self.vtable).set_param_normalized)(self, id, value)
   }
 
-  /// "editor" 뷰 생성.
+  /// Creates the "editor" view.
   pub unsafe fn create_view(&mut self) -> Option<*mut IPlugView> {
     let name = b"editor\0";
     let ptr = ((*self.vtable).create_view)(self, name.as_ptr() as *const i8);
@@ -656,8 +656,8 @@ impl IPlugView {
 }
 
 // ---------------------------------------------------------------------------
-// GetPluginFactory 함수 타입
+// GetPluginFactory function type
 // ---------------------------------------------------------------------------
 
-/// VST3 DLL에서 내보내는 `GetPluginFactory` 함수 타입.
+/// Type of the `GetPluginFactory` function exported by a VST3 DLL.
 pub type GetPluginFactoryFn = unsafe extern "C" fn() -> *mut IPluginFactory;

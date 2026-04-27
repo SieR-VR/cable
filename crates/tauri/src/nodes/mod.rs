@@ -13,16 +13,16 @@ pub mod mixer;
 pub mod vst_node;
 pub(crate) mod vst3_com;
 
-/// 노드 간에 전달되는 오디오 데이터 버퍼.
+/// Audio data buffer passed between nodes.
 ///
-/// `samples`는 인터리브드 f32 샘플이다.
-/// VST 등 채널 수가 필요한 노드는 이 값을 참조한다.
+/// `samples` is an interleaved f32 sample array.
+/// Nodes such as VST that need the channel count reference this value.
 #[derive(Clone, Debug)]
 pub struct AudioBuffer {
   pub samples: Vec<f32>,
   pub channels: u16,
   pub sample_rate: u32,
-  /// 원본 포맷의 비트 심도 (처리는 항상 f32로 수행).
+  /// Bit depth of the original format (processing always runs as f32).
   pub bits_per_sample: u16,
 }
 
@@ -31,7 +31,7 @@ impl AudioBuffer {
     Self { samples, channels, sample_rate, bits_per_sample }
   }
 
-  /// silence 버퍼 생성.
+  /// Returns a silent buffer.
   pub fn silence(frames: usize, channels: u16, sample_rate: u32) -> Self {
     Self {
       samples: vec![0.0f32; frames * channels as usize],
@@ -45,8 +45,8 @@ impl AudioBuffer {
 pub(crate) trait NodeTrait {
   fn id(&self) -> &str;
 
-  /// 노드가 처음 생성될 때 호출된다. Runtime이 없는 상태에서도 실행된다.
-  /// 플러그인 메타데이터 추출 등 사전 초기화에 사용. 기본 구현은 no-op.
+  /// Called when the node is first created. Runs before a Runtime exists.
+  /// Used for pre-initialization such as plugin metadata extraction. Default implementation is a no-op.
   fn create(&mut self) -> Result<(), String> {
     Ok(())
   }
