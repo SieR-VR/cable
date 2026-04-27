@@ -20,6 +20,7 @@ use nodes::mixer::MixerNode;
 use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
+use nodes::vst_node::{VstNode, VstPluginInfo, VstParamInfo};
 use nodes::waveform_monitor::WaveformMonitorNode;
 use nodes::NodeTrait;
 
@@ -52,6 +53,17 @@ struct AppData {
   spectrum_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
   /// Waveform buffers for WaveformMonitor nodes (node_id -> rolling sample window).
   waveform_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
+  /// Cached VST3 plugin scan results.
+  vst_plugin_list: Vec<VstPluginInfo>,
+  /// VST3 파라미터 버퍼 (node_id → 파라미터 목록).
+  /// 에디터가 열릴 때 IEditController에서 읽어 채운다.
+  vst_param_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<VstParamInfo>>>>,
+  /// VST3 IEditController CID 캐시 (node_id → 16바이트 CID).
+  /// setup_runtime 완료 후 채워지며 open_vst_editor에서 읽는다.
+  vst_ctrl_cids: BTreeMap<String, [u8; 16]>,
+  /// 열린 VST3 에디터 창 (node_id → 핸들). Windows 전용.
+  #[cfg(windows)]
+  vst_editors: BTreeMap<String, VstEditorHandle>,
 }
 
 fn start_runtime_thread(state: &mut AppData, mut runtime: runtime::Runtime) {
@@ -167,6 +179,7 @@ pub(crate) enum AudioNode {
   WaveformMonitor(WaveformMonitorNode),
   AppAudioCapture(AppAudioCaptureNode),
   Mixer(MixerNode),
+  Vst(VstNode),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1053,7 +1066,18 @@ async fn setup_runtime(
 
   runtime.init_nodes()?;
 
+  // VST 노드의 ctrl_cid를 추출하여 AppData에 저장
+  let mut vst_ctrl_cids: BTreeMap<String, [u8; 16]> = BTreeMap::new();
+  for node in &runtime.nodes {
+    if let AudioNode::Vst(n) = node {
+      if let Some(cid) = n.ctrl_cid {
+        vst_ctrl_cids.insert(n.id().to_string(), cid);
+      }
+    }
+  }
+
   let mut state = state.lock().await;
+  state.vst_ctrl_cids = vst_ctrl_cids;
   state.runtime = Some(runtime);
 
   // Always start (or restart) runtime after applying graph so users
@@ -1138,6 +1162,411 @@ async fn read_text_file(path: String) -> Result<String, String> {
   std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// VST3 커맨드
+// ---------------------------------------------------------------------------
+
+/// 노드 생성 시점에 호출되어 NodeTrait::create()를 실행한다.
+/// VST 노드의 경우 DLL을 임시 로드해 ctrl_cid를 추출하므로,
+/// Apply 없이도 에디터를 열 수 있다.
+#[tauri::command]
+async fn create_node(
+  state: State<'_, Mutex<AppData>>,
+  node: AudioNode,
+) -> Result<(), String> {
+  let mut node = node;
+  if let AudioNode::Vst(ref mut n) = node {
+    use crate::nodes::NodeTrait;
+    n.create()?;
+    if let Some(cid) = n.ctrl_cid {
+      let mut app = state.lock().await;
+      app.vst_ctrl_cids.insert(n.id().to_string(), cid);
+    }
+  }
+  Ok(())
+}
+
+/// 시스템 VST3 플러그인을 스캔하여 목록을 반환한다.
+/// 결과는 AppData에 캐시된다.
+#[tauri::command]
+async fn scan_vst3_plugins(
+  state: State<'_, Mutex<AppData>>,
+) -> Result<Vec<VstPluginInfo>, String> {
+  let plugins = nodes::vst_node::scan_vst3_plugins();
+  let mut app = state.lock().await;
+  app.vst_plugin_list = plugins.clone();
+  Ok(plugins)
+}
+
+/// 플러그인의 파라미터 목록을 반환한다.
+/// 에디터가 열려 있을 때 캐시된 값을 반환한다.
+#[tauri::command]
+async fn get_vst_params(
+  state: State<'_, Mutex<AppData>>,
+  node_id: String,
+) -> Result<Vec<VstParamInfo>, String> {
+  let app = state.lock().await;
+  if let Some(buf) = app.vst_param_buffers.get(&node_id) {
+    Ok(buf.lock().map_err(|e| e.to_string())?.clone())
+  } else {
+    Ok(Vec::new())
+  }
+}
+
+/// 에디터 창에서 단일 파라미터 값을 설정한다.
+#[tauri::command]
+async fn set_vst_param(
+  state: State<'_, Mutex<AppData>>,
+  node_id: String,
+  param_id: u32,
+  value: f64,
+) -> Result<(), String> {
+  let app = state.lock().await;
+
+  // 공유 버퍼 업데이트
+  if let Some(buf) = app.vst_param_buffers.get(&node_id) {
+    if let Ok(mut params) = buf.lock() {
+      if let Some(p) = params.iter_mut().find(|p| p.id == param_id) {
+        p.value = value;
+      }
+    }
+  }
+
+  // 에디터 스레드에 전달
+  #[cfg(windows)]
+  {
+    if let Some(handle) = app.vst_editors.get(&node_id) {
+      let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+      if hwnd_val != 0 {
+        let _ = handle.param_tx.try_send((param_id, value));
+        unsafe {
+          use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+          use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+          let _ = PostMessageW(Some(HWND(hwnd_val as *mut _)), WM_VST_PARAM, WPARAM(0), LPARAM(0));
+        }
+      }
+    }
+  }
+
+  Ok(())
+}
+
+// WM_USER + 1 — 에디터 WndProc에서 파라미터 채널을 처리하는 트리거
+#[cfg(windows)]
+const WM_VST_PARAM: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1;
+
+/// VST3 에디터 창을 연다.
+/// 이미 열려 있으면 창을 최전면으로 가져온다.
+#[cfg(windows)]
+#[tauri::command]
+async fn open_vst_editor(
+  state: State<'_, Mutex<AppData>>,
+  node_id: String,
+  plugin_path: String,
+) -> Result<(), String> {
+  let mut app = state.lock().await;
+
+  // 이미 에디터가 열려 있으면 포커스; hwnd가 0이면 창이 닫힌 것이므로 stale 엔트리 제거
+  if let Some(handle) = app.vst_editors.get(&node_id) {
+    let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd_val != 0 {
+      unsafe {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+        let hwnd = HWND(hwnd_val as *mut _);
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = SetForegroundWindow(hwnd);
+      }
+      return Ok(());
+    }
+  }
+  // hwnd == 0이거나 엔트리가 없는 경우: stale 핸들 제거 후 새로 생성
+  if let Some(mut stale) = app.vst_editors.remove(&node_id) {
+    if let Some(t) = stale.thread.take() {
+      drop(app);
+      let _ = t.join();
+      app = state.lock().await;
+    }
+  }
+
+  let hwnd_arc = Arc::new(std::sync::atomic::AtomicIsize::new(0));
+  let params_arc: Arc<std::sync::Mutex<Vec<VstParamInfo>>> =
+    Arc::new(std::sync::Mutex::new(Vec::new()));
+  let (param_tx, param_rx) = std::sync::mpsc::sync_channel::<(u32, f64)>(64);
+
+  let ctrl_cid = app.vst_ctrl_cids
+                    .get(&node_id)
+                    .copied()
+                    .ok_or_else(|| format!("ctrl_cid를 찾을 수 없습니다. Apply를 먼저 눌러주세요."))?;
+
+  let hwnd_clone = hwnd_arc.clone();
+  let params_clone = params_arc.clone();
+  let node_id_clone = node_id.clone();
+
+  let thread = std::thread::spawn(move || {
+    run_vst_editor_thread(plugin_path, node_id_clone, ctrl_cid, hwnd_clone, param_rx, params_clone);
+  });
+
+  // param_buffers에 Arc 등록 (에디터 스레드가 채우기 전에도 get_vst_params가 빈 목록 반환 가능)
+  app.vst_param_buffers.insert(node_id.clone(), params_arc.clone());
+
+  app.vst_editors.insert(node_id,
+                         VstEditorHandle { hwnd: hwnd_arc,
+                                           param_tx,
+                                           params: params_arc,
+                                           thread: Some(thread) });
+  Ok(())
+}
+
+/// VST3 에디터 창을 닫는다.
+#[cfg(windows)]
+#[tauri::command]
+async fn close_vst_editor(
+  state: State<'_, Mutex<AppData>>,
+  node_id: String,
+) -> Result<(), String> {
+  let mut app = state.lock().await;
+  if let Some(handle) = app.vst_editors.get(&node_id) {
+    let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd_val != 0 {
+      unsafe {
+        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+        let _ = PostMessageW(Some(HWND(hwnd_val as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0));
+      }
+    }
+  }
+  if let Some(mut handle) = app.vst_editors.remove(&node_id) {
+    if let Some(t) = handle.thread.take() {
+      drop(app); // Mutex 해제 후 join (데드락 방지)
+      let _ = t.join();
+    }
+  }
+  Ok(())
+}
+
+/// VST3 에디터 창 핸들 (Windows 전용).
+#[cfg(windows)]
+struct VstEditorHandle {
+  hwnd: Arc<std::sync::atomic::AtomicIsize>,
+  param_tx: std::sync::mpsc::SyncSender<(u32, f64)>,
+  #[allow(dead_code)]
+  params: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
+  thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// 에디터 창 WndProc가 접근하는 per-window 상태.
+#[cfg(windows)]
+struct EditorWindowState {
+  plug_view: *mut nodes::vst3_com::IPlugView,
+  controller: *mut nodes::vst3_com::IEditController,
+  param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
+  params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
+  _lib: libloading::Library,
+}
+
+/// VST3 에디터 스레드 진입점 (Windows 전용).
+///
+/// DLL 로드 → IEditController 생성 → IPlugView 생성 → Win32 창 → 메시지 루프.
+#[cfg(windows)]
+fn run_vst_editor_thread(
+  plugin_path: String,
+  node_id: String,
+  ctrl_cid: [u8; 16],
+  hwnd_out: Arc<std::sync::atomic::AtomicIsize>,
+  param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
+  params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
+) {
+  use nodes::vst3_com::{wchar_to_string, GetPluginFactoryFn, IID_IEDIT_CONTROLLER, K_RESULT_OK};
+  use std::sync::atomic::Ordering;
+  use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+  use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+  use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassExW, SetWindowLongPtrW,
+    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, MSG, SW_SHOW,
+    WNDCLASSEXW, WS_CAPTION, WS_SYSMENU,
+  };
+
+  unsafe {
+    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+    let result = (|| -> Result<(), String> {
+      let lib = libloading::Library::new(&plugin_path)
+        .map_err(|e| format!("DLL 로드 실패: {e}"))?;
+
+      let get_factory: libloading::Symbol<GetPluginFactoryFn> =
+        lib.get(b"GetPluginFactory\0")
+           .map_err(|e| format!("GetPluginFactory 없음: {e}"))?;
+      let factory = get_factory();
+      if factory.is_null() {
+        return Err("factory null".into());
+      }
+      let factory = &mut *factory;
+
+      // IEditController 생성
+      let ctrl_ptr = factory.create_instance(&ctrl_cid, &IID_IEDIT_CONTROLLER)
+                            .ok_or("IEditController 생성 실패")?;
+      let controller = &mut *(ctrl_ptr as *mut nodes::vst3_com::IEditController);
+      let init_result = controller.initialize(std::ptr::null_mut());
+      if init_result != K_RESULT_OK {
+        controller.release();
+        return Err(format!("IEditController::initialize 실패: {init_result:#x}"));
+      }
+
+      // 파라미터 읽기
+      let count = controller.get_parameter_count();
+      let mut param_list: Vec<VstParamInfo> = Vec::new();
+      for i in 0..count {
+        if let Some(info) = controller.get_parameter_info(i) {
+          let value = controller.get_param_normalized(info.id);
+          param_list.push(VstParamInfo { id: info.id,
+                                         title: wchar_to_string(&info.title),
+                                         value });
+        }
+      }
+      *params_shared.lock().map_err(|e| e.to_string())? = param_list;
+
+      // IPlugView 생성
+      let view_ptr = controller.create_view().ok_or("IPlugView 생성 실패")?;
+      let view = &mut *view_ptr;
+      let rect =
+        view.get_size()
+            .unwrap_or(nodes::vst3_com::ViewRect { left: 0, top: 0, right: 800, bottom: 600 });
+      let w = rect.width().max(200) as i32;
+      let h = rect.height().max(100) as i32;
+
+      // Win32 창 등록 및 생성
+      let hinstance = GetModuleHandleW(None).unwrap_or_default();
+      let class_name: Vec<u16> = format!("VstEditor_{}", node_id)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+      let window_title: Vec<u16> = format!("VST Editor — {}", node_id)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+      let wc = WNDCLASSEXW { cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                              style: CS_HREDRAW | CS_VREDRAW,
+                              lpfnWndProc: Some(vst_editor_wnd_proc),
+                              hInstance: windows::Win32::Foundation::HINSTANCE(hinstance.0),
+                              lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+                              ..Default::default() };
+      RegisterClassExW(&wc);
+
+      let hwnd = CreateWindowExW(windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+                                  windows::core::PCWSTR(class_name.as_ptr()),
+                                  windows::core::PCWSTR(window_title.as_ptr()),
+                                  WS_CAPTION | WS_SYSMENU,
+                                  windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
+                                  windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
+                                  w,
+                                  h,
+                                  None,
+                                  None,
+                                   Some(windows::Win32::Foundation::HINSTANCE(hinstance.0)),
+                                  None).map_err(|e| format!("CreateWindowExW 실패: {e}"))?;
+
+      // EditorWindowState 설정
+      let state = Box::new(EditorWindowState { plug_view: view_ptr,
+                                               controller: ctrl_ptr
+                                                           as *mut nodes::vst3_com::IEditController,
+                                               param_rx,
+                                               params_shared: params_shared.clone(),
+                                               _lib: lib });
+      SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+
+      // 플러그인 UI 부착
+      view.attached(hwnd.0 as *mut _, b"HWND\0");
+
+      // HWND 저장 및 창 표시
+      hwnd_out.store(hwnd.0 as isize, Ordering::SeqCst);
+      let _ = ShowWindow(hwnd, SW_SHOW);
+
+      // 메시지 루프
+      let mut msg = MSG::default();
+      while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+      }
+
+      // 창이 닫혔으므로 hwnd를 0으로 리셋 (재오픈 감지용)
+      hwnd_out.store(0, Ordering::SeqCst);
+
+      Ok(())
+    })();
+
+    if let Err(e) = result {
+      eprintln!("VST 에디터 스레드 오류: {e}");
+      hwnd_out.store(0, Ordering::SeqCst);
+    }
+
+    CoUninitialize();
+  }
+}
+
+/// VST 에디터 창 WndProc.
+#[cfg(windows)]
+unsafe extern "system" fn vst_editor_wnd_proc(
+  hwnd: windows::Win32::Foundation::HWND,
+  msg: u32,
+  wparam: windows::Win32::Foundation::WPARAM,
+  lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+  use windows::Win32::Foundation::LRESULT;
+  use windows::Win32::UI::WindowsAndMessaging::{
+    DefWindowProcW, DestroyWindow, GetWindowLongPtrW, PostQuitMessage, SetWindowLongPtrW,
+    GWLP_USERDATA, WM_CLOSE, WM_DESTROY,
+  };
+
+  let user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+  match msg {
+    WM_CLOSE => {
+      if user_data != 0 {
+        let state = &mut *(user_data as *mut EditorWindowState);
+        if !state.plug_view.is_null() {
+          (*state.plug_view).removed();
+          (*state.plug_view).release();
+          state.plug_view = std::ptr::null_mut();
+        }
+        if !state.controller.is_null() {
+          (*state.controller).terminate();
+          (*state.controller).release();
+          state.controller = std::ptr::null_mut();
+        }
+      }
+      let _ = DestroyWindow(hwnd);
+      LRESULT(0)
+    }
+    WM_DESTROY => {
+      if user_data != 0 {
+        drop(Box::from_raw(user_data as *mut EditorWindowState));
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+      }
+      PostQuitMessage(0);
+      LRESULT(0)
+    }
+    WM_VST_PARAM => {
+      if user_data != 0 {
+        let state = &mut *(user_data as *mut EditorWindowState);
+        while let Ok((id, value)) = state.param_rx.try_recv() {
+          if !state.controller.is_null() {
+            (*state.controller).set_param_normalized(id, value);
+          }
+          if let Ok(mut params) = state.params_shared.try_lock() {
+            if let Some(p) = params.iter_mut().find(|p| p.id == id) {
+              p.value = value;
+            }
+          }
+        }
+      }
+      LRESULT(0)
+    }
+    _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+  }
+}
+
 #[tauri::command]
 async fn disable_runtime(state: State<'_, Mutex<AppData>>) -> Result<(), String> {
   let mut state = state.lock().await;
@@ -1160,6 +1589,11 @@ pub fn run() {
       virtual_devices: BTreeMap::new(),
       spectrum_buffers: BTreeMap::new(),
       waveform_buffers: BTreeMap::new(),
+      vst_plugin_list: Vec::new(),
+      vst_param_buffers: BTreeMap::new(),
+      vst_ctrl_cids: BTreeMap::new(),
+      #[cfg(windows)]
+      vst_editors: BTreeMap::new(),
     }))
     .invoke_handler(tauri::generate_handler![
       get_window_list,
@@ -1178,6 +1612,14 @@ pub fn run() {
       get_node_render_data,
       save_graph,
       read_text_file,
+      create_node,
+      scan_vst3_plugins,
+      get_vst_params,
+      set_vst_param,
+      #[cfg(windows)]
+      open_vst_editor,
+      #[cfg(windows)]
+      close_vst_editor,
     ])
     .run(tauri::generate_context!())
     .unwrap();
