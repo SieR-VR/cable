@@ -1,7 +1,7 @@
 /// VST3 plugin host node.
 ///
-/// 선택된 VST3 플러그인 DLL을 동적으로 로드하여 오디오를 처리한다.
-/// libloading으로 DLL을 열고, COM vtable dispatch로 IAudioProcessor를 호출한다.
+/// Dynamically loads the selected VST3 plugin DLL and processes audio.
+/// Opens the DLL with libloading and calls IAudioProcessor via COM vtable dispatch.
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use crate::{
   runtime::{Runtime, RuntimeState},
 };
 
-/// VST3 플러그인 스캔 결과 항목.
+/// Single entry returned by the VST3 plugin scanner.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct VstPluginInfo {
@@ -23,7 +23,7 @@ pub struct VstPluginInfo {
   pub num_params: u32,
 }
 
-/// VST3 파라미터 정보 (프론트엔드에 전달).
+/// VST3 parameter info (passed to the frontend).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct VstParamInfo {
@@ -33,21 +33,21 @@ pub struct VstParamInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Vst3Plugin 내부 구조체
+// Vst3Plugin internal struct
 // ---------------------------------------------------------------------------
 
-/// 로드된 VST3 플러그인 인스턴스.
+/// Loaded VST3 plugin instance.
 ///
-/// DLL이 살아 있는 동안 IComponent / IAudioProcessor 포인터가 유효하다.
-/// 드롭 시 COM 해제와 라이브러리 언로드가 자동으로 수행된다.
+/// The IComponent / IAudioProcessor pointers remain valid as long as the DLL is alive.
+/// Dropping this struct automatically releases COM interfaces and unloads the library.
 struct Vst3Plugin {
   lib: libloading::Library,
   component: *mut vst3_com::IComponent,
   processor: *mut vst3_com::IAudioProcessor,
 }
 
-// VST3 플러그인은 spec에 따라 스레드 안전이 보장된다.
-// 오디오 처리는 항상 동일한 스레드(spin-loop)에서 호출된다.
+// VST3 plugins guarantee thread safety per the spec.
+// Audio processing is always called from the same thread (spin-loop).
 unsafe impl Send for Vst3Plugin {}
 
 impl std::fmt::Debug for Vst3Plugin {
@@ -68,7 +68,7 @@ impl Drop for Vst3Plugin {
         (*self.component).terminate();
         (*self.component).release();
       }
-      // lib은 마지막으로 drop되어 DLL 언로드
+      // lib drops last, unloading the DLL
     }
   }
 }
@@ -80,22 +80,22 @@ impl Drop for Vst3Plugin {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VstNode {
-  /// Node ID (ReactFlow node id와 일치)
+  /// Node ID (matches the ReactFlow node id)
   id: String,
-  /// 선택된 .vst3 DLL 절대 경로
+  /// Absolute path to the selected .vst3 DLL
   plugin_path: String,
-  /// 입력 버스 수 (핸들 vst-in-0..N-1)
+  /// Number of input buses (handles vst-in-0..N-1)
   num_inputs: u16,
-  /// 출력 버스 수 (핸들 vst-out-0..N-1)
+  /// Number of output buses (handles vst-out-0..N-1)
   num_outputs: u16,
-  /// 처리 채널 수 (입출력 공통, 일반적으로 2 = stereo)
+  /// Number of processing channels shared by inputs and outputs (typically 2 = stereo)
   channels: u16,
-  /// 파라미터 정규화 값 [0.0, 1.0], 인덱스 순서
+  /// Normalized parameter values [0.0, 1.0] in index order
   params: Vec<f64>,
 
   #[serde(skip)]
   plugin: Option<Vst3Plugin>,
-  /// IComponent::getControllerClassId()로 얻은 CID. load_plugin 후 설정.
+  /// CID obtained from IComponent::getControllerClassId(). Set after load_plugin.
   #[serde(skip)]
   pub ctrl_cid: Option<[u8; 16]>,
 }
@@ -105,8 +105,8 @@ impl NodeTrait for VstNode {
     &self.id
   }
 
-  /// DLL을 임시로 로드해 IEditController CID만 추출한다.
-  /// Runtime 없이도 호출 가능하며, 플러그인 선택 시 즉시 실행된다.
+  /// Temporarily loads the DLL to extract only the IEditController CID.
+  /// Can be called without a Runtime; executed immediately on plugin selection.
   fn create(&mut self) -> Result<(), String> {
     if self.plugin_path.is_empty() {
       return Ok(());
@@ -126,7 +126,7 @@ impl NodeTrait for VstNode {
 
   fn dispose(&mut self, _runtime: &Runtime) -> Result<(), String> {
     println!("Disposing VST node: {}", self.id);
-    // Vst3Plugin::drop()이 COM 해제 및 DLL 언로드를 처리한다.
+    // Vst3Plugin::drop() handles COM release and DLL unload.
     self.plugin = None;
     Ok(())
   }
@@ -145,15 +145,15 @@ impl NodeTrait for VstNode {
 }
 
 impl VstNode {
-  /// DLL을 임시 로드하여 IEditController CID만 추출한다.
-  /// IComponent는 생성 직후 해제하며, lib은 스코프 종료 시 언로드된다.
+  /// Temporarily loads the DLL to extract only the IEditController CID.
+  /// IComponent is released immediately after creation; lib is unloaded when the scope ends.
   unsafe fn extract_ctrl_cid(&mut self) -> Result<(), String> {
     let lib = libloading::Library::new(&self.plugin_path)
-      .map_err(|e| format!("VST3 DLL 로드 실패: {e}"))?;
+      .map_err(|e| format!("Failed to load VST3 DLL: {e}"))?;
 
     let get_factory: libloading::Symbol<vst3_com::GetPluginFactoryFn> =
       lib.get(b"GetPluginFactory\0")
-         .map_err(|e| format!("GetPluginFactory 심볼 없음: {e}"))?;
+         .map_err(|e| format!("GetPluginFactory symbol not found: {e}"))?;
     let factory = get_factory();
     if factory.is_null() {
       return Err("factory null".to_string());
@@ -172,7 +172,7 @@ impl VstNode {
       }
     }
     let audio_cid =
-      audio_cid.ok_or_else(|| "Audio Module Class를 찾을 수 없습니다.".to_string())?;
+      audio_cid.ok_or_else(|| "Audio Module Class not found.".to_string())?;
 
     if let Some(comp_ptr) = factory.create_instance(&audio_cid, &vst3_com::IID_ICOMPONENT) {
       let component = comp_ptr as *mut vst3_com::IComponent;
@@ -182,26 +182,26 @@ impl VstNode {
       }
       (*component).release();
     }
-    // lib drops → DLL 언로드
+    // lib drops → DLL is unloaded
     Ok(())
   }
 
-  /// DLL을 로드하고 IComponent / IAudioProcessor를 초기화한다.
+  /// Loads the DLL and initializes IComponent / IAudioProcessor.
   unsafe fn load_plugin(&mut self, runtime: &Runtime) -> Result<(), String> {
     let lib = libloading::Library::new(&self.plugin_path)
-      .map_err(|e| format!("VST3 DLL 로드 실패 '{}': {}", self.plugin_path, e))?;
+      .map_err(|e| format!("Failed to load VST3 DLL '{}': {}", self.plugin_path, e))?;
 
-    // GetPluginFactory 심볼 획득
+    // Obtain GetPluginFactory symbol
     let get_factory: libloading::Symbol<vst3_com::GetPluginFactoryFn> =
       lib.get(b"GetPluginFactory\0")
-         .map_err(|e| format!("GetPluginFactory 심볼 없음: {}", e))?;
+         .map_err(|e| format!("GetPluginFactory symbol not found: {}", e))?;
     let factory = get_factory();
     if factory.is_null() {
-      return Err("GetPluginFactory가 null을 반환했습니다.".to_string());
+      return Err("GetPluginFactory returned null.".to_string());
     }
     let factory = &mut *factory;
 
-    // Audio Module Class CID 탐색
+    // Search for Audio Module Class CID
     let num_classes = factory.count_classes();
     let mut audio_cid: Option<[u8; 16]> = None;
     for i in 0..num_classes {
@@ -213,30 +213,30 @@ impl VstNode {
         }
       }
     }
-    let audio_cid = audio_cid.ok_or_else(|| "Audio Module Class를 찾을 수 없습니다.".to_string())?;
+    let audio_cid = audio_cid.ok_or_else(|| "Audio Module Class not found.".to_string())?;
 
-    // IComponent 생성
+    // Create IComponent
     let comp_ptr = factory.create_instance(&audio_cid, &vst3_com::IID_ICOMPONENT)
-                          .ok_or_else(|| "IComponent 생성 실패".to_string())?;
+                          .ok_or_else(|| "Failed to create IComponent".to_string())?;
     let component = comp_ptr as *mut vst3_com::IComponent;
     let result = (*component).initialize(std::ptr::null_mut());
     if result != vst3_com::K_RESULT_OK {
       (*component).release();
-      return Err(format!("IComponent::initialize 실패: {result:#x}"));
+      return Err(format!("IComponent::initialize failed: {result:#x}"));
     }
 
-    // IAudioProcessor 쿼리
+    // Query IAudioProcessor
     let proc_ptr = (*component).query_interface(&vst3_com::IID_IAUDIO_PROCESSOR)
-                               .ok_or_else(|| "IAudioProcessor 인터페이스 없음".to_string())?;
+                               .ok_or_else(|| "IAudioProcessor interface not found".to_string())?;
     let processor = proc_ptr as *mut vst3_com::IAudioProcessor;
 
-    // 버스 스피커 어레인지먼트 설정
+    // Set bus speaker arrangements
     let arrangement = if self.channels == 1 { vst3_com::K_MONO } else { vst3_com::K_STEREO };
     let mut inputs: Vec<u64> = vec![arrangement; self.num_inputs as usize];
     let mut outputs: Vec<u64> = vec![arrangement; self.num_outputs as usize];
     (*processor).set_bus_arrangements(&mut inputs, &mut outputs);
 
-    // 입출력 버스 활성화
+    // Activate input and output buses
     for i in 0..(self.num_inputs as i32) {
       (*component).activate_bus(vst3_com::K_AUDIO, vst3_com::K_INPUT, i, true);
     }
@@ -251,21 +251,21 @@ impl VstNode {
                                             runtime.sample_rate as f64);
     let r = (*processor).setup_processing(&setup);
     if r != vst3_com::K_RESULT_OK {
-      println!("VST3 setupProcessing 반환값: {r:#x}");
+      println!("VST3 setupProcessing returned: {r:#x}");
     }
 
     (*component).set_active(true);
     (*processor).set_processing(true);
 
-    // ctrl_cid: IEditController CID를 미리 저장해 에디터 스레드에서 재사용
+    // Store ctrl_cid so the editor thread can reuse it without reloading the DLL.
     self.ctrl_cid = (*component).get_controller_class_id();
 
     self.plugin = Some(Vst3Plugin { lib, component, processor });
-    println!("VST3 플러그인 초기화 완료: {}", self.plugin_path);
+    println!("VST3 plugin initialized: {}", self.plugin_path);
     Ok(())
   }
 
-  /// 실제 IAudioProcessor::process()를 호출하여 오디오를 처리한다.
+  /// Calls the actual IAudioProcessor::process() to process audio.
   unsafe fn process_with_plugin(plugin: &mut Vst3Plugin, node_id: &str, channels: u16,
                                  num_inputs: u16, num_outputs: u16, runtime: &Runtime,
                                  state: &RuntimeState)
@@ -273,7 +273,7 @@ impl VstNode {
     let ch = channels as usize;
     let frames = runtime.buffer_size as usize;
 
-    // 입력 버스별 채널 분리 버퍼 수집
+    // Collect per-bus deinterleaved input buffers
     let mut in_channel_bufs: Vec<Vec<Vec<f32>>> = Vec::new();
     let mut proto: Option<AudioBuffer> = None;
 
@@ -292,7 +292,7 @@ impl VstNode {
         vec![0.0f32; frames * ch]
       };
 
-      // 인터리브드 → 채널별 분리
+      // Deinterleave: interleaved → per-channel
       let mut chans: Vec<Vec<f32>> = vec![vec![0.0f32; frames]; ch];
       for (i, s) in samples.iter().enumerate() {
         chans[i % ch][i / ch] = *s;
@@ -300,11 +300,11 @@ impl VstNode {
       in_channel_bufs.push(chans);
     }
 
-    // 출력 채널 버퍼 (0으로 초기화)
+    // Output channel buffers (zero-initialized)
     let mut out_channel_bufs: Vec<Vec<Vec<f32>>> =
       vec![vec![vec![0.0f32; frames]; ch]; num_outputs as usize];
 
-    // AudioBusBuffers 포인터 배열 구성
+    // Build AudioBusBuffers pointer arrays
     let mut in_ptrs: Vec<Vec<*mut f32>> = in_channel_bufs.iter_mut()
                                                           .map(|bus| {
                                                             bus.iter_mut()
@@ -338,7 +338,7 @@ impl VstNode {
 
     (*plugin.processor).process(&mut process_data);
 
-    // 출력 채널 → 인터리브드 AudioBuffer
+    // Interleave output channels back into AudioBuffer
     let sample_rate = proto.as_ref().map_or(48000, |p| p.sample_rate);
     let bits = proto.as_ref().map_or(32, |p| p.bits_per_sample);
 
@@ -347,10 +347,11 @@ impl VstNode {
       if edge.from != node_id {
         continue;
       }
-      // 출력 버스 인덱스 결정: vst-out-N 또는 첫 번째 버스
-      let bus_idx: usize = 0; // 단일 출력 버스 사용
+      // Determine output bus index: vst-out-N or first bus
+      // TODO: support multi-bus routing — currently only bus 0 is used (see docs/known-issues.md)
+      let bus_idx: usize = 0; // use single output bus
       let chans = &out_channel_bufs[bus_idx.min(out_channel_bufs.len() - 1)];
-      // 채널별 → 인터리브드
+      // Per-channel → interleaved
       let mut interleaved = vec![0.0f32; frames * ch];      for (c, chan) in chans.iter().enumerate() {
         for (f, &s) in chan.iter().enumerate() {
           interleaved[f * ch + c] = s;
@@ -362,7 +363,7 @@ impl VstNode {
     Ok(result)
   }
 
-  /// 플러그인 없이 입력 → 출력으로 패스스루.
+  /// Passes input through to output when no plugin is loaded.
   fn passthrough(&self, runtime: &Runtime,
                  state: &RuntimeState)
                  -> Result<BTreeMap<String, AudioBuffer>, String> {
@@ -401,10 +402,10 @@ impl VstNode {
 // Plugin scanning
 // ---------------------------------------------------------------------------
 
-/// 시스템 VST3 플러그인 디렉터리를 스캔한다.
+/// Scans system VST3 plugin directories.
 ///
-/// GetPluginFactory를 호출하여 실제 플러그인 이름/벤더 정보를 읽는다.
-/// DLL 로드 실패 시 파일명 기반 정보로 폴백한다.
+/// Calls GetPluginFactory to read the actual plugin name and vendor.
+/// Falls back to filename-based info if the DLL fails to load.
 pub fn scan_vst3_plugins() -> Vec<VstPluginInfo> {
   let mut results = Vec::new();
 
@@ -465,15 +466,15 @@ fn scan_vst3_dir(dir: &std::path::Path, results: &mut Vec<VstPluginInfo>) {
   }
 }
 
-/// 단일 DLL을 로드하여 GetPluginFactory로 플러그인 정보를 읽는다.
+/// Loads a single DLL and reads plugin info via GetPluginFactory.
 fn scan_single_dll(dll_path: &str, fallback_name: &str) -> Result<VstPluginInfo, String> {
   unsafe {
     let lib = libloading::Library::new(dll_path)
-      .map_err(|e| format!("DLL 로드 실패: {e}"))?;
+      .map_err(|e| format!("Failed to load DLL: {e}"))?;
 
     let get_factory: libloading::Symbol<vst3_com::GetPluginFactoryFn> =
       lib.get(b"GetPluginFactory\0")
-         .map_err(|e| format!("심볼 없음: {e}"))?;
+         .map_err(|e| format!("Symbol not found: {e}"))?;
     let factory = get_factory();
     if factory.is_null() {
       return Err("factory null".to_string());
@@ -498,8 +499,8 @@ fn scan_single_dll(dll_path: &str, fallback_name: &str) -> Result<VstPluginInfo,
           if !name.is_empty() {
             plugin_name = name;
           }
-          // 더 정확한 입출력 채널은 IComponent를 생성해야 알 수 있다.
-          // 스캔 성능을 위해 기본값 유지.
+          // Accurate I/O channel counts require creating IComponent;
+          // keep defaults for scan performance.
           let _ = (num_inputs, num_outputs, num_params);
           break;
         }
