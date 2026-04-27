@@ -348,6 +348,7 @@ impl VstNode {
         continue;
       }
       // Determine output bus index: vst-out-N or first bus
+      // TODO: support multi-bus routing — currently only bus 0 is used (see docs/known-issues.md)
       let bus_idx: usize = 0; // use single output bus
       let chans = &out_channel_bufs[bus_idx.min(out_channel_bufs.len() - 1)];
       // Per-channel → interleaved
