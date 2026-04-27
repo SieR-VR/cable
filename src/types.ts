@@ -8,6 +8,7 @@ import mixerDef from "./nodes/Mixer";
 import spectrumAnalyzerDef from "./nodes/SpectrumAnalyzer";
 import virtualAudioInputDef from "./nodes/VirtualAudioInput";
 import virtualAudioOutputDef from "./nodes/VirtualAudioOutput";
+import vstNodeDef from "./nodes/VstNode";
 import waveformMonitorDef from "./nodes/WaveformMonitor";
 
 export interface WindowInfo {
@@ -35,6 +36,23 @@ export interface VirtualDevice {
   deviceType: string;
 }
 
+/** VST3 plugin info returned by the scan command. */
+export interface VstPluginInfo {
+  name: string;
+  path: string;
+  vendor: string;
+  numInputs: number;
+  numOutputs: number;
+  numParams: number;
+}
+
+/** A single VST3 parameter descriptor. */
+export interface VstParamInfo {
+  id: number;
+  title: string;
+  value: number;
+}
+
 const nodeDefs = {
   audioInputDevice: audioInputDeviceDef,
   audioOutputDevice: audioOutputDeviceDef,
@@ -44,6 +62,7 @@ const nodeDefs = {
   waveformMonitor: waveformMonitorDef,
   appAudioCapture: appAudioCaptureDef,
   mixer: mixerDef,
+  vst: vstNodeDef,
 };
 
 export const nodeTypes = Object.fromEntries(

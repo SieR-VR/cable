@@ -10,7 +10,7 @@ import {
 } from "@xyflow/react";
 import { createWithEqualityFn } from "zustand/traditional";
 
-import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice } from "./types";
+import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice, VstPluginInfo } from "./types";
 
 /** Module-level interval ID for the global render polling loop. */
 let renderPollIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -57,6 +57,9 @@ export interface AppState {
   /** Virtual devices created via the driver (managed in the menu panel). */
   virtualDevices: VirtualDevice[];
 
+  /** Cached VST3 plugin list from the last scan. */
+  vstPluginList: VstPluginInfo[];
+
   /** Latest per-frame render data for all active visualizer nodes. */
   nodeRenderData: Record<string, NodeRenderData>;
 
@@ -81,7 +84,8 @@ export interface AppState {
       | "spectrumAnalyzer"
       | "waveformMonitor"
       | "appAudioCapture"
-      | "mixer",
+      | "mixer"
+      | "vst",
   ) => void;
   removeNodeAtContextMenu: () => void;
 
@@ -102,6 +106,9 @@ export interface AppState {
 
   /** Replace the entire graph with loaded nodes and edges. */
   loadGraph: (nodes: NodeType[], edges: EdgeType[]) => void;
+
+  /** Scan the system for VST3 plugins and cache the result. */
+  scanVstPlugins: () => Promise<void>;
 
   /** Start the single global 30fps polling loop for visualizer render data. */
   startRenderPolling: () => void;
@@ -125,6 +132,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
   driverConnected: false,
   virtualDevices: [],
+  vstPluginList: [],
   nodeRenderData: {},
 
   nodes: initialNodes,
@@ -159,6 +167,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     const isWaveformMonitor = type === "waveformMonitor";
     const isAppAudioCapture = type === "appAudioCapture";
     const isMixer = type === "mixer";
+    const isVst = type === "vst";
 
     const data = isVirtual
       ? { deviceId: "", name: "", edgeType: null }
@@ -170,7 +179,9 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
             ? { processId: null, windowTitle: null, edgeType: null }
             : isMixer
               ? { edgeType: null }
-              : { device: null, edgeType: null };
+              : isVst
+                ? { pluginPath: "", numInputs: 1, numOutputs: 1, channels: 2, params: [] }
+                : { device: null, edgeType: null };
 
     const newNode: NodeType = {
       id: `node-${nextId}`,
@@ -345,6 +356,11 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     }),
 
   loadGraph: (nodes: NodeType[], edges: EdgeType[]) => set({ nodes, edges }),
+
+  scanVstPlugins: async () => {
+    const plugins = await invoke("scan_vst3_plugins");
+    set({ vstPluginList: plugins });
+  },
 
   startRenderPolling:() => {
     if (renderPollIntervalId !== null) clearInterval(renderPollIntervalId);
