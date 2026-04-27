@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
   AudioDevice,
-  nodes::NodeTrait,
+  nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
 };
 
@@ -174,7 +174,7 @@ impl NodeTrait for AudioOutputDeviceNode {
     &mut self,
     runtime: &Runtime,
     state: &RuntimeState,
-  ) -> Result<BTreeMap<String, Vec<f32>>, String> {
+  ) -> Result<BTreeMap<String, AudioBuffer>, String> {
     let producer = match self.ring_producer.as_mut() {
       Some(p) => p,
       None => return Ok(BTreeMap::new()),
@@ -183,17 +183,17 @@ impl NodeTrait for AudioOutputDeviceNode {
     // 이 노드로 향하는 엣지의 데이터를 ring buffer에 push
     for edge in &runtime.edges {
       if edge.to == self.id {
-        if let Some(data) = state.edge_values.get(&edge.id) {
-          let pushed = producer.push_slice(data);
+        if let Some(buf) = state.edge_values.get(&edge.id) {
+          let pushed = producer.push_slice(&buf.samples);
           self.debug_tick = self.debug_tick.wrapping_add(1);
           if self.debug_tick % 200 == 0 {
             println!(
               "AudioOutputDevice[{}] pushed {}/{} samples from edge {}{}",
               self.id,
               pushed,
-              data.len(),
+              buf.samples.len(),
               edge.id,
-              if pushed < data.len() {
+              if pushed < buf.samples.len() {
                 " [OVERFLOW: samples dropped]"
               } else {
                 ""

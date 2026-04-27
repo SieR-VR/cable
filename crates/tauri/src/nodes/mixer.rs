@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  nodes::NodeTrait,
+  nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
 };
 
@@ -39,9 +39,9 @@ impl NodeTrait for MixerNode {
     &mut self,
     runtime: &Runtime,
     state: &RuntimeState,
-  ) -> Result<BTreeMap<String, Vec<f32>>, String> {
-    // Find the edge IDs connected to each named input handle.
-    let find_samples = |handle: &str| -> Option<&Vec<f32>> {
+  ) -> Result<BTreeMap<String, AudioBuffer>, String> {
+    // Find the AudioBuffer connected to each named input handle.
+    let find_buf = |handle: &str| -> Option<&AudioBuffer> {
       runtime
         .edges
         .iter()
@@ -50,30 +50,34 @@ impl NodeTrait for MixerNode {
             && e.to_handle.as_deref() == Some(handle)
         })
         .and_then(|e| state.edge_values.get(&e.id))
-        .filter(|s| !s.is_empty())
+        .filter(|b| !b.samples.is_empty())
     };
 
-    let a = find_samples("input-a");
-    let b = find_samples("input-b");
+    let a = find_buf("input-a");
+    let b = find_buf("input-b");
 
-    let mixed: Vec<f32> = match (a, b) {
+    let (mixed_samples, channels, sample_rate, bits) = match (a, b) {
       (None, None) => return Ok(BTreeMap::new()),
-      (Some(buf), None) | (None, Some(buf)) => buf.clone(),
+      (Some(buf), None) | (None, Some(buf)) => {
+        (buf.samples.clone(), buf.channels, buf.sample_rate, buf.bits_per_sample)
+      }
       (Some(a), Some(b)) => {
         // Use the minimum length to avoid zero-padding discontinuities.
-        let len = a.len().min(b.len());
+        let len = a.samples.len().min(b.samples.len());
         let mut buf = vec![0.0f32; len];
         for i in 0..len {
-          buf[i] = (a[i] + b[i]).clamp(-1.0, 1.0);
+          buf[i] = (a.samples[i] + b.samples[i]).clamp(-1.0, 1.0);
         }
-        buf
+        (buf, a.channels, a.sample_rate, a.bits_per_sample)
       }
     };
+
+    let audio_buf = AudioBuffer::new(mixed_samples, channels, sample_rate, bits);
 
     let mut output = BTreeMap::new();
     for edge in &runtime.edges {
       if edge.from == self.id {
-        output.insert(edge.id.clone(), mixed.clone());
+        output.insert(edge.id.clone(), audio_buf.clone());
       }
     }
 

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  nodes::NodeTrait,
+  nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
 };
 
@@ -137,7 +137,7 @@ impl NodeTrait for VirtualAudioOutputNode {
     &mut self,
     runtime: &Runtime,
     _state: &RuntimeState,
-  ) -> Result<BTreeMap<String, Vec<f32>>, String> {
+  ) -> Result<BTreeMap<String, AudioBuffer>, String> {
     #[cfg(windows)]
     {
       let ring_buffer = match self.ring_buffer.as_mut() {
@@ -149,11 +149,11 @@ impl NodeTrait for VirtualAudioOutputNode {
       // Use the actual channel count from the stream format metadata so that
       // mono, stereo, and surround formats all produce the correct frame count.
       // Fall back to 2 (stereo) if metadata is not yet available.
-      let channels = ring_buffer
+      let (sample_rate, channels, bits) = ring_buffer
         .read_stream_format_metadata()
-        .map(|(_sr, ch, _bits, _dt)| ch as usize)
-        .unwrap_or(2)
-        .max(1);
+        .map(|(sr, ch, bits, _dt)| (sr, ch.max(1) as usize, bits))
+        .unwrap_or((48000, 2, 32));
+
       // Read all available data (up to 4x buffer_size) to keep up with the
       // driver's write rate.  Limiting to a reasonable maximum prevents
       // unbounded allocations if the ring buffer is very full.
@@ -177,11 +177,13 @@ impl NodeTrait for VirtualAudioOutputNode {
 
       buffer.truncate(samples_read);
 
+      let audio_buf = AudioBuffer::new(buffer, channels as u16, sample_rate, bits as u16);
+
       // Output data on all outgoing edges
       let mut output = BTreeMap::new();
       for edge in &runtime.edges {
         if edge.from == self.id {
-          output.insert(edge.id.clone(), buffer.clone());
+          output.insert(edge.id.clone(), audio_buf.clone());
         }
       }
 
