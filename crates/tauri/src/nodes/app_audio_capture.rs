@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use ringbuf::HeapProd;
 
 use crate::{
-  nodes::NodeTrait,
+  nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
 };
 
@@ -413,7 +413,7 @@ impl NodeTrait for AppAudioCaptureNode {
     &mut self,
     runtime: &Runtime,
     _state: &RuntimeState,
-  ) -> Result<BTreeMap<String, Vec<f32>>, String> {
+  ) -> Result<BTreeMap<String, AudioBuffer>, String> {
     let consumer = match self.ring_consumer.as_mut() {
       Some(c) => c,
       None => return Ok(BTreeMap::new()),
@@ -435,13 +435,15 @@ impl NodeTrait for AppAudioCaptureNode {
 
     // 정확히 buffer_size * channels 샘플을 드레인 (부족하면 silence 패딩)
     let drain = available.min(target);
-    let mut buffer = vec![0.0f32; target];
-    consumer.pop_slice(&mut buffer[..drain]);
+    let mut samples = vec![0.0f32; target];
+    consumer.pop_slice(&mut samples[..drain]);
+
+    let buf = AudioBuffer::new(samples, channels as u16, runtime.sample_rate, 32);
 
     let mut output = BTreeMap::new();
     for edge in &runtime.edges {
       if edge.from == self.id {
-        output.insert(edge.id.clone(), buffer.clone());
+        output.insert(edge.id.clone(), buf.clone());
       }
     }
 

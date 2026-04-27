@@ -1,4 +1,4 @@
-import { AudioDevice, AudioGraph, NodeRenderData, VirtualDevice, WindowInfo } from "./types";
+import { AudioDevice, AudioGraph, NodeRenderData, VirtualDevice, VstParamInfo, VstPluginInfo, WindowInfo } from "./types";
 
 declare module "@tauri-apps/api/core" {
   declare function invoke(cmd: "get_window_list"): Promise<WindowInfo[]>;
@@ -66,4 +66,31 @@ declare module "@tauri-apps/api/core" {
     cmd: "read_text_file",
     args: { path: string },
   ): Promise<string>;
+
+  declare function invoke(cmd: "scan_vst3_plugins"): Promise<VstPluginInfo[]>;
+
+  declare function invoke(
+    cmd: "create_node",
+    args: { node: { type: string; data: Record<string, unknown> } },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "open_vst_editor",
+    args: { nodeId: string; pluginPath: string },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "close_vst_editor",
+    args: { nodeId: string },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "get_vst_params",
+    args: { nodeId: string },
+  ): Promise<VstParamInfo[]>;
+
+  declare function invoke(
+    cmd: "set_vst_param",
+    args: { nodeId: string; paramId: number; value: number },
+  ): Promise<void>;
 }

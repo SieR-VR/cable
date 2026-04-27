@@ -39,6 +39,10 @@ const NODE_CATEGORIES: NodeCategory[] = [
     items: [{ type: "mixer", label: "Mixer" }],
   },
   {
+    label: "VST",
+    items: [{ type: "vst", label: "VST3 Plugin" }],
+  },
+  {
     label: "Virtual Devices",
     requiresDriver: true,
     items: [

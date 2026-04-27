@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  nodes::NodeTrait,
+  nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
 };
 
@@ -73,20 +73,24 @@ impl NodeTrait for WaveformMonitorNode {
     &mut self,
     runtime: &Runtime,
     state: &RuntimeState,
-  ) -> Result<BTreeMap<String, Vec<f32>>, String> {
-    let mut incoming: Vec<f32> = Vec::new();
+  ) -> Result<BTreeMap<String, AudioBuffer>, String> {
+    let mut incoming_samples: Vec<f32> = Vec::new();
+    let mut incoming_buf: Option<AudioBuffer> = None;
     for edge in &runtime.edges {
       if edge.to == self.id {
-        if let Some(samples) = state.edge_values.get(&edge.id) {
-          incoming.extend_from_slice(samples);
+        if let Some(buf) = state.edge_values.get(&edge.id) {
+          incoming_samples.extend_from_slice(&buf.samples);
+          if incoming_buf.is_none() {
+            incoming_buf = Some(buf.clone());
+          }
         }
       }
     }
 
     // Update the rolling window: append new samples, keep only the last window_size.
-    if let Some(buf) = &self.waveform_out {
-      if let Ok(mut guard) = buf.lock() {
-        guard.extend_from_slice(&incoming);
+    if let Some(wf_buf) = &self.waveform_out {
+      if let Ok(mut guard) = wf_buf.lock() {
+        guard.extend_from_slice(&incoming_samples);
         let len = guard.len();
         if len > self.window_size {
           guard.drain(..len - self.window_size);
@@ -94,12 +98,20 @@ impl NodeTrait for WaveformMonitorNode {
       }
     }
 
-    // Passthrough: forward original samples to all outgoing edges.
+    // Passthrough: forward original AudioBuffer to all outgoing edges.
     let mut output = BTreeMap::new();
-    if !incoming.is_empty() {
-      for edge in &runtime.edges {
-        if edge.from == self.id {
-          output.insert(edge.id.clone(), incoming.clone());
+    if let Some(buf) = incoming_buf {
+      if !buf.samples.is_empty() {
+        let passthrough = AudioBuffer::new(
+          incoming_samples,
+          buf.channels,
+          buf.sample_rate,
+          buf.bits_per_sample,
+        );
+        for edge in &runtime.edges {
+          if edge.from == self.id {
+            output.insert(edge.id.clone(), passthrough.clone());
+          }
         }
       }
     }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  nodes::NodeTrait,
+  nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
 };
 
@@ -130,7 +130,7 @@ impl NodeTrait for VirtualAudioInputNode {
     &mut self,
     runtime: &Runtime,
     state: &RuntimeState,
-  ) -> Result<BTreeMap<String, Vec<f32>>, String> {
+  ) -> Result<BTreeMap<String, AudioBuffer>, String> {
     #[cfg(windows)]
     {
       let ring_buffer = match self.ring_buffer.as_mut() {
@@ -141,8 +141,8 @@ impl NodeTrait for VirtualAudioInputNode {
       // Collect all incoming edge data and write to ring buffer
       for edge in &runtime.edges {
         if edge.to == self.id {
-          if let Some(data) = state.edge_values.get(&edge.id) {
-            ring_buffer.write_f32_samples(data);
+          if let Some(buf) = state.edge_values.get(&edge.id) {
+            ring_buffer.write_f32_samples(&buf.samples);
           }
         }
       }

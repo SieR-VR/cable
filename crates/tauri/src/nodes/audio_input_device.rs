@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
   AudioDevice,
-  nodes::NodeTrait,
+  nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
 };
 
@@ -25,6 +25,12 @@ pub(crate) struct AudioInputDeviceNode {
   stream: Option<Stream>,
   #[serde(skip)]
   ring_consumer: Option<HeapCons<f32>>,
+  /// 초기화 시 확인한 실제 채널 수.
+  #[serde(skip)]
+  stream_channels: u16,
+  /// 초기화 시 확인한 실제 샘플레이트.
+  #[serde(skip)]
+  stream_sample_rate: u32,
 }
 
 impl std::fmt::Debug for AudioInputDeviceNode {
@@ -70,6 +76,9 @@ impl NodeTrait for AudioInputDeviceNode {
     };
 
     let sample_format = default_cfg.sample_format();
+    // 채널/샘플레이트를 process()에서 AudioBuffer 생성에 사용하기 위해 캐시
+    self.stream_channels = config.channels;
+    self.stream_sample_rate = default_cfg.sample_rate();
 
     // 링 버퍼 생성: buffer_size * channels * 4 (여유 배수)
     let rb_size = runtime.buffer_size as usize * self.device.channels as usize * 4;
@@ -161,13 +170,13 @@ impl NodeTrait for AudioInputDeviceNode {
     &mut self,
     runtime: &Runtime,
     _state: &RuntimeState,
-  ) -> Result<BTreeMap<String, Vec<f32>>, String> {
+  ) -> Result<BTreeMap<String, AudioBuffer>, String> {
     let consumer = match self.ring_consumer.as_mut() {
       Some(c) => c,
       None => return Ok(BTreeMap::new()),
     };
 
-    let channels = self.device.channels as usize;
+    let channels = self.stream_channels.max(1) as usize;
     let target = runtime.buffer_size as usize * channels;
 
     let available = consumer.occupied_len();
@@ -177,14 +186,21 @@ impl NodeTrait for AudioInputDeviceNode {
 
     // 정확히 buffer_size * channels 샘플을 드레인 (부족하면 silence 패딩)
     let drain = available.min(target);
-    let mut buffer = vec![0.0f32; target];
-    consumer.pop_slice(&mut buffer[..drain]);
+    let mut samples = vec![0.0f32; target];
+    consumer.pop_slice(&mut samples[..drain]);
 
-    // 이 노드에서 출발하는 모든 엣지에 대해 데이터를 복제하여 전달
+    let buf = AudioBuffer::new(
+      samples,
+      self.stream_channels.max(1),
+      self.stream_sample_rate,
+      32,
+    );
+
+    // 이 노드에서 출발하는 모든 엣지에 데이터 복제하여 전달
     let mut output = BTreeMap::new();
     for edge in &runtime.edges {
       if edge.from == self.id {
-        output.insert(edge.id.clone(), buffer.clone());
+        output.insert(edge.id.clone(), buf.clone());
       }
     }
 

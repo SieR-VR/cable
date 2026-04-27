@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::{AudioEdge, AudioNode, nodes::NodeTrait};
+use crate::{AudioEdge, AudioNode, nodes::{AudioBuffer, NodeTrait}};
 use cpal::Host;
 
 #[cfg(windows)]
@@ -26,7 +26,7 @@ pub(crate) struct Runtime {
 }
 
 pub struct RuntimeState {
-  pub edge_values: BTreeMap<String, Vec<f32>>,
+  pub edge_values: BTreeMap<String, AudioBuffer>,
 }
 
 /// Compute a topological processing order from node IDs and edges.
@@ -96,6 +96,7 @@ impl Runtime {
       AudioNode::WaveformMonitor(n) => n.id(),
       AudioNode::AppAudioCapture(n) => n.id(),
       AudioNode::Mixer(n) => n.id(),
+      AudioNode::Vst(n) => n.id(),
     }
   }
 
@@ -145,6 +146,7 @@ impl Runtime {
         AudioNode::WaveformMonitor(n) => n.init(self)?,
         AudioNode::AppAudioCapture(n) => n.init(self)?,
         AudioNode::Mixer(n) => n.init(self)?,
+        AudioNode::Vst(n) => n.init(self)?,
       }
     }
     self.nodes = nodes;
@@ -163,6 +165,7 @@ impl Runtime {
         AudioNode::WaveformMonitor(n) => n.dispose(self)?,
         AudioNode::AppAudioCapture(n) => n.dispose(self)?,
         AudioNode::Mixer(n) => n.dispose(self)?,
+        AudioNode::Vst(n) => n.dispose(self)?,
       }
     }
     self.nodes = nodes;
@@ -191,6 +194,7 @@ impl Runtime {
         AudioNode::WaveformMonitor(n) => n.process(self, &state)?,
         AudioNode::AppAudioCapture(n) => n.process(self, &state)?,
         AudioNode::Mixer(n) => n.process(self, &state)?,
+        AudioNode::Vst(n) => n.process(self, &state)?,
       };
       for (edge_id, values) in node_output {
         state.edge_values.insert(edge_id, values);

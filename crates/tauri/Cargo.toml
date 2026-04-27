@@ -24,6 +24,7 @@ common = { path = "../common" }
 cpal = "0.17"
 ringbuf = "0.4"
 hex = "0.4"
+libloading = "0.8"
 rustfft = "6"
 
 [target.'cfg(windows)'.dependencies.windows-core]
@@ -37,6 +38,7 @@ features = [
   "Win32_System_Variant",
   "Win32_System_Threading",
   "Win32_System_Registry",
+  "Win32_System_LibraryLoader",
   "Win32_Devices_FunctionDiscovery",
   "Win32_Media_Audio",
   "Win32_UI_Shell",
