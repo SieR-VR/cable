@@ -47,7 +47,7 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
         VST Plugin
       </div>
       <div className="flex flex-col gap-2 p-2">
-        {/* 플러그인 선택 */}
+        {/* Plugin selector */}
         <div className="flex gap-1">
           <select
             className="flex-1 text-xs bg-gray-600 text-white rounded px-1 py-0.5 border border-gray-500"
@@ -60,7 +60,7 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
                   numInputs: plugin.numInputs,
                   numOutputs: plugin.numOutputs,
                 });
-                // Apply 없이도 에디터를 열 수 있도록 ctrl_cid를 미리 추출
+                // Pre-extract ctrl_cid so the editor can be opened without Apply
                 await invoke("create_node", {
                   node: {
                     type: "vst",
@@ -96,7 +96,7 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
           </button>
         </div>
 
-        {/* 플러그인 정보 */}
+        {/* Plugin info */}
         {selectedPlugin && (
           <div className="text-xs text-gray-400 flex gap-2">
             <span>{selectedPlugin.vendor || "Unknown vendor"}</span>
@@ -105,7 +105,7 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
           </div>
         )}
 
-        {/* 에디터 열기 */}
+        {/* Open editor button */}
         {selectedPlugin && (
           <button
             className="text-xs bg-violet-600 hover:bg-violet-500 rounded px-2 py-1"
@@ -115,7 +115,7 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
           </button>
         )}
 
-        {/* 입출력 핸들 행 */}
+        {/* I/O handle rows */}
         <div className="relative" style={{ height: `${maxHandles * 24}px` }}>
           {inputHandles.map((handleId, i) => (
             <Handle

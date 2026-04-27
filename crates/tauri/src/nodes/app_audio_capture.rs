@@ -36,7 +36,7 @@ pub(crate) struct AppAudioCaptureNode {
   stop_flag: Option<Arc<AtomicBool>>,
   #[serde(skip)]
   ring_consumer: Option<HeapCons<f32>>,
-  /// 캡처 스레드가 GetMixFormat으로 확인한 채널 수 (기본값 2)
+  /// Channel count confirmed by the capture thread via GetMixFormat (default 2).
   #[serde(skip)]
   channel_count: Option<Arc<AtomicUsize>>,
 }
@@ -292,7 +292,7 @@ unsafe fn wasapi_process_loopback_inner(
   let channels = (*mix_fmt_ptr).nChannels as usize;
   let bits_per_sample = (*mix_fmt_ptr).wBitsPerSample;
 
-  // 확인된 채널 수를 공유 atomic에 저장
+  // Store confirmed channel count in the shared atomic.
   channel_count_out.store(channels.max(1), Ordering::Relaxed);
 
   // 3. Initialize the process loopback client with the render endpoint's format.
@@ -424,7 +424,7 @@ impl NodeTrait for AppAudioCaptureNode {
       return Ok(BTreeMap::new());
     }
 
-    // 캡처 스레드가 확인한 채널 수로 정확한 목표 길이 계산 (기본값 2)
+    // Use the channel count confirmed by the capture thread (default 2).
     let channels = self
       .channel_count
       .as_ref()
@@ -433,7 +433,7 @@ impl NodeTrait for AppAudioCaptureNode {
       .max(1);
     let target = runtime.buffer_size as usize * channels;
 
-    // 정확히 buffer_size * channels 샘플을 드레인 (부족하면 silence 패딩)
+    // Drain exactly buffer_size * channels samples (pad with silence if insufficient).
     let drain = available.min(target);
     let mut samples = vec![0.0f32; target];
     consumer.pop_slice(&mut samples[..drain]);
