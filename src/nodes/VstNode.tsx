@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+import { Node, NodeProps, Position } from "@xyflow/react";
 import { useState } from "react";
 
+import { AudioHandle } from "@/components/AudioHandle";
 import { NodeDefinition } from "@/node-definition";
 import { useAppStore } from "@/state";
 
@@ -118,23 +119,21 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
         {/* I/O handle rows */}
         <div className="relative" style={{ height: `${maxHandles * 24}px` }}>
           {inputHandles.map((handleId, i) => (
-            <Handle
+            <AudioHandle
               key={handleId}
               type="target"
               position={Position.Left}
               id={handleId}
               style={{ top: `${(i + 0.5) * (100 / maxHandles)}%` }}
-              className="w-3 h-3 bg-violet-400 rounded-full"
             />
           ))}
           {outputHandles.map((handleId, i) => (
-            <Handle
+            <AudioHandle
               key={handleId}
               type="source"
               position={Position.Right}
               id={handleId}
               style={{ top: `${(i + 0.5) * (100 / maxHandles)}%` }}
-              className="w-3 h-3 bg-violet-400 rounded-full"
             />
           ))}
         </div>

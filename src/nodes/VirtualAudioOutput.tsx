@@ -1,5 +1,6 @@
-import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+import { Node, NodeProps, Position } from "@xyflow/react";
 
+import { AudioHandle } from "@/components/AudioHandle";
 import { AppState, useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
 
@@ -65,11 +66,10 @@ export function VirtualAudioOutput({ id, data }: NodeProps<VirtualAudioOutputNod
           <span className="rounded-md text-xs bg-teal-300 text-teal-900 p-1">render</span>
           <span className="rounded-md text-xs bg-gray-500 p-1">virtual</span>
         </div>
-        <Handle
+        <AudioHandle
           type="source"
           position={Position.Right}
           id="VirtualAudioOutput-source"
-          className="w-4 h-4 bg-teal-400 rounded-full"
         />
       </div>
     </div>

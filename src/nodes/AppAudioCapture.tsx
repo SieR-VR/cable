@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+import { Node, NodeProps, Position } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { AudioHandle } from "@/components/AudioHandle";
 import { AppState, useAppStore } from "@/state";
 import { WindowInfo } from "@/types";
 import { NodeDefinition } from "@/node-definition";
@@ -66,11 +67,10 @@ export function AppAudioCapture({ id, data }: NodeProps<AppAudioCaptureNode>) {
             PID: {data.processId}
           </div>
         )}
-        <Handle
+        <AudioHandle
           type="source"
           position={Position.Right}
           id="AppAudioCapture-source"
-          className="w-4 h-4 bg-green-500 rounded-full"
         />
       </div>
     </div>

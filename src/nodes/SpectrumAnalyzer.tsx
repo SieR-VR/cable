@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+import { Node, NodeProps, Position } from "@xyflow/react";
 
+import { AudioHandle } from "@/components/AudioHandle";
 import { useAppStore } from "../state";
 import { NodeDefinition } from "@/node-definition";
 
@@ -65,17 +66,15 @@ export function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>) {
           <span className="rounded-md text-xs bg-purple-300 text-purple-900 p-1">FFT</span>
           <span className="rounded-md text-xs bg-gray-500 p-1">passthrough</span>
         </div>
-        <Handle
+        <AudioHandle
           type="target"
           position={Position.Left}
           id="SpectrumAnalyzer-target"
-          className="w-4 h-4 bg-purple-400 rounded-full"
         />
-        <Handle
+        <AudioHandle
           type="source"
           position={Position.Right}
           id="SpectrumAnalyzer-source"
-          className="w-4 h-4 bg-purple-400 rounded-full"
         />
       </div>
     </div>

@@ -1,5 +1,6 @@
-import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+import { Node, NodeProps, Position } from "@xyflow/react";
 
+import { AudioHandle } from "@/components/AudioHandle";
 import { formatAudioEdgeType } from "@/lib/utils";
 import { AppState, useAppStore } from "@/state";
 import { AudioDevice } from "@/types";
@@ -65,11 +66,10 @@ export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) 
             <span className="rounded-md text-xs bg-lime-200 p-1">{`${selectedDevice.bitsPerSample}bit`}</span>
           </div>
         )}
-        <Handle
+        <AudioHandle
           type="source"
           position={Position.Right}
           id="AudioInputDevice-source"
-          className="w-4 h-4 bg-green-500 rounded-full"
         />
       </div>
     </div>

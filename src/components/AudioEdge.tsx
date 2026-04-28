@@ -1,9 +1,4 @@
-import {
-  EdgeLabelRenderer,
-  EdgeProps,
-  getBezierPath,
-  Position,
-} from "@xyflow/react";
+import { EdgeLabelRenderer, EdgeProps, getBezierPath, Position } from "@xyflow/react";
 import { useState } from "react";
 
 import { parseAudioEdgeType } from "@/lib/utils";

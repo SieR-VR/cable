@@ -1,5 +1,6 @@
-import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+import { Node, NodeProps, Position } from "@xyflow/react";
 
+import { AudioHandle } from "@/components/AudioHandle";
 import { NodeDefinition } from "@/node-definition";
 
 export type MixerNodeData = {
@@ -22,29 +23,28 @@ export function Mixer({ id }: NodeProps<MixerNodeType>) {
         </div>
         {/* Input A */}
         <div className="flex items-center gap-2 h-6 relative">
-          <Handle
+          <AudioHandle
             type="target"
             position={Position.Left}
             id="input-a"
-            className="!static !transform-none w-4 h-4 bg-orange-400 rounded-full"
+            className="!static !transform-none"
           />
           <span className="text-xs text-gray-300">A</span>
         </div>
         {/* Input B */}
         <div className="flex items-center gap-2 h-6 relative">
-          <Handle
+          <AudioHandle
             type="target"
             position={Position.Left}
             id="input-b"
-            className="!static !transform-none w-4 h-4 bg-orange-400 rounded-full"
+            className="!static !transform-none"
           />
           <span className="text-xs text-gray-300">B</span>
         </div>
-        <Handle
+        <AudioHandle
           type="source"
           position={Position.Right}
           id="Mixer-source"
-          className="w-4 h-4 bg-orange-400 rounded-full"
         />
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
-import { Handle, Node, NodeProps, Position } from "@xyflow/react";
+import { Node, NodeProps, Position } from "@xyflow/react";
 
+import { AudioHandle } from "@/components/AudioHandle";
 import { useAppStore } from "../state";
 import { NodeDefinition } from "@/node-definition";
 
@@ -81,17 +82,15 @@ export function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) {
           <span className="rounded-md text-xs bg-emerald-300 text-emerald-900 p-1">time-domain</span>
           <span className="rounded-md text-xs bg-gray-500 p-1">passthrough</span>
         </div>
-        <Handle
+        <AudioHandle
           type="target"
           position={Position.Left}
           id="WaveformMonitor-target"
-          className="w-4 h-4 bg-emerald-400 rounded-full"
         />
-        <Handle
+        <AudioHandle
           type="source"
           position={Position.Right}
           id="WaveformMonitor-source"
-          className="w-4 h-4 bg-emerald-400 rounded-full"
         />
       </div>
     </div>

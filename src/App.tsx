@@ -5,10 +5,10 @@ import "@xyflow/react/dist/style.css";
 import { Cpu, Play, Save, Square } from "lucide-react";
 import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
 
+import { edgeTypes } from "./components/AudioEdge";
 import { ContextMenu } from "./components/ContextMenu";
 import Menu from "./components/Menu";
 
-import { edgeTypes } from "./edges/AudioEdge";
 import { useAppStore } from "./state";
 import { CableGraphFile, EdgeType, NodeType, nodeTypes } from "./types";
 
