@@ -1,4 +1,4 @@
-import { AudioDevice, AudioGraph, NodeRenderData, VirtualDevice, WindowInfo } from "./types";
+import { AudioDevice, AudioEdge, AudioGraph, AudioNode, NodeRenderData, VirtualDevice, WindowInfo } from "./types";
 
 declare module "@tauri-apps/api/core" {
   declare function invoke(cmd: "get_window_list"): Promise<WindowInfo[]>;
@@ -15,18 +15,44 @@ declare module "@tauri-apps/api/core" {
 
   declare function invoke(cmd: "is_driver_connected"): Promise<boolean>;
 
-  declare function invoke(
-    cmd: "setup_runtime",
-    args: {
-      graph: AudioGraph;
-      host: string;
-      buffer_size: number;
-    },
-  ): Promise<void>;
-
   declare function invoke(cmd: "disable_runtime"): Promise<void>;
 
   declare function invoke(cmd: "enable_runtime"): Promise<void>;
+
+  declare function invoke(
+    cmd: "add_node",
+    args: { node: AudioNode },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "remove_node",
+    args: { nodeId: string },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "update_node",
+    args: { node: AudioNode },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "add_edge",
+    args: { edge: AudioEdge },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "remove_edge",
+    args: { edgeId: string },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "replace_graph",
+    args: { graph: AudioGraph },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "set_audio_config",
+    args: { host: string; bufferSize: number; sampleRate?: number },
+  ): Promise<void>;
 
   declare function invoke(cmd: "list_virtual_devices"): Promise<VirtualDevice[]>;
 
@@ -66,11 +92,6 @@ declare module "@tauri-apps/api/core" {
     cmd: "read_text_file",
     args: { path: string },
   ): Promise<string>;
-
-  declare function invoke(
-    cmd: "create_node",
-    args: { node: { type: string; data: Record<string, unknown> } },
-  ): Promise<void>;
 
   declare function invoke(
     cmd: "node_command",

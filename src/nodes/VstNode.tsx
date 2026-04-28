@@ -56,27 +56,13 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
           <select
             className="flex-1 text-xs bg-gray-600 text-white rounded px-1 py-0.5 border border-gray-500"
             value={data.pluginPath}
-            onChange={async (e) => {
+            onChange={(e) => {
               const plugin = vstPluginList.find((p) => p.path === e.target.value);
               if (plugin) {
                 updateNode(id, {
                   pluginPath: plugin.path,
                   numInputs: plugin.numInputs,
                   numOutputs: plugin.numOutputs,
-                });
-                // Pre-extract ctrl_cid so the editor can be opened without Apply
-                await invoke("create_node", {
-                  node: {
-                    type: "vst",
-                    data: {
-                      id,
-                      pluginPath: plugin.path,
-                      numInputs: plugin.numInputs,
-                      numOutputs: plugin.numOutputs,
-                      channels: data.channels || 2,
-                      params: data.params || [],
-                    },
-                  },
                 });
               } else {
                 updateNode(id, { pluginPath: "" });

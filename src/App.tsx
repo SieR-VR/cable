@@ -2,14 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ReactFlow, Background, BackgroundVariant, Panel, ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Cpu, Play, Save, Square, Zap } from "lucide-react";
+import { Cpu, Play, Save, Square } from "lucide-react";
 import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from "react";
 
 import { ContextMenu } from "./components/ContextMenu";
 import Menu from "./components/Menu";
 
 import { useAppStore } from "./state";
-import { AudioGraph, CableGraphFile, EdgeType, NodeType, nodeTypes, serializeNode } from "./types";
+import { CableGraphFile, EdgeType, NodeType, nodeTypes } from "./types";
 
 function App() {
   const {
@@ -29,7 +29,7 @@ function App() {
   } = useAppStore();
 
   const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
-  const [applyStatus, setApplyStatus] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<
     NodeType,
     EdgeType
@@ -67,39 +67,6 @@ function App() {
     }
   }, [contextMenuOpen, setContextMenuOpen]);
 
-  const onApply = useCallback(async () => {
-    setApplyStatus("Applying...");
-    const graph: AudioGraph = {
-      nodes: nodes.map(serializeNode),
-      edges: edges.map((edge) => ({
-        id: edge.id,
-        from: edge.source,
-        to: edge.target,
-        toHandle: edge.targetHandle ?? undefined,
-        frequency: edge.data?.frequency,
-        channels: edge.data?.channels,
-        bitsPerSample: edge.data?.bitsPerSample,
-      })),
-    };
-
-    console.log("Applying graph:", graph);
-
-    try {
-      await invoke("setup_runtime", {
-        graph,
-        host: selectedAudioHost,
-        bufferSize: 512,
-      });
-      startRenderPolling();
-      setIsRuntimeEnabled(true);
-      setApplyStatus("Applied successfully");
-      setTimeout(() => setApplyStatus(null), 3000);
-    } catch (e: any) {
-      console.error("setup_runtime failed:", e);
-      setApplyStatus(`Error: ${e}`);
-    }
-  }, [nodes, edges, selectedAudioHost, startRenderPolling]);
-
   const onSave = useCallback(async () => {
     const file: CableGraphFile = { version: 1, nodes, edges };
     await invoke("save_graph", { content: JSON.stringify(file, null, 2) });
@@ -109,6 +76,14 @@ function App() {
     document.title = "Cable";
     initializeApp();
   }, [initializeApp]);
+
+  useEffect(() => {
+    if (!selectedAudioHost) return;
+    invoke("set_audio_config", {
+      host: selectedAudioHost,
+      bufferSize: 512,
+    }).catch((e) => console.warn("set_audio_config failed:", e));
+  }, [selectedAudioHost]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -127,17 +102,17 @@ function App() {
             !Array.isArray(parsed.nodes) ||
             !Array.isArray(parsed.edges)
           ) {
-            setApplyStatus("Error: Invalid graph file format.");
+            setStatusMessage("Error: Invalid graph file format.");
             return;
           }
           await invoke("disable_runtime");
           stopRenderPolling();
           setIsRuntimeEnabled(false);
           loadGraph(parsed.nodes, parsed.edges);
-          setApplyStatus("Graph loaded. Press Apply to activate.");
-          setTimeout(() => setApplyStatus(null), 4000);
+          setStatusMessage("Graph loaded.");
+          setTimeout(() => setStatusMessage(null), 4000);
         } catch {
-          setApplyStatus("Error: Could not read the file.");
+          setStatusMessage("Error: Could not read the file.");
         }
       })
       .then((fn) => {
@@ -170,17 +145,15 @@ function App() {
       <ContextMenu />
       <Panel position="bottom-center">
         <div className="flex flex-col items-center gap-2 mb-2">
-          {applyStatus && (
+          {statusMessage && (
             <div
               className={`text-xs px-3 py-1 rounded-full ${
-                applyStatus.startsWith("Error")
+                statusMessage.startsWith("Error")
                   ? "bg-red-900/80 text-red-200"
-                  : applyStatus === "Applying..."
-                    ? "bg-yellow-900/80 text-yellow-200"
-                    : "bg-green-900/80 text-green-200"
+                  : "bg-green-900/80 text-green-200"
               }`}
             >
-              {applyStatus}
+              {statusMessage}
             </div>
           )}
           <div className="flex items-center gap-1 bg-gray-900/90 backdrop-blur-sm border border-gray-700 rounded-2xl px-3 py-2 shadow-xl">
@@ -204,15 +177,6 @@ function App() {
               title="Save graph"
             >
               <Save size={16} />
-            </button>
-
-            {/* Apply */}
-            <button
-              className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-              onClick={onApply}
-              title="Apply graph"
-            >
-              <Zap size={16} />
             </button>
 
             <div className="w-px h-5 bg-gray-700 mx-1" />

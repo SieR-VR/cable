@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, Arc, Mutex as StdMutex};
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
@@ -13,52 +13,28 @@ pub(crate) mod vst3_common;
 #[cfg(windows)]
 pub use driver::endpoint::rename_endpoint_elevated;
 
-use nodes::vst::VstPluginInfo;
-use nodes::NodeSharedStore;
-use runtime::AudioNode;
-
 /// A virtual audio device managed by the driver, independent of the audio graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct VirtualDevice {
-  /// Hex-encoded 16-byte device ID from the driver.
   pub id: String,
-  /// User-chosen friendly name.
   pub name: String,
-  /// "render" or "capture".
   pub device_type: String,
-  /// Windows MM endpoint ID string (e.g. `{0.0.0.00000000}.{guid}`).
-  /// Cached at creation time for fast IMMDevice lookup during rename.
-  /// Internal field — not sent to the frontend.
   #[serde(skip)]
   pub endpoint_id: String,
 }
 
-struct AppData {
-  runtime: Option<runtime::Runtime>,
-  runtime_thread: Option<std::thread::JoinHandle<runtime::Runtime>>,
-  runtime_running: Option<Arc<AtomicBool>>,
+pub(crate) struct AppData {
+  /// Canonical audio graph state. Always present from app startup; shared
+  /// with the audio thread via Arc clone when the runtime is enabled.
+  pub runtime: Arc<StdMutex<runtime::Runtime>>,
+  pub runtime_thread: Option<std::thread::JoinHandle<()>>,
+  pub runtime_running: Option<Arc<AtomicBool>>,
   #[cfg(windows)]
-  driver_handle: Option<Arc<crate::driver::client::DriverHandle>>,
-  /// Virtual devices created via the menu panel (device_hex_id -> VirtualDevice).
-  virtual_devices: BTreeMap<String, VirtualDevice>,
-  /// Spectrum buffers for SpectrumAnalyzer nodes (node_id -> magnitude bins).
-  spectrum_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
-  /// Waveform buffers for WaveformMonitor nodes (node_id -> rolling sample window).
-  waveform_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
-  /// Cached VST3 plugin scan results (global, not per-node).
-  vst_plugin_list: Vec<VstPluginInfo>,
-  /// Type-erased per-node-instance shared state. Each node type stores its
-  /// own state struct (e.g. `VstNodeShared`) keyed by node id. Plugin nodes
-  /// added later can use the same mechanism.
-  node_shared_store: Arc<NodeSharedStore>,
-  /// Persistent node instances created via `create_node`. Used as the
-  /// dispatch target for `node_command` so that node-specific IPC works
-  /// regardless of whether the runtime is currently running.
-  nodes: BTreeMap<String, AudioNode>,
+  pub driver_handle: Option<Arc<crate::driver::client::DriverHandle>>,
+  pub virtual_devices: BTreeMap<String, VirtualDevice>,
 }
 
-/// A visible top-level window enumerated via `EnumWindows`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WindowInfo {
@@ -79,8 +55,6 @@ struct AudioDevice {
   descriptions: Vec<String>,
 }
 
-/// Return the list of visible top-level windows with non-empty titles.
-/// Used by the AppAudioCapture node to let the user pick a target application.
 #[tauri::command]
 fn get_window_list() -> Vec<WindowInfo> {
   #[cfg(windows)]
@@ -192,8 +166,6 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
   (input_devices, output_devices)
 }
 
-/// Open the WebView developer tools (browser devtools).
-/// Works in debug builds; in release builds requires the `devtools` Cargo feature.
 #[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) {
   #[cfg(debug_assertions)]
@@ -202,8 +174,6 @@ fn open_devtools(window: tauri::WebviewWindow) {
   let _ = window;
 }
 
-/// Show a native Save As dialog and write the graph JSON to the chosen file.
-/// Returns `true` if saved, `false` if the user cancelled.
 #[tauri::command]
 async fn save_graph(content: String) -> Result<bool, String> {
   let handle = rfd::AsyncFileDialog::new()
@@ -221,46 +191,16 @@ async fn save_graph(content: String) -> Result<bool, String> {
   }
 }
 
-/// Read the text content of a file at the given path.
-/// Used to load a dropped graph JSON file.
 #[tauri::command]
 async fn read_text_file(path: String) -> Result<String, String> {
   std::fs::read_to_string(&path).map_err(|e| e.to_string())
-}
-
-// ---------------------------------------------------------------------------
-// VST3 commands
-// ---------------------------------------------------------------------------
-
-/// Called at node creation time to run NodeTrait::create() and register the
-/// instance into AppData. The persisted instance is the dispatch target for
-/// `node_command` and shares its mutable state with the runtime instance via
-/// `NodeSharedStore`.
-#[tauri::command]
-async fn create_node(state: State<'_, Mutex<AppData>>, node: AudioNode) -> Result<(), String> {
-  let mut node = node;
-  let mut app = state.lock().await;
-  let store = app.node_shared_store.clone();
-
-  // Inject shared store into node-types that need it.
-  if let AudioNode::Vst(ref mut n) = node {
-    n.shared_store = Some(store.clone());
-  }
-
-  // Run NodeTrait::create() which may populate shared state (e.g. VST
-  // ctrl_cid) before the node is used.
-  node.create_node()?;
-
-  let id = node.id().to_string();
-  app.nodes.insert(id, node);
-  Ok(())
 }
 
 /// Unified IPC entry point for all node-specific subcommands.
 ///
 /// For static (no-instance) operations such as `vst:scan`, dispatches based
 /// on `node_type` only. For per-instance operations, looks up the node in
-/// `AppData.nodes` and forwards to `NodeTrait::command`.
+/// the runtime graph and forwards to `NodeTrait::command`.
 #[tauri::command]
 async fn node_command(
   state: State<'_, Mutex<AppData>>,
@@ -272,7 +212,7 @@ async fn node_command(
   if node_id.is_empty() {
     return match (node_type.as_str(), data.get("op").and_then(|v| v.as_str())) {
       ("vst", Some("scan")) => {
-        let plugins = nodes::vst::scan_plugins_command(state).await?;
+        let plugins = nodes::vst::scan_plugins_command()?;
         serde_json::to_value(plugins).map_err(|e| e.to_string())
       }
       (t, op) => Err(format!(
@@ -283,10 +223,17 @@ async fn node_command(
     };
   }
 
-  let mut app = state.lock().await;
-  let node = app
+  let runtime_arc = {
+    let app = state.lock().await;
+    app.runtime.clone()
+  };
+  let mut rt = runtime_arc
+    .lock()
+    .map_err(|e| format!("runtime lock poisoned: {}", e))?;
+  let node = rt
     .nodes
-    .get_mut(&node_id)
+    .iter_mut()
+    .find(|n| n.id() == node_id)
     .ok_or_else(|| format!("node_command: node '{node_id}' not found"))?;
   node.command(data)
 }
@@ -296,17 +243,12 @@ pub fn run() {
   Builder::default()
     .plugin(tauri_plugin_opener::init())
     .manage(Mutex::new(AppData {
-      runtime: None,
+      runtime: Arc::new(StdMutex::new(runtime::Runtime::new_default())),
       runtime_thread: None,
       runtime_running: None,
       #[cfg(windows)]
       driver_handle: None,
       virtual_devices: BTreeMap::new(),
-      spectrum_buffers: BTreeMap::new(),
-      waveform_buffers: BTreeMap::new(),
-      vst_plugin_list: Vec::new(),
-      node_shared_store: Arc::new(NodeSharedStore::new()),
-      nodes: BTreeMap::new(),
     }))
     .invoke_handler(tauri::generate_handler![
       get_window_list,
@@ -318,14 +260,19 @@ pub fn run() {
       driver::commands::create_virtual_device,
       driver::commands::remove_virtual_device,
       driver::commands::rename_virtual_device,
-      runtime::setup_runtime,
+      runtime::add_node,
+      runtime::remove_node,
+      runtime::update_node,
+      runtime::add_edge,
+      runtime::remove_edge,
+      runtime::replace_graph,
+      runtime::set_audio_config,
       runtime::enable_runtime,
       runtime::disable_runtime,
-      open_devtools,
       runtime::get_node_render_data,
+      open_devtools,
       save_graph,
       read_text_file,
-      create_node,
       node_command,
     ])
     .run(tauri::generate_context!())

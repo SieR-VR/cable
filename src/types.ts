@@ -65,13 +65,49 @@ const nodeDefs = {
   vst: vstNodeDef,
 };
 
-export const nodeTypes = Object.fromEntries(
-  Object.entries(nodeDefs).map(([k, v]) => [k, v.component]),
-) as NodeTypes;
+let _nodeTypes: NodeTypes | null = null;
+export const nodeTypes: NodeTypes = new Proxy({} as NodeTypes, {
+  get(_t, prop: string) {
+    if (!_nodeTypes) {
+      _nodeTypes = Object.fromEntries(
+        Object.entries(nodeDefs).map(([k, v]) => [k, v.component]),
+      ) as NodeTypes;
+    }
+    return _nodeTypes[prop];
+  },
+  ownKeys() {
+    if (!_nodeTypes) {
+      _nodeTypes = Object.fromEntries(
+        Object.entries(nodeDefs).map(([k, v]) => [k, v.component]),
+      ) as NodeTypes;
+    }
+    return Reflect.ownKeys(_nodeTypes);
+  },
+  getOwnPropertyDescriptor(_t, prop) {
+    if (!_nodeTypes) {
+      _nodeTypes = Object.fromEntries(
+        Object.entries(nodeDefs).map(([k, v]) => [k, v.component]),
+      ) as NodeTypes;
+    }
+    return Object.getOwnPropertyDescriptor(_nodeTypes, prop);
+  },
+});
 
 export function serializeNode(node: NodeType): AudioNode {
   const def = nodeDefs[node.type as keyof typeof nodeDefs];
   return (def.toAudioNode as (n: NodeType) => AudioNode)(node);
+}
+
+export function serializeEdge(edge: EdgeType): AudioEdge {
+  return {
+    id: edge.id,
+    from: edge.source,
+    to: edge.target,
+    toHandle: edge.targetHandle ?? undefined,
+    frequency: edge.data?.frequency,
+    channels: edge.data?.channels,
+    bitsPerSample: edge.data?.bitsPerSample,
+  };
 }
 
 export type NodeType = {
@@ -106,18 +142,6 @@ export type AudioEdge = {
   channels?: number;
   bitsPerSample?: number;
 };
-
-/** Serialized graph file saved to / loaded from disk. */
-export interface CableGraphFile {
-  version: 1;
-  nodes: NodeType[];
-  edges: EdgeType[];
-}
-
-export interface AudioGraph {
-  nodes: AudioNode[];
-  edges: AudioEdge[];
-}
 
 /** Serialized graph file saved to / loaded from disk. */
 export interface CableGraphFile {

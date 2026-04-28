@@ -10,7 +10,11 @@ import {
 } from "@xyflow/react";
 import { createWithEqualityFn } from "zustand/traditional";
 
-import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice, VstPluginInfo } from "./types";
+import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice, VstPluginInfo, serializeEdge, serializeNode } from "./types";
+
+const fireAndForget = (p: Promise<unknown>, label: string) => {
+  p.catch((e) => console.warn(`${label} failed:`, e));
+};
 
 /** Module-level interval ID for the global render polling loop. */
 let renderPollIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -192,6 +196,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     } as NodeType;
 
     set({ nodes: [...nodes, newNode] });
+    fireAndForget(invoke("add_node", { node: serializeNode(newNode) }), "add_node");
   },
 
   removeNodeAtContextMenu: () => {
@@ -208,6 +213,10 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
           edge.source !== contextMenuTargetNodeId && edge.target !== contextMenuTargetNodeId,
       ),
     });
+    fireAndForget(
+      invoke("remove_node", { nodeId: contextMenuTargetNodeId }),
+      "remove_node",
+    );
   },
 
   setSelectedAudioHost: (host: string) => set({ selectedAudioHost: host }),
@@ -261,6 +270,17 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       initDevices(host).catch((e) => console.warn("Failed to initialize audio devices:", e)),
       initDriver(),
     ]);
+
+    const { nodes, edges } = get();
+    fireAndForget(
+      invoke("replace_graph", {
+        graph: {
+          nodes: nodes.map(serializeNode),
+          edges: edges.map(serializeEdge),
+        },
+      }),
+      "replace_graph (initial sync)",
+    );
   },
 
   addVirtualDevice: async (name, deviceType) => {
@@ -303,15 +323,27 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   },
 
   onNodesChange: (changes) => {
-    set({
-      nodes: applyNodeChanges<NodeType>(changes, get().nodes),
-    });
+    const prev = get().nodes;
+    const next = applyNodeChanges<NodeType>(changes, prev);
+    set({ nodes: next });
+
+    for (const change of changes) {
+      if (change.type === "remove") {
+        fireAndForget(invoke("remove_node", { nodeId: change.id }), "remove_node");
+      }
+    }
   },
 
   onEdgesChange: (changes) => {
-    set({
-      edges: applyEdgeChanges<EdgeType>(changes, get().edges),
-    });
+    const prev = get().edges;
+    const next = applyEdgeChanges<EdgeType>(changes, prev);
+    set({ edges: next });
+
+    for (const change of changes) {
+      if (change.type === "remove") {
+        fireAndForget(invoke("remove_edge", { edgeId: change.id }), "remove_edge");
+      }
+    }
   },
 
   onConnect: (connection) => {
@@ -330,7 +362,6 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       return;
     }
 
-    // Only one edge per input handle is allowed.
     const isDuplicateInput = edges.some(
       (edge) =>
         edge.target === connection.target &&
@@ -343,19 +374,40 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       return;
     }
 
-    set({
-      edges: addEdge(connection, edges),
-    });
+    const nextEdges = addEdge(connection, edges);
+    set({ edges: nextEdges });
+
+    const newEdge = nextEdges.find(
+      (e) => !edges.some((p) => p.id === e.id),
+    );
+    if (newEdge) {
+      fireAndForget(invoke("add_edge", { edge: serializeEdge(newEdge) }), "add_edge");
+    }
   },
 
-  updateNode: (id: string, data: any) =>
-    set({
-      nodes: get().nodes.map((node) =>
-        node.id === id ? { ...node, data: { ...node.data, ...data } } : node,
-      ),
-    }),
+  updateNode: (id: string, data: any) => {
+    const nextNodes = get().nodes.map((node) =>
+      node.id === id ? { ...node, data: { ...node.data, ...data } } : node,
+    );
+    set({ nodes: nextNodes });
+    const updated = nextNodes.find((n) => n.id === id);
+    if (updated) {
+      fireAndForget(invoke("update_node", { node: serializeNode(updated) }), "update_node");
+    }
+  },
 
-  loadGraph: (nodes: NodeType[], edges: EdgeType[]) => set({ nodes, edges }),
+  loadGraph: (nodes: NodeType[], edges: EdgeType[]) => {
+    set({ nodes, edges });
+    fireAndForget(
+      invoke("replace_graph", {
+        graph: {
+          nodes: nodes.map(serializeNode),
+          edges: edges.map(serializeEdge),
+        },
+      }),
+      "replace_graph",
+    );
+  },
 
   scanVstPlugins: async () => {
     const plugins = (await invoke("node_command", {

@@ -19,12 +19,19 @@ pub async fn connect_driver(state: State<'_, Mutex<AppData>>) -> Result<bool, St
     match client::DriverHandle::open() {
       Ok(handle) => {
         println!("CableAudio driver connected successfully");
-        state.driver_handle = Some(Arc::new(handle));
+        let arc = Arc::new(handle);
+        state.driver_handle = Some(arc.clone());
+        if let Ok(mut rt) = state.runtime.lock() {
+          rt.driver_handle = Some(arc);
+        }
         Ok(true)
       }
       Err(e) => {
         println!("CableAudio driver not available: {}", e);
         state.driver_handle = None;
+        if let Ok(mut rt) = state.runtime.lock() {
+          rt.driver_handle = None;
+        }
         Ok(false)
       }
     }

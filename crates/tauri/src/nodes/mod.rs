@@ -6,14 +6,11 @@ pub mod app_audio_capture;
 pub mod audio_input_device;
 pub mod audio_output_device;
 pub mod mixer;
-pub mod shared_store;
 pub mod spectrum_analyzer;
 pub mod virtual_audio_input;
 pub mod virtual_audio_output;
 pub mod vst;
 pub mod waveform_monitor;
-
-pub(crate) use shared_store::NodeSharedStore;
 
 /// Audio data buffer passed between nodes.
 ///
@@ -51,12 +48,6 @@ impl AudioBuffer {
 
 pub(crate) trait NodeTrait {
   fn id(&self) -> &str;
-
-  /// Called when the node is first created. Runs before a Runtime exists.
-  /// Used for pre-initialization such as plugin metadata extraction. Default implementation is a no-op.
-  fn create(&mut self) -> Result<(), String> {
-    Ok(())
-  }
 
   fn init(&mut self, runtime: &Runtime) -> Result<(), String>;
 
