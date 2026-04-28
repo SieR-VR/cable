@@ -113,6 +113,11 @@ pub(crate) struct VstNode {
   /// `setParam`; read by `getParams`.
   #[serde(skip)]
   param_buffer: Arc<Mutex<Vec<VstParamInfo>>>,
+  /// Whether the plugin provides a graphical editor (createView returns non-null).
+  /// Determined at load time via a probe and cached here to give the frontend
+  /// immediate, synchronous feedback from `openEditor`.
+  #[serde(skip)]
+  has_editor: Option<bool>,
   /// Currently-open editor handle (Windows-only).
   #[cfg(windows)]
   #[serde(skip)]
@@ -210,6 +215,59 @@ impl NodeTrait for VstNode {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Editor-presence probe
+// ---------------------------------------------------------------------------
+
+/// Returns `Some(true)` if the plugin provides a graphical editor (createView
+/// returns non-null), `Some(false)` if it doesn't, or `None` if the probe
+/// couldn't be completed.
+///
+/// A temporary IEditController is created, `createView("editor")` is called,
+/// and everything is released immediately. No window is attached.
+unsafe fn probe_has_editor_view(
+  factory: &mut vst3_com::IPluginFactory,
+  audio_cid: &[u8; 16],
+  ctrl_cid: Option<&[u8; 16]>,
+) -> Option<bool> {
+  let is_separated = ctrl_cid.is_some_and(|c| c != audio_cid);
+  if is_separated {
+    let ctrl_cid = ctrl_cid.unwrap();
+    let ptr = factory.create_instance(ctrl_cid, &vst3_com::IID_IEDIT_CONTROLLER)?;
+    let controller = &mut *(ptr as *mut vst3_com::IEditController);
+    controller.initialize(std::ptr::null_mut());
+    let view_opt = controller.create_view();
+    let has_view = view_opt.is_some();
+    if let Some(view_ptr) = view_opt {
+      (*view_ptr).release();
+    }
+    controller.terminate();
+    controller.release();
+    Some(has_view)
+  } else {
+    let cid = ctrl_cid.unwrap_or(audio_cid);
+    let comp_ptr = factory.create_instance(cid, &vst3_com::IID_ICOMPONENT)?;
+    let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
+    component.initialize(std::ptr::null_mut());
+    let has_view =
+      if let Some(ctrl_ptr) = component.query_interface(&vst3_com::IID_IEDIT_CONTROLLER) {
+        let controller = &mut *(ctrl_ptr as *mut vst3_com::IEditController);
+        let view_opt = controller.create_view();
+        let result = view_opt.is_some();
+        if let Some(view_ptr) = view_opt {
+          (*view_ptr).release();
+        }
+        controller.release();
+        result
+      } else {
+        false
+      };
+    component.terminate();
+    component.release();
+    Some(has_view)
+  }
+}
+
 impl VstNode {
   /// Loads the DLL and initializes IComponent / IAudioProcessor.
   unsafe fn load_plugin(&mut self, runtime: &Runtime) -> Result<(), String> {
@@ -296,6 +354,12 @@ impl VstNode {
     if cid.is_some() {
       self.ctrl_cid = cid;
     }
+
+    // Probe whether the plugin has a graphical editor. We create a temporary
+    // IEditController, call createView, then immediately release everything —
+    // without attaching to any window. This tells the frontend synchronously
+    // whether "Open Editor" will yield a window.
+    self.has_editor = probe_has_editor_view(factory, &audio_cid, self.ctrl_cid.as_ref());
 
     self.plugin = Some(Vst3Plugin {
       lib,
@@ -628,6 +692,14 @@ impl VstNode {
   /// Opens (or focuses) the VST3 editor window for this node.
   #[cfg(windows)]
   pub(crate) fn do_open_editor(&mut self, plugin_path: String) -> Result<(), String> {
+    // Fast path: return a clear error if we already know this plugin has no GUI.
+    if self.has_editor == Some(false) {
+      return Err(
+        "This plugin has no graphical editor. Use the parameter controls in the node panel."
+          .to_string(),
+      );
+    }
+
     if let Some(handle) = self.editor.as_ref() {
       let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
       if hwnd_val != 0 {
@@ -781,7 +853,9 @@ pub(crate) fn run_vst_editor_thread(
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
 ) {
   use std::sync::atomic::Ordering;
-  use vst3_com::{wchar_to_string, GetPluginFactoryFn, IID_ICOMPONENT, IID_IEDIT_CONTROLLER, K_RESULT_OK};
+  use vst3_com::{
+    wchar_to_string, GetPluginFactoryFn, IID_ICOMPONENT, IID_IEDIT_CONTROLLER, K_RESULT_OK,
+  };
   use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
   use windows::Win32::System::LibraryLoader::GetModuleHandleW;
   use windows::Win32::UI::WindowsAndMessaging::{
@@ -818,43 +892,45 @@ pub(crate) fn run_vst_editor_thread(
         _ => false,
       };
 
-      let (ctrl_ptr, component_holder): (*mut vst3_com::IEditController, Option<*mut vst3_com::IComponent>) =
-        if is_separated {
-          let cid = ctrl_cid.unwrap();
-          let ptr = factory
-            .create_instance(&cid, &IID_IEDIT_CONTROLLER)
-            .ok_or("Failed to create IEditController (separated model)")?;
-          let controller = &mut *(ptr as *mut vst3_com::IEditController);
-          let init_result = controller.initialize(std::ptr::null_mut());
-          if init_result != K_RESULT_OK {
-            controller.release();
-            return Err(format!(
-              "IEditController::initialize failed: {init_result:#x}"
-            ));
-          }
-          (ptr as *mut vst3_com::IEditController, None)
-        } else {
-          // Single-component: create IComponent and queryInterface for IEditController.
-          let cid = ctrl_cid.unwrap_or(audio_cid);
-          let comp_ptr = factory
-            .create_instance(&cid, &IID_ICOMPONENT)
-            .ok_or("Failed to create IComponent (single-component model)")?;
-          let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
-          let init_result = component.initialize(std::ptr::null_mut());
-          if init_result != K_RESULT_OK {
-            component.release();
-            return Err(format!(
-              "IComponent::initialize failed (single-component): {init_result:#x}"
-            ));
-          }
-          let ctrl_ptr = component
-            .query_interface(&IID_IEDIT_CONTROLLER)
-            .ok_or("IEditController interface not found via queryInterface (single-component)")?;
-          (
-            ctrl_ptr as *mut vst3_com::IEditController,
-            Some(comp_ptr as *mut vst3_com::IComponent),
-          )
-        };
+      let (ctrl_ptr, component_holder): (
+        *mut vst3_com::IEditController,
+        Option<*mut vst3_com::IComponent>,
+      ) = if is_separated {
+        let cid = ctrl_cid.unwrap();
+        let ptr = factory
+          .create_instance(&cid, &IID_IEDIT_CONTROLLER)
+          .ok_or("Failed to create IEditController (separated model)")?;
+        let controller = &mut *(ptr as *mut vst3_com::IEditController);
+        let init_result = controller.initialize(std::ptr::null_mut());
+        if init_result != K_RESULT_OK {
+          controller.release();
+          return Err(format!(
+            "IEditController::initialize failed: {init_result:#x}"
+          ));
+        }
+        (ptr as *mut vst3_com::IEditController, None)
+      } else {
+        // Single-component: create IComponent and queryInterface for IEditController.
+        let cid = ctrl_cid.unwrap_or(audio_cid);
+        let comp_ptr = factory
+          .create_instance(&cid, &IID_ICOMPONENT)
+          .ok_or("Failed to create IComponent (single-component model)")?;
+        let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
+        let init_result = component.initialize(std::ptr::null_mut());
+        if init_result != K_RESULT_OK {
+          component.release();
+          return Err(format!(
+            "IComponent::initialize failed (single-component): {init_result:#x}"
+          ));
+        }
+        let ctrl_ptr = component
+          .query_interface(&IID_IEDIT_CONTROLLER)
+          .ok_or("IEditController interface not found via queryInterface (single-component)")?;
+        (
+          ctrl_ptr as *mut vst3_com::IEditController,
+          Some(comp_ptr as *mut vst3_com::IComponent),
+        )
+      };
 
       let controller = &mut *ctrl_ptr;
 
@@ -873,10 +949,19 @@ pub(crate) fn run_vst_editor_thread(
       }
       *params_shared.lock().map_err(|e| e.to_string())? = param_list;
 
-      // Create IPlugView
-      let view_ptr = controller
-        .create_view()
-        .ok_or("Failed to create IPlugView")?;
+      // Create IPlugView. Some plugins have no graphical editor (createView returns null);
+      // this is valid VST3 behavior. In that case we exit cleanly — parameters are still
+      // accessible via the getParams/setParam commands.
+      let view_ptr = match controller.create_view() {
+        Some(v) => v,
+        None => {
+          println!(
+            "VST3 plugin '{}' has no graphical editor (createView returned null).",
+            plugin_path
+          );
+          return Ok(());
+        }
+      };
       let view = &mut *view_ptr;
       let rect = view.get_size().unwrap_or(vst3_com::ViewRect {
         left: 0,

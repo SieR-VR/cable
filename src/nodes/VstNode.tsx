@@ -21,6 +21,7 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
   const updateNode = useAppStore((s) => s.updateNode);
 
   const [scanning, setScanning] = useState(false);
+  const [editorError, setEditorError] = useState<string | null>(null);
 
   const selectedPlugin = vstPluginList.find((p) => p.path === data.pluginPath) ?? null;
 
@@ -34,10 +35,15 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
   }
 
   async function handleOpenEditor() {
-    await invoke("node_command", {
-      nodeId: id,
-      data: { op: "openEditor", pluginPath: data.pluginPath },
-    });
+    setEditorError(null);
+    try {
+      await invoke("node_command", {
+        nodeId: id,
+        data: { op: "openEditor", pluginPath: data.pluginPath },
+      });
+    } catch (e) {
+      setEditorError(typeof e === "string" ? e : String(e));
+    }
   }
 
   const inputHandles = Array.from({ length: data.numInputs }, (_, i) => `vst-in-${i}`);
@@ -102,6 +108,11 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
           >
             Open Editor
           </button>
+        )}
+
+        {/* No-editor feedback */}
+        {editorError && (
+          <div className="text-xs text-yellow-300 leading-snug">{editorError}</div>
         )}
 
         {/* I/O handle rows */}
