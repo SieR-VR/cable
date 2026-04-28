@@ -234,44 +234,36 @@ unsafe fn probe_has_editor_view(
   if is_separated {
     let ctrl_cid = ctrl_cid.unwrap();
 
-    // Separated model: IComponent and IEditController are distinct objects.
-    // JUCE plugins require IConnectionPoint::connect(comp, ctrl) /
-    // connect(ctrl, comp) before createView will return a non-null view.
-    let comp_ptr = factory.create_instance(audio_cid, &vst3_com::IID_ICOMPONENT)?;
-    let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
-    component.initialize(std::ptr::null_mut());
-
+    // Separated model: create the IEditController and check for IConnectionPoint.
+    //
+    // Do NOT call createView here. JUCE plugins use a shared global state
+    // (activePlugins list, internal refcounts). Calling createView in a probe
+    // context and then releasing everything causes JUCE to run teardown on that
+    // global state; subsequent instances created by the editor thread then find
+    // stale/cleaned-up state and createView returns null.
+    //
+    // Instead we infer editor availability from the presence of IConnectionPoint:
+    // every JUCE-based separated plugin implements it (and needs it to work).
+    // For older separated plugins without IConnectionPoint, try createView directly.
     let ptr = factory.create_instance(ctrl_cid, &vst3_com::IID_IEDIT_CONTROLLER)?;
     let controller = &mut *(ptr as *mut vst3_com::IEditController);
     controller.initialize(std::ptr::null_mut());
 
-    let comp_cp_raw = (*(comp_ptr as *mut vst3_com::FUnknown))
-      .query_interface(&vst3_com::IID_ICONNECTION_POINT);
-    let ctrl_cp_raw = controller.query_interface(&vst3_com::IID_ICONNECTION_POINT);
+    let has_icp = controller
+      .query_interface(&vst3_com::IID_ICONNECTION_POINT)
+      .map(|cp| {
+        (*(cp as *mut vst3_com::IConnectionPoint)).release();
+        true
+      })
+      .unwrap_or(false);
 
-    if let (Some(cp_raw), Some(ccp_raw)) = (comp_cp_raw, ctrl_cp_raw) {
-      let comp_cp = &mut *(cp_raw as *mut vst3_com::IConnectionPoint);
-      let ctrl_cp = &mut *(ccp_raw as *mut vst3_com::IConnectionPoint);
-      comp_cp.connect(ptr); // comp → ctrl
-      ctrl_cp.connect(comp_ptr); // ctrl → comp
-
-      let view_opt = controller.create_view();
-      let has_view = view_opt.is_some();
-      if let Some(view_ptr) = view_opt {
-        (*view_ptr).release();
-      }
-
-      comp_cp.disconnect(ptr);
-      ctrl_cp.disconnect(comp_ptr);
-      comp_cp.release();
-      ctrl_cp.release();
+    if has_icp {
+      // IConnectionPoint present → JUCE-based plugin with a GUI editor.
       controller.terminate();
       controller.release();
-      component.terminate();
-      component.release();
-      Some(has_view)
+      Some(true)
     } else {
-      // No IConnectionPoint: try without (older / non-JUCE plugins)
+      // No IConnectionPoint: probe createView directly (older / non-JUCE plugin).
       let view_opt = controller.create_view();
       let has_view = view_opt.is_some();
       if let Some(view_ptr) = view_opt {
@@ -279,8 +271,6 @@ unsafe fn probe_has_editor_view(
       }
       controller.terminate();
       controller.release();
-      component.terminate();
-      component.release();
       Some(has_view)
     }
   } else {
@@ -986,9 +976,9 @@ pub(crate) fn run_vst_editor_thread(
           let ctrl_cp = &mut *(ccp_raw as *mut vst3_com::IConnectionPoint);
           let r1 = comp_cp.connect(ptr); // comp → ctrl
           let r2 = ctrl_cp.connect(sep_comp_ptr); // ctrl → comp
-          if r1 != K_RESULT_OK || r2 != K_RESULT_OK {
-            println!("VST3 IConnectionPoint::connect: {r1:#x} / {r2:#x}");
-          }
+          println!(
+            "VST3 editor thread: IConnectionPoint::connect r1={r1:#x} r2={r2:#x}"
+          );
           (
             ptr as *mut vst3_com::IEditController,
             None,
@@ -1052,11 +1042,15 @@ pub(crate) fn run_vst_editor_thread(
       // Create IPlugView. Some plugins have no graphical editor (createView returns null);
       // this is valid VST3 behavior. In that case we exit cleanly — parameters are still
       // accessible via the getParams/setParam commands.
+      println!("VST3 editor thread: calling createView for '{}'", plugin_path);
       let view_ptr = match controller.create_view() {
-        Some(v) => v,
+        Some(v) => {
+          println!("VST3 editor thread: createView succeeded ({:?})", v);
+          v
+        }
         None => {
           println!(
-            "VST3 plugin '{}' has no graphical editor (createView returned null).",
+            "VST3 plugin '{}': createView returned null — no graphical editor.",
             plugin_path
           );
           return Ok(());
