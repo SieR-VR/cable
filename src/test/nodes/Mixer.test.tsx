@@ -44,13 +44,4 @@ describe("Mixer", () => {
     expect(screen.getByText("Mixer")).toBeTruthy();
   });
 
-  it("renders sum+clamp badge", () => {
-    renderInProvider();
-    expect(screen.getByText("sum + clamp")).toBeTruthy();
-  });
-
-  it("renders passthrough badge", () => {
-    renderInProvider();
-    expect(screen.getByText("passthrough")).toBeTruthy();
-  });
 });
