@@ -219,84 +219,6 @@ impl NodeTrait for VstNode {
 // Editor-presence probe
 // ---------------------------------------------------------------------------
 
-/// Returns `Some(true)` if the plugin provides a graphical editor (createView
-/// returns non-null), `Some(false)` if it doesn't, or `None` if the probe
-/// couldn't be completed.
-///
-/// A temporary IEditController is created, `createView("editor")` is called,
-/// and everything is released immediately. No window is attached.
-unsafe fn probe_has_editor_view(
-  factory: &mut vst3_com::IPluginFactory,
-  audio_cid: &[u8; 16],
-  ctrl_cid: Option<&[u8; 16]>,
-) -> Option<bool> {
-  let is_separated = ctrl_cid.is_some_and(|c| c != audio_cid);
-  if is_separated {
-    let ctrl_cid = ctrl_cid.unwrap();
-
-    // Separated model: create the IEditController and check for IConnectionPoint.
-    //
-    // Do NOT call createView here. JUCE plugins use a shared global state
-    // (activePlugins list, internal refcounts). Calling createView in a probe
-    // context and then releasing everything causes JUCE to run teardown on that
-    // global state; subsequent instances created by the editor thread then find
-    // stale/cleaned-up state and createView returns null.
-    //
-    // Instead we infer editor availability from the presence of IConnectionPoint:
-    // every JUCE-based separated plugin implements it (and needs it to work).
-    // For older separated plugins without IConnectionPoint, try createView directly.
-    let ptr = factory.create_instance(ctrl_cid, &vst3_com::IID_IEDIT_CONTROLLER)?;
-    let controller = &mut *(ptr as *mut vst3_com::IEditController);
-    controller.initialize(std::ptr::null_mut());
-
-    let has_icp = controller
-      .query_interface(&vst3_com::IID_ICONNECTION_POINT)
-      .map(|cp| {
-        (*(cp as *mut vst3_com::IConnectionPoint)).release();
-        true
-      })
-      .unwrap_or(false);
-
-    if has_icp {
-      // IConnectionPoint present → JUCE-based plugin with a GUI editor.
-      controller.terminate();
-      controller.release();
-      Some(true)
-    } else {
-      // No IConnectionPoint: probe createView directly (older / non-JUCE plugin).
-      let view_opt = controller.create_view();
-      let has_view = view_opt.is_some();
-      if let Some(view_ptr) = view_opt {
-        (*view_ptr).release();
-      }
-      controller.terminate();
-      controller.release();
-      Some(has_view)
-    }
-  } else {
-    let cid = ctrl_cid.unwrap_or(audio_cid);
-    let comp_ptr = factory.create_instance(cid, &vst3_com::IID_ICOMPONENT)?;
-    let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
-    component.initialize(std::ptr::null_mut());
-    let has_view =
-      if let Some(ctrl_ptr) = component.query_interface(&vst3_com::IID_IEDIT_CONTROLLER) {
-        let controller = &mut *(ctrl_ptr as *mut vst3_com::IEditController);
-        let view_opt = controller.create_view();
-        let result = view_opt.is_some();
-        if let Some(view_ptr) = view_opt {
-          (*view_ptr).release();
-        }
-        controller.release();
-        result
-      } else {
-        false
-      };
-    component.terminate();
-    component.release();
-    Some(has_view)
-  }
-}
-
 impl VstNode {
   /// Loads the DLL and initializes IComponent / IAudioProcessor.
   unsafe fn load_plugin(&mut self, runtime: &Runtime) -> Result<(), String> {
@@ -384,11 +306,14 @@ impl VstNode {
       self.ctrl_cid = cid;
     }
 
-    // Probe whether the plugin has a graphical editor. We create a temporary
-    // IEditController, call createView, then immediately release everything —
-    // without attaching to any window. This tells the frontend synchronously
-    // whether "Open Editor" will yield a window.
-    self.has_editor = probe_has_editor_view(factory, &audio_cid, self.ctrl_cid.as_ref());
+    // Do NOT probe for editor availability here. Calling create_instance on the
+    // current (Tauri command) thread causes JUCE to register this thread as its
+    // "message thread". Subsequent IPlugView::attached() calls then deadlock
+    // waiting for a Win32 message loop that never runs on this thread.
+    //
+    // Instead leave has_editor = None and attempt to open the editor lazily in
+    // run_vst_editor_thread. If createView returns null there, the editor thread
+    // exits cleanly and the command returns an error to the frontend.
 
     self.plugin = Some(Vst3Plugin {
       lib,
@@ -720,16 +645,7 @@ impl VstNode {
 
   /// Opens (or focuses) the VST3 editor window for this node.
   #[cfg(windows)]
-  pub(crate) fn do_open_editor(&mut self, plugin_path: String) -> Result<(), String> {
-    // Fast path: return a clear error if we already know this plugin has no GUI.
-    if self.has_editor == Some(false) {
-      return Err(
-        "This plugin has no graphical editor. Use the parameter controls in the node panel."
-          .to_string(),
-      );
-    }
-
-    if let Some(handle) = self.editor.as_ref() {
+  pub(crate) fn do_open_editor(&mut self, plugin_path: String) -> Result<(), String> {    if let Some(handle) = self.editor.as_ref() {
       let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
       if hwnd_val != 0 {
         unsafe {
