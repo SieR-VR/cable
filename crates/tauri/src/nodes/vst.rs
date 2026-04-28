@@ -1188,34 +1188,33 @@ unsafe extern "system" fn vst_editor_wnd_proc(
   match msg {
     WM_VST_ATTACH => {
       println!("VST3 WndProc: WM_VST_ATTACH received, user_data={user_data:#x}");
-      // Spawn a helper thread that calls IPlugView::attached() while this STA
-      // thread keeps pumping messages. JUCE's MessageManager dispatches callbacks
-      // back onto the STA thread; if attached() is called on the STA thread while
-      // the message loop is blocked, those callbacks deadlock. Running attached()
-      // off-thread lets the message loop stay live to process them.
+      // Call attached() directly on the editor STA thread (here, inside WndProc).
       //
-      // SAFETY: JUCE VST3 plugins do not honour COM STA cross-thread rules — they
-      // use plain vtable calls. Sharing the raw view pointer with the helper thread
-      // is therefore safe in practice for JUCE-based plugins.
+      // Background: JUCE records the thread that first calls MessageManager as its
+      // "message thread". If probe_has_editor_view called initialize() on a different
+      // thread (e.g. the Tauri command thread), JUCE treats that thread as its message
+      // thread. Spawning a helper thread and having it call attached() causes JUCE to
+      // queue a callback on the probe thread — which has no message loop — and block
+      // forever.
+      //
+      // Calling attached() directly on this thread means JUCE's internal SendMessage
+      // calls targeting our hwnd re-enter the WndProc on the same thread, which Win32
+      // handles without deadlocking (same-thread SendMessage is a direct WndProc call).
       if user_data != 0 {
         let state = &mut *(user_data as *mut EditorWindowState);
         if !state.plug_view.is_null() {
-          let view_usize = state.plug_view as usize;
-          let hwnd_raw = hwnd.0 as usize;
-          std::thread::spawn(move || unsafe {
-            let view = &mut *(view_usize as *mut vst3_com::IPlugView);
-            let hwnd_inner = windows::Win32::Foundation::HWND(hwnd_raw as *mut _);
-            let result = view.attached(hwnd_inner.0 as *mut _, b"HWND\0");
-            println!("VST3 attach thread: IPlugView::attached result={result:#x}");
-            use windows::Win32::Foundation::{LPARAM, WPARAM};
-            use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-            let _ = PostMessageW(
-              Some(hwnd_inner),
-              WM_VST_AFTER_ATTACH,
-              WPARAM(result as usize),
-              LPARAM(0),
-            );
-          });
+          let view = &mut *state.plug_view;
+          println!("VST3 WndProc: calling IPlugView::attached()");
+          let result = view.attached(hwnd.0 as *mut _, b"HWND\0");
+          println!("VST3 WndProc: IPlugView::attached returned {result:#x}");
+          use windows::Win32::Foundation::{LPARAM, WPARAM};
+          use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+          let _ = PostMessageW(
+            Some(hwnd),
+            WM_VST_AFTER_ATTACH,
+            WPARAM(result as usize),
+            LPARAM(0),
+          );
         }
       }
       LRESULT(0)
