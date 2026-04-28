@@ -8,7 +8,7 @@ use crate::{
 use cpal::Host;
 
 #[cfg(windows)]
-use crate::driver_client::DriverHandle;
+use crate::driver::client::DriverHandle;
 
 pub(crate) struct Runtime {
   pub buffer_size: u32,

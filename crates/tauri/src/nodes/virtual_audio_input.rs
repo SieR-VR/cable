@@ -14,9 +14,9 @@ use crate::{
 };
 
 #[cfg(windows)]
-use crate::driver::types::DeviceId;
+use crate::driver::client::{DriverHandle, RingBufferMapping};
 #[cfg(windows)]
-use crate::driver_client::{DriverHandle, RingBufferMapping};
+use crate::driver::types::DeviceId;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,7 +76,7 @@ impl NodeTrait for VirtualAudioInputNode {
         .as_ref()
         .ok_or_else(|| "CableAudio driver not connected".to_string())?;
 
-      let device_id = crate::hex_to_device_id(&self.device_id)?;
+      let device_id = crate::driver::commands::hex_to_device_id(&self.device_id)?;
 
       // Map the ring buffer for the pre-created device
       let mapping = driver.map_ring_buffer(&device_id)?;
