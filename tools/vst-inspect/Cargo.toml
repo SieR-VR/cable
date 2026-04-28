@@ -1,0 +1,42 @@
+[package]
+name = "vst-inspect"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "vst-inspect"
+path = "src/main.rs"
+
+[[bin]]
+name = "test-u"
+path = "src/test_u.rs"
+
+[[bin]]
+name = "test-v"
+path = "src/test_v.rs"
+
+[[bin]]
+name = "test-w"
+path = "src/test_w.rs"
+
+[[bin]]
+name = "test-x"
+path = "src/test_x.rs"
+
+[[bin]]
+name = "test-x2"
+path = "src/test_x2.rs"
+
+[[bin]]
+name = "test-y"
+path = "src/test_y.rs"
+
+[[bin]]
+name = "test-z"
+path = "src/test_z.rs"
+
+[dependencies]
+libloading = "0.8"
+windows-sys = { version = "0.59", features = ["Win32_System_Memory", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

@@ -80,6 +80,13 @@ impl Drop for Vst3Plugin {
   }
 }
 
+/// Result type sent from the editor thread's Phase 1 back to `init()`.
+///
+/// Contains the fully-initialized `Vst3Plugin` (IComponent + IAudioProcessor),
+/// the audio_cid, and the optional ctrl_cid extracted from the plugin factory.
+#[cfg(windows)]
+type VstInitResult = Result<(Vst3Plugin, [u8; 16], Option<[u8; 16]>), String>;
+
 // ---------------------------------------------------------------------------
 // VstNode
 // ---------------------------------------------------------------------------
@@ -113,11 +120,6 @@ pub(crate) struct VstNode {
   /// `setParam`; read by `getParams`.
   #[serde(skip)]
   param_buffer: Arc<Mutex<Vec<VstParamInfo>>>,
-  /// Whether the plugin provides a graphical editor (createView returns non-null).
-  /// Determined at load time via a probe and cached here to give the frontend
-  /// immediate, synchronous feedback from `openEditor`.
-  #[serde(skip)]
-  has_editor: Option<bool>,
   /// Currently-open editor handle (Windows-only).
   #[cfg(windows)]
   #[serde(skip)]
@@ -136,11 +138,25 @@ impl NodeTrait for VstNode {
       return Ok(());
     }
 
-    unsafe { self.load_plugin(runtime) }
+    #[cfg(windows)]
+    return self.init_with_editor_thread(runtime);
+
+    #[cfg(not(windows))]
+    unsafe {
+      self.load_plugin(runtime)
+    }
   }
 
   fn dispose(&mut self, _runtime: &Runtime) -> Result<(), String> {
     println!("Disposing VST node: {}", self.id);
+    #[cfg(windows)]
+    {
+      // Close any open editor window, then drop the handle.
+      // Dropping VstEditorHandle drops open_editor_tx, which causes the editor
+      // thread's Phase 2 recv() to return Err and the thread to exit cleanly.
+      self.do_close_editor();
+      self.editor = None;
+    }
     // Vst3Plugin::drop() handles COM release and DLL unload.
     self.plugin = None;
     Ok(())
@@ -216,11 +232,94 @@ impl NodeTrait for VstNode {
 }
 
 // ---------------------------------------------------------------------------
-// Editor-presence probe
+// Windows: editor-thread-based initialization
+// Non-Windows: direct DLL load
 // ---------------------------------------------------------------------------
 
 impl VstNode {
+  /// Windows path: spawns the editor thread immediately so that
+  /// `IComponent::initialize()` runs on that thread. JUCE's MessageManager
+  /// singleton registers the calling thread as its "message thread"; by
+  /// making the editor thread call initialize() first we ensure JUCE
+  /// dispatches callbacks where `GetMessageW` is running, eliminating the
+  /// deadlock in `IPlugView::attached()`.
+  #[cfg(windows)]
+  fn init_with_editor_thread(&mut self, runtime: &Runtime) -> Result<(), String> {
+    let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<VstInitResult>(1);
+    let (open_editor_tx, open_editor_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let (param_tx, param_rx) = std::sync::mpsc::sync_channel::<(u32, f64)>(64);
+
+    let hwnd_arc = Arc::new(std::sync::atomic::AtomicIsize::new(0));
+    let params_arc = self.param_buffer.clone();
+
+    let plugin_path = self.plugin_path.clone();
+    let node_id = self.id.clone();
+    let channels = self.channels;
+    let num_inputs = self.num_inputs;
+    let num_outputs = self.num_outputs;
+    let buffer_size = runtime.buffer_size as i32;
+    let sample_rate = runtime.sample_rate as f64;
+
+    let hwnd_clone = hwnd_arc.clone();
+    let params_clone = params_arc.clone();
+    // Wrap param_rx in Arc<Mutex<…>> so the editor thread can pass it to
+    // multiple successive open_editor_once calls without recreating the channel.
+    let param_rx_arc = Arc::new(std::sync::Mutex::new(param_rx));
+    let param_rx_clone = param_rx_arc.clone();
+
+    let thread = std::thread::spawn(move || {
+      run_vst_editor_thread(
+        plugin_path,
+        node_id,
+        hwnd_clone,
+        param_rx_clone,
+        params_clone,
+        init_tx,
+        open_editor_rx,
+        channels,
+        num_inputs,
+        num_outputs,
+        buffer_size,
+        sample_rate,
+      );
+    });
+
+    // Block until Phase 1 completes on the editor thread.
+    let (plugin, audio_cid, ctrl_cid) = match init_rx.recv() {
+      Ok(Ok(v)) => v,
+      Ok(Err(e)) => {
+        drop(open_editor_tx);
+        let _ = thread.join();
+        return Err(e);
+      }
+      Err(_) => {
+        drop(open_editor_tx);
+        let _ = thread.join();
+        return Err(format!(
+          "VST3 editor thread died during init for '{}'",
+          self.plugin_path
+        ));
+      }
+    };
+
+    self.audio_cid = Some(audio_cid);
+    self.ctrl_cid = ctrl_cid;
+    self.plugin = Some(plugin);
+    self.editor = Some(VstEditorHandle {
+      hwnd: hwnd_arc,
+      param_tx,
+      params: params_arc,
+      thread: Some(thread),
+      open_editor_tx,
+    });
+
+    println!("VST3 plugin initialized: {}", self.plugin_path);
+    Ok(())
+  }
+
   /// Loads the DLL and initializes IComponent / IAudioProcessor.
+  /// Used on non-Windows where there is no editor thread.
+  #[cfg_attr(windows, allow(dead_code))]
   unsafe fn load_plugin(&mut self, runtime: &Runtime) -> Result<(), String> {
     let lib = libloading::Library::new(&self.plugin_path)
       .map_err(|e| format!("Failed to load VST3 DLL '{}': {}", self.plugin_path, e))?;
@@ -644,57 +743,36 @@ impl VstNode {
   }
 
   /// Opens (or focuses) the VST3 editor window for this node.
+  ///
+  /// The editor thread is already running (started by `init_with_editor_thread`);
+  /// this simply signals it to open the UI window (Phase 2 trigger).
   #[cfg(windows)]
-  pub(crate) fn do_open_editor(&mut self, plugin_path: String) -> Result<(), String> {    if let Some(handle) = self.editor.as_ref() {
-      let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
-      if hwnd_val != 0 {
-        unsafe {
-          use windows::Win32::Foundation::HWND;
-          use windows::Win32::UI::WindowsAndMessaging::{
-            SetForegroundWindow, ShowWindow, SW_RESTORE,
-          };
-          let hwnd = HWND(hwnd_val as *mut _);
-          let _ = ShowWindow(hwnd, SW_RESTORE);
-          let _ = SetForegroundWindow(hwnd);
-        }
-        return Ok(());
+  pub(crate) fn do_open_editor(&mut self, _plugin_path: String) -> Result<(), String> {
+    let handle = self
+      .editor
+      .as_ref()
+      .ok_or_else(|| "VST node not initialized. Press Apply first.".to_string())?;
+
+    let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd_val != 0 {
+      // Window already open — bring to front.
+      unsafe {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+          SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
+        let hwnd = HWND(hwnd_val as *mut _);
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = SetForegroundWindow(hwnd);
       }
+      return Ok(());
     }
-    // Stale handle (window already closed). Drop without joining; the worker
-    // thread will exit on its own once Win32 cleanup finishes.
-    self.editor = None;
 
-    let ctrl_cid = self.ctrl_cid;
-    let audio_cid = self
-      .audio_cid
-      .ok_or_else(|| "audio_cid not found. Please press Apply first.".to_string())?;
-
-    let hwnd_arc = Arc::new(std::sync::atomic::AtomicIsize::new(0));
-    let params_arc = self.param_buffer.clone();
-    let (param_tx, param_rx) = std::sync::mpsc::sync_channel::<(u32, f64)>(64);
-
-    let hwnd_clone = hwnd_arc.clone();
-    let params_clone = params_arc.clone();
-    let node_id_clone = self.id.clone();
-
-    let thread = std::thread::spawn(move || {
-      run_vst_editor_thread(
-        plugin_path,
-        node_id_clone,
-        ctrl_cid,
-        audio_cid,
-        hwnd_clone,
-        param_rx,
-        params_clone,
-      );
-    });
-
-    self.editor = Some(VstEditorHandle {
-      hwnd: hwnd_arc,
-      param_tx,
-      params: params_arc,
-      thread: Some(thread),
-    });
+    // Signal the editor thread to open the UI (Phase 2 trigger).
+    handle
+      .open_editor_tx
+      .try_send(())
+      .map_err(|_| "Editor thread is not ready or has already exited".to_string())?;
     Ok(())
   }
 
@@ -763,6 +841,9 @@ pub(crate) struct VstEditorHandle {
   params: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
   #[allow(dead_code)]
   thread: Option<std::thread::JoinHandle<()>>,
+  /// Triggers the editor thread's Phase 2 (open UI window).
+  /// Dropping this without sending causes the thread to exit cleanly.
+  open_editor_tx: std::sync::mpsc::SyncSender<()>,
 }
 
 #[cfg(windows)]
@@ -790,298 +871,432 @@ struct EditorWindowState {
   comp_cp: Option<*mut vst3_com::IConnectionPoint>,
   /// IConnectionPoint obtained from IEditController (separated model); released on close.
   ctrl_cp: Option<*mut vst3_com::IConnectionPoint>,
-  param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
+  /// Shared with the editor thread so param_rx survives across open/close cycles.
+  param_rx: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<(u32, f64)>>>,
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
   _lib: libloading::Library,
 }
 
 /// VST3 editor thread entry point (Windows-only).
 ///
-/// Load DLL → create IEditController → create IPlugView → create Win32 window → message loop.
+/// Phase 1: loads the DLL and calls IComponent::initialize() on this thread so
+/// JUCE's MessageManager singleton registers *this* thread as its "message
+/// thread". The resulting Vst3Plugin is sent back to init() via `init_tx`.
 ///
-/// Supports two VST3 architectures:
-/// - Separated: IComponent and IEditController are distinct factory classes.
-/// - Single-component: one object implements both; IEditController is obtained via
-///   IComponent::queryInterface rather than a separate factory creation.
+/// Phase 2: waits for open_editor_rx signals and opens a Win32+VST3 editor
+/// window for each one. The GetMessageW loop on this thread processes JUCE's
+/// internal PostMessage callbacks, preventing the deadlock that occurs when
+/// attached() runs on a thread with no message pump.
 #[cfg(windows)]
-pub(crate) fn run_vst_editor_thread(
+fn run_vst_editor_thread(
   plugin_path: String,
   node_id: String,
+  hwnd_out: Arc<std::sync::atomic::AtomicIsize>,
+  param_rx: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<(u32, f64)>>>,
+  params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
+  init_tx: std::sync::mpsc::SyncSender<VstInitResult>,
+  open_editor_rx: std::sync::mpsc::Receiver<()>,
+  channels: u16,
+  num_inputs: u16,
+  num_outputs: u16,
+  buffer_size: i32,
+  sample_rate: f64,
+) {
+  use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+
+  unsafe {
+    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+    // --- Phase 1: IComponent initialization on this thread ---
+    // Running IComponent::initialize() here causes JUCE's MessageManager to
+    // register this thread as its "message thread". All subsequent JUCE
+    // callFunctionOnMessageThread calls will post messages to this thread's
+    // GetMessageW loop, which prevents the attached() deadlock.
+    let phase1 = vst_init_phase1(
+      &plugin_path,
+      channels,
+      num_inputs,
+      num_outputs,
+      buffer_size,
+      sample_rate,
+    );
+
+    let (audio_cid, ctrl_cid) = match &phase1 {
+      Ok((_, a, c)) => (*a, *c),
+      Err(_) => {
+        let _ = init_tx.send(phase1);
+        CoUninitialize();
+        return;
+      }
+    };
+    let _ = init_tx.send(phase1);
+    // init_tx is dropped here; the blocking recv() in init() unblocks.
+
+    // --- Phase 2: Open editor window on demand ---
+    while let Ok(()) = open_editor_rx.recv() {
+      hwnd_out.store(0, std::sync::atomic::Ordering::SeqCst);
+      open_editor_once(
+        &plugin_path,
+        &node_id,
+        ctrl_cid,
+        audio_cid,
+        &hwnd_out,
+        &param_rx,
+        &params_shared,
+      );
+    }
+
+    CoUninitialize();
+  }
+}
+
+/// Phase 1 helper: loads the plugin DLL and sets up IComponent + IAudioProcessor.
+///
+/// Must be called on the editor thread so JUCE MessageManager is owned by that
+/// thread. The returned Vst3Plugin is sent to the main thread via a channel.
+#[cfg(windows)]
+unsafe fn vst_init_phase1(
+  plugin_path: &str,
+  channels: u16,
+  num_inputs: u16,
+  num_outputs: u16,
+  buffer_size: i32,
+  sample_rate: f64,
+) -> VstInitResult {
+  use vst3_com::{GetPluginFactoryFn, IID_ICOMPONENT, K_RESULT_OK};
+
+  let lib = libloading::Library::new(plugin_path)
+    .map_err(|e| format!("Failed to load VST3 DLL '{}': {}", plugin_path, e))?;
+
+  let get_factory: libloading::Symbol<GetPluginFactoryFn> = lib
+    .get(b"GetPluginFactory\0")
+    .map_err(|e| format!("GetPluginFactory symbol not found: {e}"))?;
+  let factory = get_factory();
+  if factory.is_null() {
+    return Err("GetPluginFactory returned null".into());
+  }
+  let factory = &mut *factory;
+
+  // Find the Audio Module Class CID
+  let num_classes = factory.count_classes();
+  let mut audio_cid: Option<[u8; 16]> = None;
+  for i in 0..num_classes {
+    if let Some(info) = factory.get_class_info(i) {
+      if vst3_com::cchar_to_string(&info.category).starts_with("Audio Module Class") {
+        audio_cid = Some(info.cid);
+        break;
+      }
+    }
+  }
+  let audio_cid = audio_cid.ok_or("Audio Module Class not found")?;
+
+  let comp_ptr = factory
+    .create_instance(&audio_cid, &IID_ICOMPONENT)
+    .ok_or("Failed to create IComponent")?;
+  let component = comp_ptr as *mut vst3_com::IComponent;
+
+  // IComponent::initialize runs on this (editor) thread — JUCE MessageManager
+  // registers this thread as its message thread right here.
+  let result = (*component).initialize(std::ptr::null_mut());
+  if result != K_RESULT_OK {
+    (*component).release();
+    return Err(format!("IComponent::initialize failed: {result:#x}"));
+  }
+
+  let proc_ptr = (*component)
+    .query_interface(&vst3_com::IID_IAUDIO_PROCESSOR)
+    .ok_or("IAudioProcessor interface not found")?;
+  let processor = proc_ptr as *mut vst3_com::IAudioProcessor;
+
+  let arrangement = if channels == 1 {
+    vst3_com::K_MONO
+  } else {
+    vst3_com::K_STEREO
+  };
+  let mut inputs: Vec<u64> = vec![arrangement; num_inputs as usize];
+  let mut outputs: Vec<u64> = vec![arrangement; num_outputs as usize];
+  (*processor).set_bus_arrangements(&mut inputs, &mut outputs);
+
+  for i in 0..(num_inputs as i32) {
+    (*component).activate_bus(vst3_com::K_AUDIO, vst3_com::K_INPUT, i, true);
+  }
+  for i in 0..(num_outputs as i32) {
+    (*component).activate_bus(vst3_com::K_AUDIO, vst3_com::K_OUTPUT, i, true);
+  }
+
+  let setup = vst3_com::ProcessSetup::new(
+    vst3_com::K_REALTIME,
+    vst3_com::K_SAMPLE32,
+    buffer_size,
+    sample_rate,
+  );
+  let r = (*processor).setup_processing(&setup);
+  if r != K_RESULT_OK {
+    println!("VST3 setupProcessing returned: {r:#x}");
+  }
+  (*component).set_active(true);
+  (*processor).set_processing(true);
+
+  let ctrl_cid = (*component).get_controller_class_id();
+
+  Ok((
+    Vst3Plugin {
+      lib,
+      component,
+      processor,
+    },
+    audio_cid,
+    ctrl_cid,
+  ))
+}
+
+/// Phase 2 helper: opens a single editor window for the plugin and runs the
+/// Win32 message loop until the window is closed.
+///
+/// Called on the editor thread so GetMessageW processes JUCE's internal
+/// PostMessage callbacks dispatched from the attached() helper thread.
+#[cfg(windows)]
+unsafe fn open_editor_once(
+  plugin_path: &str,
+  node_id: &str,
   ctrl_cid: Option<[u8; 16]>,
   audio_cid: [u8; 16],
-  hwnd_out: Arc<std::sync::atomic::AtomicIsize>,
-  param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
-  params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
+  hwnd_out: &Arc<std::sync::atomic::AtomicIsize>,
+  param_rx: &Arc<std::sync::Mutex<std::sync::mpsc::Receiver<(u32, f64)>>>,
+  params_shared: &Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
 ) {
   use std::sync::atomic::Ordering;
   use vst3_com::{
     wchar_to_string, GetPluginFactoryFn, IID_ICOMPONENT, IID_IEDIT_CONTROLLER, K_RESULT_OK,
   };
-  use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
   use windows::Win32::System::LibraryLoader::GetModuleHandleW;
   use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassExW, SetWindowLongPtrW,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, MSG, WNDCLASSEXW,
-    WS_CAPTION, WS_SYSMENU,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, MSG, WNDCLASSEXW, WS_CAPTION,
+    WS_SYSMENU,
   };
 
-  unsafe {
-    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+  let result = (|| -> Result<(), String> {
+    // Load a second handle to the same DLL. On Windows, LoadLibrary only
+    // increments the ref count for an already-loaded DLL, so JUCE globals
+    // (including MessageManager) are not re-initialized.
+    let lib2 = libloading::Library::new(plugin_path)
+      .map_err(|e| format!("Failed to load DLL (editor): {e}"))?;
 
-    let result = (|| -> Result<(), String> {
-      let lib =
-        libloading::Library::new(&plugin_path).map_err(|e| format!("Failed to load DLL: {e}"))?;
+    let get_factory: libloading::Symbol<GetPluginFactoryFn> = lib2
+      .get(b"GetPluginFactory\0")
+      .map_err(|e| format!("GetPluginFactory not found: {e}"))?;
+    let factory = get_factory();
+    if factory.is_null() {
+      return Err("factory null".into());
+    }
+    let factory = &mut *factory;
 
-      let get_factory: libloading::Symbol<GetPluginFactoryFn> = lib
-        .get(b"GetPluginFactory\0")
-        .map_err(|e| format!("GetPluginFactory symbol not found: {e}"))?;
-      let factory = get_factory();
-      if factory.is_null() {
-        return Err("factory null".into());
+    let is_separated = match ctrl_cid {
+      Some(cid) if cid != audio_cid => true,
+      _ => false,
+    };
+
+    let (ctrl_ptr, component_holder, separated_comp, comp_cp, ctrl_cp): (
+      *mut vst3_com::IEditController,
+      Option<*mut vst3_com::IComponent>,
+      Option<*mut vst3_com::IComponent>,
+      Option<*mut vst3_com::IConnectionPoint>,
+      Option<*mut vst3_com::IConnectionPoint>,
+    ) = if is_separated {
+      let cid = ctrl_cid.unwrap();
+
+      let sep_comp_ptr = factory
+        .create_instance(&audio_cid, &IID_ICOMPONENT)
+        .ok_or("Failed to create IComponent for connection (separated)")?;
+      let sep_component = &mut *(sep_comp_ptr as *mut vst3_com::IComponent);
+      let r = sep_component.initialize(std::ptr::null_mut());
+      if r != K_RESULT_OK {
+        sep_component.release();
+        return Err(format!(
+          "IComponent::initialize failed (separated, connection): {r:#x}"
+        ));
       }
-      let factory = &mut *factory;
 
-      // Determine whether this is a separated or single-component plugin.
-      //
-      // Separated: ctrl_cid is known and differs from audio_cid.
-      //   → create IEditController directly via factory.
-      // Single-component: ctrl_cid is None (getControllerClassId unsupported) or equals
-      //   audio_cid (same class implements both interfaces).
-      //   → create IComponent via factory, then queryInterface for IEditController.
-      let is_separated = match ctrl_cid {
-        Some(cid) if cid != audio_cid => true,
-        _ => false,
-      };
+      let ptr = factory
+        .create_instance(&cid, &IID_IEDIT_CONTROLLER)
+        .ok_or("Failed to create IEditController (separated)")?;
+      let controller = &mut *(ptr as *mut vst3_com::IEditController);
+      let r = controller.initialize(std::ptr::null_mut());
+      if r != K_RESULT_OK {
+        controller.release();
+        sep_component.terminate();
+        sep_component.release();
+        return Err(format!("IEditController::initialize failed: {r:#x}"));
+      }
 
-      let (ctrl_ptr, component_holder, separated_comp, comp_cp, ctrl_cp): (
-        *mut vst3_com::IEditController,
-        Option<*mut vst3_com::IComponent>,
-        Option<*mut vst3_com::IComponent>,
-        Option<*mut vst3_com::IConnectionPoint>,
-        Option<*mut vst3_com::IConnectionPoint>,
-      ) = if is_separated {
-        // Separated model: IComponent and IEditController are distinct classes.
-        //
-        // JUCE plugins check an internal juceCompo field inside createView.
-        // This field is set by IConnectionPoint::connect, so we must create
-        // the IComponent, connect both objects, and keep IComponent alive for
-        // the entire editor session so the pointer remains valid.
-        let cid = ctrl_cid.unwrap();
-
-        let sep_comp_ptr = factory
-          .create_instance(&audio_cid, &IID_ICOMPONENT)
-          .ok_or("Failed to create IComponent for connection (separated model)")?;
-        let sep_component = &mut *(sep_comp_ptr as *mut vst3_com::IComponent);
-        let init_comp = sep_component.initialize(std::ptr::null_mut());
-        if init_comp != K_RESULT_OK {
-          sep_component.release();
-          return Err(format!(
-            "IComponent::initialize failed (separated, connection): {init_comp:#x}"
-          ));
-        }
-
-        let ptr = factory
-          .create_instance(&cid, &IID_IEDIT_CONTROLLER)
-          .ok_or("Failed to create IEditController (separated model)")?;
-        let controller = &mut *(ptr as *mut vst3_com::IEditController);
-        let init_result = controller.initialize(std::ptr::null_mut());
-        if init_result != K_RESULT_OK {
-          controller.release();
-          sep_component.terminate();
-          sep_component.release();
-          return Err(format!(
-            "IEditController::initialize failed: {init_result:#x}"
-          ));
-        }
-
-        // Connect comp ↔ ctrl via IConnectionPoint so JUCE sets juceCompo.
-        let comp_cp_raw = (*(sep_comp_ptr as *mut vst3_com::FUnknown))
-          .query_interface(&vst3_com::IID_ICONNECTION_POINT);
-        let ctrl_cp_raw = controller.query_interface(&vst3_com::IID_ICONNECTION_POINT);
-        if let (Some(cp_raw), Some(ccp_raw)) = (comp_cp_raw, ctrl_cp_raw) {
-          let comp_cp = &mut *(cp_raw as *mut vst3_com::IConnectionPoint);
-          let ctrl_cp = &mut *(ccp_raw as *mut vst3_com::IConnectionPoint);
-          let r1 = comp_cp.connect(ptr); // comp → ctrl
-          let r2 = ctrl_cp.connect(sep_comp_ptr); // ctrl → comp
-          println!(
-            "VST3 editor thread: IConnectionPoint::connect r1={r1:#x} r2={r2:#x}"
-          );
-          (
-            ptr as *mut vst3_com::IEditController,
-            None,
-            Some(sep_comp_ptr as *mut vst3_com::IComponent),
-            Some(cp_raw as *mut vst3_com::IConnectionPoint),
-            Some(ccp_raw as *mut vst3_com::IConnectionPoint),
-          )
-        } else {
-          // Plugin doesn't implement IConnectionPoint; proceed without connection.
-          (
-            ptr as *mut vst3_com::IEditController,
-            None,
-            Some(sep_comp_ptr as *mut vst3_com::IComponent),
-            None,
-            None,
-          )
-        }
-      } else {
-        // Single-component: create IComponent and queryInterface for IEditController.
-        let cid = ctrl_cid.unwrap_or(audio_cid);
-        let comp_ptr = factory
-          .create_instance(&cid, &IID_ICOMPONENT)
-          .ok_or("Failed to create IComponent (single-component model)")?;
-        let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
-        let init_result = component.initialize(std::ptr::null_mut());
-        if init_result != K_RESULT_OK {
-          component.release();
-          return Err(format!(
-            "IComponent::initialize failed (single-component): {init_result:#x}"
-          ));
-        }
-        let ctrl_ptr = component
-          .query_interface(&IID_IEDIT_CONTROLLER)
-          .ok_or("IEditController interface not found via queryInterface (single-component)")?;
+      let comp_cp_raw = (*(sep_comp_ptr as *mut vst3_com::FUnknown))
+        .query_interface(&vst3_com::IID_ICONNECTION_POINT);
+      let ctrl_cp_raw = controller.query_interface(&vst3_com::IID_ICONNECTION_POINT);
+      if let (Some(cp_raw), Some(ccp_raw)) = (comp_cp_raw, ctrl_cp_raw) {
+        let comp_cp = &mut *(cp_raw as *mut vst3_com::IConnectionPoint);
+        let ctrl_cp = &mut *(ccp_raw as *mut vst3_com::IConnectionPoint);
+        let r1 = comp_cp.connect(ptr); // comp -> ctrl
+        let r2 = ctrl_cp.connect(sep_comp_ptr); // ctrl -> comp
+        println!("VST3 editor thread: IConnectionPoint::connect r1={r1:#x} r2={r2:#x}");
         (
-          ctrl_ptr as *mut vst3_com::IEditController,
-          Some(comp_ptr as *mut vst3_com::IComponent),
+          ptr as *mut vst3_com::IEditController,
           None,
+          Some(sep_comp_ptr as *mut vst3_com::IComponent),
+          Some(cp_raw as *mut vst3_com::IConnectionPoint),
+          Some(ccp_raw as *mut vst3_com::IConnectionPoint),
+        )
+      } else {
+        (
+          ptr as *mut vst3_com::IEditController,
+          None,
+          Some(sep_comp_ptr as *mut vst3_com::IComponent),
           None,
           None,
         )
-      };
-
-      let controller = &mut *ctrl_ptr;
-
-      // Read parameters
-      let count = controller.get_parameter_count();
-      let mut param_list: Vec<VstParamInfo> = Vec::new();
-      for i in 0..count {
-        if let Some(info) = controller.get_parameter_info(i) {
-          let value = controller.get_param_normalized(info.id);
-          param_list.push(VstParamInfo {
-            id: info.id,
-            title: wchar_to_string(&info.title),
-            value,
-          });
-        }
       }
-      *params_shared.lock().map_err(|e| e.to_string())? = param_list;
-
-      // Create IPlugView. Some plugins have no graphical editor (createView returns null);
-      // this is valid VST3 behavior. In that case we exit cleanly — parameters are still
-      // accessible via the getParams/setParam commands.
-      println!("VST3 editor thread: calling createView for '{}'", plugin_path);
-      let view_ptr = match controller.create_view() {
-        Some(v) => {
-          println!("VST3 editor thread: createView succeeded ({:?})", v);
-          v
-        }
-        None => {
-          println!(
-            "VST3 plugin '{}': createView returned null — no graphical editor.",
-            plugin_path
-          );
-          return Ok(());
-        }
-      };
-      let view = &mut *view_ptr;
-      println!("VST3 editor thread: createView OK, creating Win32 window");
-
-      // Use a placeholder size for the initial window. The real plugin size is
-      // only available after IPlugView::attached() has run, so we resize below.
-      let w = 800_i32;
-      let h = 600_i32;
-
-      // Register and create Win32 window
-      let hinstance = GetModuleHandleW(None).unwrap_or_default();
-      let class_name: Vec<u16> = format!("VstEditor_{}", node_id)
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-      let window_title: Vec<u16> = format!("VST Editor — {}", node_id)
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-
-      let wc = WNDCLASSEXW {
-        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(vst_editor_wnd_proc),
-        hInstance: windows::Win32::Foundation::HINSTANCE(hinstance.0),
-        lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
-        ..Default::default()
-      };
-      println!("VST3 editor thread: calling RegisterClassExW");
-      RegisterClassExW(&wc);
-      println!("VST3 editor thread: calling CreateWindowExW w={w} h={h}");
-
-      let hwnd = CreateWindowExW(
-        windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
-        windows::core::PCWSTR(class_name.as_ptr()),
-        windows::core::PCWSTR(window_title.as_ptr()),
-        WS_CAPTION | WS_SYSMENU,
-        windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
-        windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
-        w,
-        h,
+    } else {
+      let cid = ctrl_cid.unwrap_or(audio_cid);
+      let comp_ptr = factory
+        .create_instance(&cid, &IID_ICOMPONENT)
+        .ok_or("Failed to create IComponent (single-component)")?;
+      let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
+      let r = component.initialize(std::ptr::null_mut());
+      if r != K_RESULT_OK {
+        component.release();
+        return Err(format!(
+          "IComponent::initialize failed (single-component): {r:#x}"
+        ));
+      }
+      let ctrl_ptr = component
+        .query_interface(&IID_IEDIT_CONTROLLER)
+        .ok_or("IEditController not found (single-component)")?;
+      (
+        ctrl_ptr as *mut vst3_com::IEditController,
+        Some(comp_ptr as *mut vst3_com::IComponent),
         None,
         None,
-        Some(windows::Win32::Foundation::HINSTANCE(hinstance.0)),
         None,
       )
-      .map_err(|e| format!("CreateWindowExW failed: {e}"))?;
+    };
 
-      println!("VST3 editor thread: CreateWindowExW ok, hwnd={:?}", hwnd);
+    let controller = &mut *ctrl_ptr;
 
-      // Set up EditorWindowState
-      let state = Box::new(EditorWindowState {
-        plug_view: view_ptr,
-        controller: ctrl_ptr,
-        component_holder,
-        separated_comp,
-        comp_cp,
-        ctrl_cp,
-        param_rx,
-        params_shared: params_shared.clone(),
-        _lib: lib,
-      });
-      SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
-
-      // Defer IPlugView::attached() into the message loop via PostMessageW.
-      // JUCE's attached() internally calls SendMessage (for JUCE MessageManager
-      // initialization and UI embedding), which deadlocks if no message loop is
-      // running on the current STA thread. By posting WM_VST_ATTACH the message
-      // loop is already pumping before attached() executes.
-      {
-        use windows::Win32::Foundation::{LPARAM, WPARAM};
-        use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-        let post_result = PostMessageW(Some(hwnd), WM_VST_ATTACH, WPARAM(0), LPARAM(0));
-        println!("VST3 editor thread: PostMessageW(WM_VST_ATTACH) result={post_result:?}");
+    // Populate parameter list
+    let count = controller.get_parameter_count();
+    let mut param_list: Vec<VstParamInfo> = Vec::new();
+    for i in 0..count {
+      if let Some(info) = controller.get_parameter_info(i) {
+        let value = controller.get_param_normalized(info.id);
+        param_list.push(VstParamInfo {
+          id: info.id,
+          title: wchar_to_string(&info.title),
+          value,
+        });
       }
+    }
+    *params_shared.lock().map_err(|e| e.to_string())? = param_list;
 
-      // Store HWND before entering the message loop so the frontend can see it.
-      hwnd_out.store(hwnd.0 as isize, Ordering::SeqCst);
-
-      // Message loop
-      println!("VST3 editor thread: entering message loop");
-      let mut msg = MSG::default();
-      while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-        let _ = TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+    println!(
+      "VST3 editor thread: calling createView for '{}'",
+      plugin_path
+    );
+    let view_ptr = match controller.create_view() {
+      Some(v) => {
+        println!("VST3 editor thread: createView succeeded ({:?})", v);
+        v
       }
-      println!("VST3 editor thread: message loop exited");
+      None => {
+        println!(
+          "VST3 plugin '{}': createView returned null — no graphical editor.",
+          plugin_path
+        );
+        return Ok(());
+      }
+    };
+    println!("VST3 editor thread: createView OK, creating Win32 window");
 
-      // Window closed; reset hwnd to 0 for re-open detection
-      hwnd_out.store(0, Ordering::SeqCst);
+    let w = 800_i32;
+    let h = 600_i32;
 
-      Ok(())
-    })();
+    let hinstance = GetModuleHandleW(None).unwrap_or_default();
+    let class_name: Vec<u16> = format!("VstEditor_{node_id}")
+      .encode_utf16()
+      .chain(std::iter::once(0))
+      .collect();
+    let window_title: Vec<u16> = format!("VST Editor -- {node_id}")
+      .encode_utf16()
+      .chain(std::iter::once(0))
+      .collect();
 
-    if let Err(e) = result {
-      println!("VST editor thread error: {e}");
-      hwnd_out.store(0, Ordering::SeqCst);
+    let wc = WNDCLASSEXW {
+      cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+      style: CS_HREDRAW | CS_VREDRAW,
+      lpfnWndProc: Some(vst_editor_wnd_proc),
+      hInstance: windows::Win32::Foundation::HINSTANCE(hinstance.0),
+      lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+      ..Default::default()
+    };
+    println!("VST3 editor thread: calling RegisterClassExW");
+    RegisterClassExW(&wc);
+    println!("VST3 editor thread: calling CreateWindowExW w={w} h={h}");
+
+    let hwnd = CreateWindowExW(
+      windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+      windows::core::PCWSTR(class_name.as_ptr()),
+      windows::core::PCWSTR(window_title.as_ptr()),
+      WS_CAPTION | WS_SYSMENU,
+      windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
+      windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
+      w,
+      h,
+      None,
+      None,
+      Some(windows::Win32::Foundation::HINSTANCE(hinstance.0)),
+      None,
+    )
+    .map_err(|e| format!("CreateWindowExW failed: {e}"))?;
+
+    println!("VST3 editor thread: CreateWindowExW ok, hwnd={:?}", hwnd);
+
+    let state = Box::new(EditorWindowState {
+      plug_view: view_ptr,
+      controller: ctrl_ptr,
+      component_holder,
+      separated_comp,
+      comp_cp,
+      ctrl_cp,
+      param_rx: param_rx.clone(),
+      params_shared: params_shared.clone(),
+      _lib: lib2,
+    });
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+
+    // Store HWND before PostMessage so the frontend can see it.
+    hwnd_out.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    {
+      use windows::Win32::Foundation::{LPARAM, WPARAM};
+      use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+      let post_result = PostMessageW(Some(hwnd), WM_VST_ATTACH, WPARAM(0), LPARAM(0));
+      println!("VST3 editor thread: PostMessageW(WM_VST_ATTACH) result={post_result:?}");
     }
 
-    CoUninitialize();
+    println!("VST3 editor thread: entering message loop");
+    let mut msg = MSG::default();
+    while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+      let _ = TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+    println!("VST3 editor thread: message loop exited");
+
+    hwnd_out.store(0, Ordering::SeqCst);
+    Ok(())
+  })();
+
+  if let Err(e) = result {
+    println!("VST editor open_editor_once error: {e}");
+    hwnd_out.store(0, std::sync::atomic::Ordering::SeqCst);
   }
 }
 
@@ -1104,33 +1319,44 @@ unsafe extern "system" fn vst_editor_wnd_proc(
   match msg {
     WM_VST_ATTACH => {
       println!("VST3 WndProc: WM_VST_ATTACH received, user_data={user_data:#x}");
-      // Call attached() directly on the editor STA thread (here, inside WndProc).
+      // Spawn a helper thread to call IPlugView::attached() so the GetMessageW
+      // loop on THIS thread remains pumping.
       //
-      // Background: JUCE records the thread that first calls MessageManager as its
-      // "message thread". If probe_has_editor_view called initialize() on a different
-      // thread (e.g. the Tauri command thread), JUCE treats that thread as its message
-      // thread. Spawning a helper thread and having it call attached() causes JUCE to
-      // queue a callback on the probe thread — which has no message loop — and block
-      // forever.
+      // Why: IComponent::initialize() ran on this thread (the editor thread) in
+      // Phase 1, so JUCE MessageManager treats this thread as its "message thread".
+      // JUCE's attached() internally calls callFunctionOnMessageThread, which posts
+      // a message to this thread's message queue and waits for a reply.
       //
-      // Calling attached() directly on this thread means JUCE's internal SendMessage
-      // calls targeting our hwnd re-enter the WndProc on the same thread, which Win32
-      // handles without deadlocking (same-thread SendMessage is a direct WndProc call).
+      // If we called attached() directly here inside WndProc, GetMessageW would be
+      // blocked by the still-executing WndProc call and could never dispatch the
+      // posted JUCE message → deadlock.
+      //
+      // By spawning a helper thread, the WndProc returns immediately, GetMessageW
+      // continues pumping, and JUCE's internal PostMessage is processed normally.
       if user_data != 0 {
-        let state = &mut *(user_data as *mut EditorWindowState);
+        let state = &*(user_data as *const EditorWindowState);
         if !state.plug_view.is_null() {
-          let view = &mut *state.plug_view;
-          println!("VST3 WndProc: calling IPlugView::attached()");
-          let result = view.attached(hwnd.0 as *mut _, b"HWND\0");
-          println!("VST3 WndProc: IPlugView::attached returned {result:#x}");
-          use windows::Win32::Foundation::{LPARAM, WPARAM};
-          use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-          let _ = PostMessageW(
-            Some(hwnd),
-            WM_VST_AFTER_ATTACH,
-            WPARAM(result as usize),
-            LPARAM(0),
-          );
+          // Cast raw pointers to usize to cross the Send boundary.
+          // Safety: the editor thread (GetMessageW loop) keeps the window and
+          // EditorWindowState alive for the duration of this helper thread.
+          let view_addr = state.plug_view as usize;
+          let hwnd_isize = hwnd.0 as isize;
+          std::thread::spawn(move || unsafe {
+            use windows::Win32::Foundation::HWND;
+            let view = &mut *(view_addr as *mut vst3_com::IPlugView);
+            let hwnd_copy = HWND(hwnd_isize as *mut _);
+            println!("VST3 attach thread: calling IPlugView::attached()");
+            let result = view.attached(hwnd_copy.0 as *mut _, b"HWND\0");
+            println!("VST3 attach thread: IPlugView::attached returned {result:#x}");
+            use windows::Win32::Foundation::{LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+            let _ = PostMessageW(
+              Some(hwnd_copy),
+              WM_VST_AFTER_ATTACH,
+              WPARAM(result as usize),
+              LPARAM(0),
+            );
+          });
         }
       }
       LRESULT(0)
@@ -1140,7 +1366,7 @@ unsafe extern "system" fn vst_editor_wnd_proc(
       // resize the container window, and make it visible.
       if user_data != 0 {
         use windows::Win32::UI::WindowsAndMessaging::{
-          SetWindowPos, ShowWindow, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+          SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW,
         };
         let state = &mut *(user_data as *mut EditorWindowState);
         if !state.plug_view.is_null() {
@@ -1224,13 +1450,15 @@ unsafe extern "system" fn vst_editor_wnd_proc(
     WM_VST_PARAM => {
       if user_data != 0 {
         let state = &mut *(user_data as *mut EditorWindowState);
-        while let Ok((id, value)) = state.param_rx.try_recv() {
-          if !state.controller.is_null() {
-            (*state.controller).set_param_normalized(id, value);
-          }
-          if let Ok(mut params) = state.params_shared.try_lock() {
-            if let Some(p) = params.iter_mut().find(|p| p.id == id) {
-              p.value = value;
+        if let Ok(rx) = state.param_rx.try_lock() {
+          while let Ok((id, value)) = rx.try_recv() {
+            if !state.controller.is_null() {
+              (*state.controller).set_param_normalized(id, value);
+            }
+            if let Ok(mut params) = state.params_shared.try_lock() {
+              if let Some(p) = params.iter_mut().find(|p| p.id == id) {
+                p.value = value;
+              }
             }
           }
         }
