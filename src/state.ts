@@ -89,6 +89,12 @@ export interface AppState {
       | "waveformMonitor"
       | "appAudioCapture"
       | "mixer"
+      | "gain"
+      | "channelSplit"
+      | "delay"
+      | "compressor"
+      | "reverb"
+      | "echo"
       | "vst",
   ) => void;
   removeNodeAtContextMenu: () => void;
@@ -171,6 +177,12 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     const isWaveformMonitor = type === "waveformMonitor";
     const isAppAudioCapture = type === "appAudioCapture";
     const isMixer = type === "mixer";
+    const isGain = type === "gain";
+    const isChannelSplit = type === "channelSplit";
+    const isDelay = type === "delay";
+    const isCompressor = type === "compressor";
+    const isReverb = type === "reverb";
+    const isEcho = type === "echo";
     const isVst = type === "vst";
 
     const data = isVirtual
@@ -183,9 +195,21 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
             ? { processId: null, windowTitle: null, edgeType: null }
             : isMixer
               ? { edgeType: null }
-              : isVst
-                ? { pluginPath: "", numInputs: 1, numOutputs: 1, channels: 2, params: [] }
-                : { device: null, edgeType: null };
+              : isGain
+                ? { gain: 1.0, edgeType: null }
+                : isChannelSplit
+                  ? { edgeType: null }
+                  : isDelay
+                    ? { delayMs: 250, edgeType: null }
+                    : isCompressor
+                      ? { thresholdDb: -12, ratio: 4, attackMs: 5, releaseMs: 50, makeUpDb: 0, edgeType: null }
+                      : isReverb
+                        ? { roomSize: 0.5, wet: 0.33, damp: 0.5, edgeType: null }
+                        : isEcho
+                          ? { delayMs: 375, feedback: 0.4, wet: 0.5, edgeType: null }
+                          : isVst
+                            ? { pluginPath: "", numInputs: 1, numOutputs: 1, channels: 2, params: [] }
+                            : { device: null, edgeType: null };
 
     const newNode: NodeType = {
       id: `node-${nextId}`,
