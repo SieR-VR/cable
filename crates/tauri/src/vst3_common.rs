@@ -85,6 +85,9 @@ pub const IID_IAUDIO_PROCESSOR: [u8; 16] = vst3_iid(0x42043F99, 0xB7DA453C, 0xA5
 pub const IID_IEDIT_CONTROLLER: [u8; 16] = vst3_iid(0xDCD7BBE3, 0x7742448D, 0xA874AACC, 0x979C759E);
 // IPlugView : DECLARE_CLASS_IID(IPlugView, 0x5BC32507, 0xD060049E, 0xA6151B52, 0x2B755B29)
 pub const IID_IPLUG_VIEW: [u8; 16] = vst3_iid(0x5BC32507, 0xD060049E, 0xA6151B52, 0x2B755B29);
+// IConnectionPoint : DECLARE_CLASS_IID(IConnectionPoint, 0x70A4156F, 0x6E6E4026, 0x989148BF, 0xAA60D8D1)
+pub const IID_ICONNECTION_POINT: [u8; 16] =
+  vst3_iid(0x70A4156F, 0x6E6E4026, 0x989148BF, 0xAA60D8D1);
 
 // ---------------------------------------------------------------------------
 // Common data structures
@@ -589,6 +592,21 @@ impl IEditController {
     ((*self.vtable).set_param_normalized)(self, id, value)
   }
 
+  pub unsafe fn query_interface(&mut self, iid: &[u8; 16]) -> Option<*mut c_void> {
+    let mut obj: *mut c_void = std::ptr::null_mut();
+    if ((*self.vtable).query_interface)(self, iid.as_ptr(), &mut obj) == K_RESULT_OK
+      && !obj.is_null()
+    {
+      Some(obj)
+    } else {
+      None
+    }
+  }
+
+  pub unsafe fn set_component_handler(&mut self, handler: *mut c_void) -> i32 {
+    ((*self.vtable).set_component_handler)(self, handler)
+  }
+
   /// Creates the "editor" view.
   pub unsafe fn create_view(&mut self) -> Option<*mut IPlugView> {
     let name = b"editor\0";
@@ -669,3 +687,44 @@ impl IPlugView {
 
 /// Type of the `GetPluginFactory` function exported by a VST3 DLL.
 pub type GetPluginFactoryFn = unsafe extern "C" fn() -> *mut IPluginFactory;
+
+// ---------------------------------------------------------------------------
+// IConnectionPoint vtable (extends FUnknown)
+//
+// Hosts call comp.connect(ctrl) and ctrl.connect(comp) after initialization.
+// JUCE plugins require this step to set their internal juceCompo pointer,
+// which is checked inside createView before creating the editor window.
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+pub struct IConnectionPointVtbl {
+  pub query_interface:
+    unsafe extern "system" fn(*mut IConnectionPoint, *const u8, *mut *mut c_void) -> i32,
+  pub add_ref: unsafe extern "system" fn(*mut IConnectionPoint) -> u32,
+  pub release: unsafe extern "system" fn(*mut IConnectionPoint) -> u32,
+  /// Connect this object to another — `other` is a raw FUnknown pointer.
+  pub connect: unsafe extern "system" fn(*mut IConnectionPoint, *mut c_void) -> i32,
+  /// Disconnect from a previously connected object.
+  pub disconnect: unsafe extern "system" fn(*mut IConnectionPoint, *mut c_void) -> i32,
+  /// Notify about a message (not used by most hosts).
+  pub notify: unsafe extern "system" fn(*mut IConnectionPoint, *mut c_void) -> i32,
+}
+
+#[repr(C)]
+pub struct IConnectionPoint {
+  pub vtable: *const IConnectionPointVtbl,
+}
+
+impl IConnectionPoint {
+  pub unsafe fn connect(&mut self, other: *mut c_void) -> i32 {
+    ((*self.vtable).connect)(self, other)
+  }
+
+  pub unsafe fn disconnect(&mut self, other: *mut c_void) -> i32 {
+    ((*self.vtable).disconnect)(self, other)
+  }
+
+  pub unsafe fn release(&mut self) -> u32 {
+    ((*self.vtable).release)(self)
+  }
+}

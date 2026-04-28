@@ -233,17 +233,56 @@ unsafe fn probe_has_editor_view(
   let is_separated = ctrl_cid.is_some_and(|c| c != audio_cid);
   if is_separated {
     let ctrl_cid = ctrl_cid.unwrap();
+
+    // Separated model: IComponent and IEditController are distinct objects.
+    // JUCE plugins require IConnectionPoint::connect(comp, ctrl) /
+    // connect(ctrl, comp) before createView will return a non-null view.
+    let comp_ptr = factory.create_instance(audio_cid, &vst3_com::IID_ICOMPONENT)?;
+    let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
+    component.initialize(std::ptr::null_mut());
+
     let ptr = factory.create_instance(ctrl_cid, &vst3_com::IID_IEDIT_CONTROLLER)?;
     let controller = &mut *(ptr as *mut vst3_com::IEditController);
     controller.initialize(std::ptr::null_mut());
-    let view_opt = controller.create_view();
-    let has_view = view_opt.is_some();
-    if let Some(view_ptr) = view_opt {
-      (*view_ptr).release();
+
+    let comp_cp_raw = (*(comp_ptr as *mut vst3_com::FUnknown))
+      .query_interface(&vst3_com::IID_ICONNECTION_POINT);
+    let ctrl_cp_raw = controller.query_interface(&vst3_com::IID_ICONNECTION_POINT);
+
+    if let (Some(cp_raw), Some(ccp_raw)) = (comp_cp_raw, ctrl_cp_raw) {
+      let comp_cp = &mut *(cp_raw as *mut vst3_com::IConnectionPoint);
+      let ctrl_cp = &mut *(ccp_raw as *mut vst3_com::IConnectionPoint);
+      comp_cp.connect(ptr); // comp → ctrl
+      ctrl_cp.connect(comp_ptr); // ctrl → comp
+
+      let view_opt = controller.create_view();
+      let has_view = view_opt.is_some();
+      if let Some(view_ptr) = view_opt {
+        (*view_ptr).release();
+      }
+
+      comp_cp.disconnect(ptr);
+      ctrl_cp.disconnect(comp_ptr);
+      comp_cp.release();
+      ctrl_cp.release();
+      controller.terminate();
+      controller.release();
+      component.terminate();
+      component.release();
+      Some(has_view)
+    } else {
+      // No IConnectionPoint: try without (older / non-JUCE plugins)
+      let view_opt = controller.create_view();
+      let has_view = view_opt.is_some();
+      if let Some(view_ptr) = view_opt {
+        (*view_ptr).release();
+      }
+      controller.terminate();
+      controller.release();
+      component.terminate();
+      component.release();
+      Some(has_view)
     }
-    controller.terminate();
-    controller.release();
-    Some(has_view)
   } else {
     let cid = ctrl_cid.unwrap_or(audio_cid);
     let comp_ptr = factory.create_instance(cid, &vst3_com::IID_ICOMPONENT)?;
@@ -825,10 +864,15 @@ impl std::fmt::Debug for VstEditorHandle {
 struct EditorWindowState {
   plug_view: *mut vst3_com::IPlugView,
   controller: *mut vst3_com::IEditController,
-  /// For single-component plugins: the IComponent that was created to back the controller.
-  /// When Some, the WM_CLOSE handler must terminate/release the component (not the controller)
-  /// to avoid calling terminate() twice on the same object.
+  /// Single-component plugins: the IComponent that backs the controller (same object, extra ref).
+  /// WM_CLOSE must NOT call terminate() on the controller when this is Some.
   component_holder: Option<*mut vst3_com::IComponent>,
+  /// Separated model: the IComponent kept alive so ctrl's juceCompo pointer remains valid.
+  separated_comp: Option<*mut vst3_com::IComponent>,
+  /// IConnectionPoint obtained from IComponent (separated model); released on close.
+  comp_cp: Option<*mut vst3_com::IConnectionPoint>,
+  /// IConnectionPoint obtained from IEditController (separated model); released on close.
+  ctrl_cp: Option<*mut vst3_com::IConnectionPoint>,
   param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
   _lib: libloading::Library,
@@ -892,11 +936,33 @@ pub(crate) fn run_vst_editor_thread(
         _ => false,
       };
 
-      let (ctrl_ptr, component_holder): (
+      let (ctrl_ptr, component_holder, separated_comp, comp_cp, ctrl_cp): (
         *mut vst3_com::IEditController,
         Option<*mut vst3_com::IComponent>,
+        Option<*mut vst3_com::IComponent>,
+        Option<*mut vst3_com::IConnectionPoint>,
+        Option<*mut vst3_com::IConnectionPoint>,
       ) = if is_separated {
+        // Separated model: IComponent and IEditController are distinct classes.
+        //
+        // JUCE plugins check an internal juceCompo field inside createView.
+        // This field is set by IConnectionPoint::connect, so we must create
+        // the IComponent, connect both objects, and keep IComponent alive for
+        // the entire editor session so the pointer remains valid.
         let cid = ctrl_cid.unwrap();
+
+        let sep_comp_ptr = factory
+          .create_instance(&audio_cid, &IID_ICOMPONENT)
+          .ok_or("Failed to create IComponent for connection (separated model)")?;
+        let sep_component = &mut *(sep_comp_ptr as *mut vst3_com::IComponent);
+        let init_comp = sep_component.initialize(std::ptr::null_mut());
+        if init_comp != K_RESULT_OK {
+          sep_component.release();
+          return Err(format!(
+            "IComponent::initialize failed (separated, connection): {init_comp:#x}"
+          ));
+        }
+
         let ptr = factory
           .create_instance(&cid, &IID_IEDIT_CONTROLLER)
           .ok_or("Failed to create IEditController (separated model)")?;
@@ -904,11 +970,42 @@ pub(crate) fn run_vst_editor_thread(
         let init_result = controller.initialize(std::ptr::null_mut());
         if init_result != K_RESULT_OK {
           controller.release();
+          sep_component.terminate();
+          sep_component.release();
           return Err(format!(
             "IEditController::initialize failed: {init_result:#x}"
           ));
         }
-        (ptr as *mut vst3_com::IEditController, None)
+
+        // Connect comp ↔ ctrl via IConnectionPoint so JUCE sets juceCompo.
+        let comp_cp_raw = (*(sep_comp_ptr as *mut vst3_com::FUnknown))
+          .query_interface(&vst3_com::IID_ICONNECTION_POINT);
+        let ctrl_cp_raw = controller.query_interface(&vst3_com::IID_ICONNECTION_POINT);
+        if let (Some(cp_raw), Some(ccp_raw)) = (comp_cp_raw, ctrl_cp_raw) {
+          let comp_cp = &mut *(cp_raw as *mut vst3_com::IConnectionPoint);
+          let ctrl_cp = &mut *(ccp_raw as *mut vst3_com::IConnectionPoint);
+          let r1 = comp_cp.connect(ptr); // comp → ctrl
+          let r2 = ctrl_cp.connect(sep_comp_ptr); // ctrl → comp
+          if r1 != K_RESULT_OK || r2 != K_RESULT_OK {
+            println!("VST3 IConnectionPoint::connect: {r1:#x} / {r2:#x}");
+          }
+          (
+            ptr as *mut vst3_com::IEditController,
+            None,
+            Some(sep_comp_ptr as *mut vst3_com::IComponent),
+            Some(cp_raw as *mut vst3_com::IConnectionPoint),
+            Some(ccp_raw as *mut vst3_com::IConnectionPoint),
+          )
+        } else {
+          // Plugin doesn't implement IConnectionPoint; proceed without connection.
+          (
+            ptr as *mut vst3_com::IEditController,
+            None,
+            Some(sep_comp_ptr as *mut vst3_com::IComponent),
+            None,
+            None,
+          )
+        }
       } else {
         // Single-component: create IComponent and queryInterface for IEditController.
         let cid = ctrl_cid.unwrap_or(audio_cid);
@@ -929,6 +1026,9 @@ pub(crate) fn run_vst_editor_thread(
         (
           ctrl_ptr as *mut vst3_com::IEditController,
           Some(comp_ptr as *mut vst3_com::IComponent),
+          None,
+          None,
+          None,
         )
       };
 
@@ -1014,6 +1114,9 @@ pub(crate) fn run_vst_editor_thread(
         plug_view: view_ptr,
         controller: ctrl_ptr,
         component_holder,
+        separated_comp,
+        comp_cp,
+        ctrl_cp,
         param_rx,
         params_shared: params_shared.clone(),
         _lib: lib,
@@ -1075,9 +1178,24 @@ unsafe extern "system" fn vst_editor_wnd_proc(
           state.plug_view = std::ptr::null_mut();
         }
         if !state.controller.is_null() {
-          // For single-component plugins, the controller IS the component — only release
-          // the extra ref from queryInterface; terminate/release via component_holder below.
-          // For separated plugins (component_holder is None), do a full terminate + release.
+          // Disconnect IConnectionPoint before releasing (separated model).
+          // Peek at pointers without taking to ensure ordering: disconnect first,
+          // then release the IConnectionPoint refs, then release the interfaces.
+          let ctrl_raw = state.controller;
+          let sep_comp_raw = state.separated_comp;
+          if let Some(comp_cp) = state.comp_cp.take() {
+            (*comp_cp).disconnect(ctrl_raw as *mut _);
+            (*comp_cp).release();
+          }
+          if let Some(ctrl_cp) = state.ctrl_cp.take() {
+            if let Some(sep_comp) = sep_comp_raw {
+              (*ctrl_cp).disconnect(sep_comp as *mut _);
+            }
+            (*ctrl_cp).release();
+          }
+          // Single-component: controller IS the component — only release the extra ref
+          // from queryInterface; terminate/release via component_holder below.
+          // Separated: do a full terminate + release on the controller.
           if state.component_holder.is_none() {
             (*state.controller).terminate();
           }
@@ -1088,6 +1206,12 @@ unsafe extern "system" fn vst_editor_wnd_proc(
           if !comp.is_null() {
             (*comp).terminate();
             (*comp).release();
+          }
+        }
+        if let Some(sep_comp) = state.separated_comp.take() {
+          if !sep_comp.is_null() {
+            (*sep_comp).terminate();
+            (*sep_comp).release();
           }
         }
       }
