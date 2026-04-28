@@ -827,10 +827,16 @@ pub(crate) fn plugin_command(data: serde_json::Value) -> Result<serde_json::Valu
 #[cfg(windows)]
 const WM_VST_PARAM: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1;
 
-// WM_USER + 2 — deferred IPlugView::attached() call, posted after the message
-// loop starts so JUCE can pump its own internal SendMessage calls.
+// WM_USER + 2 — WndProc spawns a helper thread that calls IPlugView::attached()
+// while the message loop keeps pumping. JUCE's MessageManager dispatch runs on
+// the editor STA thread, so attached() must NOT block the message loop.
 #[cfg(windows)]
 const WM_VST_ATTACH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 2;
+
+// WM_USER + 3 — posted by the helper thread after attached() returns.
+// WndProc re-queries the plugin size, resizes the window, and shows it.
+#[cfg(windows)]
+const WM_VST_AFTER_ATTACH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 3;
 
 /// VST3 editor window handle (Windows-only).
 #[cfg(windows)]
@@ -1178,8 +1184,41 @@ unsafe extern "system" fn vst_editor_wnd_proc(
 
   match msg {
     WM_VST_ATTACH => {
-      // Deferred attach: the message loop is now running, so JUCE's internal
-      // SendMessage calls (MessageManager init, UI embedding) will be processed.
+      // Spawn a helper thread that calls IPlugView::attached() while this STA
+      // thread keeps pumping messages. JUCE's MessageManager dispatches callbacks
+      // back onto the STA thread; if attached() is called on the STA thread while
+      // the message loop is blocked, those callbacks deadlock. Running attached()
+      // off-thread lets the message loop stay live to process them.
+      //
+      // SAFETY: JUCE VST3 plugins do not honour COM STA cross-thread rules — they
+      // use plain vtable calls. Sharing the raw view pointer with the helper thread
+      // is therefore safe in practice for JUCE-based plugins.
+      if user_data != 0 {
+        let state = &mut *(user_data as *mut EditorWindowState);
+        if !state.plug_view.is_null() {
+          let view_usize = state.plug_view as usize;
+          let hwnd_raw = hwnd.0 as usize;
+          std::thread::spawn(move || unsafe {
+            let view = &mut *(view_usize as *mut vst3_com::IPlugView);
+            let hwnd_inner = windows::Win32::Foundation::HWND(hwnd_raw as *mut _);
+            let result = view.attached(hwnd_inner.0 as *mut _, b"HWND\0");
+            println!("VST3 attach thread: IPlugView::attached result={result:#x}");
+            use windows::Win32::Foundation::{LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+            let _ = PostMessageW(
+              Some(hwnd_inner),
+              WM_VST_AFTER_ATTACH,
+              WPARAM(result as usize),
+              LPARAM(0),
+            );
+          });
+        }
+      }
+      LRESULT(0)
+    }
+    WM_VST_AFTER_ATTACH => {
+      // attached() finished on the helper thread. Re-query the real plugin size,
+      // resize the container window, and make it visible.
       if user_data != 0 {
         use windows::Win32::UI::WindowsAndMessaging::{
           SetWindowPos, ShowWindow, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
@@ -1187,8 +1226,6 @@ unsafe extern "system" fn vst_editor_wnd_proc(
         let state = &mut *(user_data as *mut EditorWindowState);
         if !state.plug_view.is_null() {
           let view = &mut *state.plug_view;
-          let attach_result = view.attached(hwnd.0 as *mut _, b"HWND\0");
-          println!("VST3 WndProc: IPlugView::attached result={attach_result:#x}");
           if let Some(r) = view.get_size() {
             let nw = r.width().max(200) as i32;
             let nh = r.height().max(100) as i32;
