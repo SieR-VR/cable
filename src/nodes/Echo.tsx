@@ -64,7 +64,7 @@ export function Echo({ id, data }: NodeProps<EchoNodeType>) {
           max={1}
           step={0.01}
           value={wet}
-          className="flex-1 accent-violet-300"
+          className="flex-1 accent-violet-400"
           onChange={(e) => updateNode(id, { wet: parseFloat(e.target.value) })}
         />
         <span className="text-xs text-gray-300 w-8 text-right tabular-nums">

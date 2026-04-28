@@ -111,7 +111,7 @@ export function Compressor({ id, data }: NodeProps<CompressorNodeType>) {
       <Row
         label="Make-up"
         value={makeup}
-        displayValue={`+${makeup} dB`}
+        displayValue={makeup === 0 ? "0 dB" : `+${makeup} dB`}
         min={0}
         max={24}
         step={0.5}

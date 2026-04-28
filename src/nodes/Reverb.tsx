@@ -64,7 +64,7 @@ export function Reverb({ id, data }: NodeProps<ReverbNodeType>) {
           max={1}
           step={0.01}
           value={damp}
-          className="flex-1 accent-cyan-300"
+          className="flex-1 accent-cyan-400"
           onChange={(e) => updateNode(id, { damp: parseFloat(e.target.value) })}
         />
         <span className="text-xs text-gray-300 w-8 text-right tabular-nums">
