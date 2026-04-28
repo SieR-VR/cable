@@ -827,6 +827,11 @@ pub(crate) fn plugin_command(data: serde_json::Value) -> Result<serde_json::Valu
 #[cfg(windows)]
 const WM_VST_PARAM: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1;
 
+// WM_USER + 2 — deferred IPlugView::attached() call, posted after the message
+// loop starts so JUCE can pump its own internal SendMessage calls.
+#[cfg(windows)]
+const WM_VST_ATTACH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 2;
+
 /// VST3 editor window handle (Windows-only).
 #[cfg(windows)]
 pub(crate) struct VstEditorHandle {
@@ -894,8 +899,7 @@ pub(crate) fn run_vst_editor_thread(
   use windows::Win32::System::LibraryLoader::GetModuleHandleW;
   use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassExW, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    GWLP_USERDATA, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WNDCLASSEXW,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, MSG, WNDCLASSEXW,
     WS_CAPTION, WS_SYSMENU,
   };
 
@@ -1120,29 +1124,19 @@ pub(crate) fn run_vst_editor_thread(
       });
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-      // Attach plugin UI. Then re-query size — JUCE reports the real size only
-      // after attached() has run and the plugin has measured its contents.
-      let attach_result = view.attached(hwnd.0 as *mut _, b"HWND\0");
-      println!("VST3 editor thread: IPlugView::attached result={attach_result:#x}");
-
-      if let Some(r) = view.get_size() {
-        let nw = r.width().max(200) as i32;
-        let nh = r.height().max(100) as i32;
-        println!("VST3 editor thread: post-attach size = {nw}x{nh}");
-        let _ = SetWindowPos(
-          hwnd,
-          None,
-          0,
-          0,
-          nw,
-          nh,
-          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+      // Defer IPlugView::attached() into the message loop via PostMessageW.
+      // JUCE's attached() internally calls SendMessage (for JUCE MessageManager
+      // initialization and UI embedding), which deadlocks if no message loop is
+      // running on the current STA thread. By posting WM_VST_ATTACH the message
+      // loop is already pumping before attached() executes.
+      {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+        let _ = PostMessageW(Some(hwnd), WM_VST_ATTACH, WPARAM(0), LPARAM(0));
       }
 
-      // Store HWND and show window
+      // Store HWND before entering the message loop so the frontend can see it.
       hwnd_out.store(hwnd.0 as isize, Ordering::SeqCst);
-      let _ = ShowWindow(hwnd, SW_SHOW);
 
       // Message loop
       let mut msg = MSG::default();
@@ -1183,6 +1177,37 @@ unsafe extern "system" fn vst_editor_wnd_proc(
   let user_data = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
 
   match msg {
+    WM_VST_ATTACH => {
+      // Deferred attach: the message loop is now running, so JUCE's internal
+      // SendMessage calls (MessageManager init, UI embedding) will be processed.
+      if user_data != 0 {
+        use windows::Win32::UI::WindowsAndMessaging::{
+          SetWindowPos, ShowWindow, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+        };
+        let state = &mut *(user_data as *mut EditorWindowState);
+        if !state.plug_view.is_null() {
+          let view = &mut *state.plug_view;
+          let attach_result = view.attached(hwnd.0 as *mut _, b"HWND\0");
+          println!("VST3 WndProc: IPlugView::attached result={attach_result:#x}");
+          if let Some(r) = view.get_size() {
+            let nw = r.width().max(200) as i32;
+            let nh = r.height().max(100) as i32;
+            println!("VST3 WndProc: post-attach size = {nw}x{nh}");
+            let _ = SetWindowPos(
+              hwnd,
+              None,
+              0,
+              0,
+              nw,
+              nh,
+              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+          }
+          let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+      }
+      LRESULT(0)
+    }
     WM_CLOSE => {
       if user_data != 0 {
         let state = &mut *(user_data as *mut EditorWindowState);
