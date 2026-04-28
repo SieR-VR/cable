@@ -196,33 +196,30 @@ async fn read_text_file(path: String) -> Result<String, String> {
   std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
-/// Unified IPC entry point for all node-specific subcommands.
+/// Dispatches plugin-level (no instance) commands.
 ///
-/// For static (no-instance) operations such as `vst:scan`, dispatches based
-/// on `node_type` only. For per-instance operations, looks up the node in
-/// the runtime graph and forwards to `NodeTrait::command`.
+/// For each plugin type, forwards to the plugin's `plugin_command` handler.
+/// Used for operations that exist outside any node instance (e.g. scanning
+/// the system for available VST3 plugins).
+#[tauri::command]
+async fn plugin_command(
+  plugin_type: String,
+  data: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+  match plugin_type.as_str() {
+    "vst" => nodes::vst::plugin_command(data),
+    other => Err(format!("plugin_command: unknown plugin type '{}'", other)),
+  }
+}
+
+/// Per-instance node command dispatch. Looks up the node in the runtime
+/// graph and forwards to `NodeTrait::command`.
 #[tauri::command]
 async fn node_command(
   state: State<'_, Mutex<AppData>>,
-  node_type: String,
   node_id: String,
   data: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-  // Static (no node id) ops first.
-  if node_id.is_empty() {
-    return match (node_type.as_str(), data.get("op").and_then(|v| v.as_str())) {
-      ("vst", Some("scan")) => {
-        let plugins = nodes::vst::scan_plugins_command()?;
-        serde_json::to_value(plugins).map_err(|e| e.to_string())
-      }
-      (t, op) => Err(format!(
-        "node_command: unsupported static op '{}' for type '{}'",
-        op.unwrap_or(""),
-        t
-      )),
-    };
-  }
-
   let runtime_arc = {
     let app = state.lock().await;
     app.runtime.clone()
@@ -273,6 +270,7 @@ pub fn run() {
       open_devtools,
       save_graph,
       read_text_file,
+      plugin_command,
       node_command,
     ])
     .run(tauri::generate_context!())

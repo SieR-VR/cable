@@ -410,9 +410,8 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   },
 
   scanVstPlugins: async () => {
-    const plugins = (await invoke("node_command", {
-      nodeType: "vst",
-      nodeId: "",
+    const plugins = (await invoke("plugin_command", {
+      pluginType: "vst",
       data: { op: "scan" },
     })) as VstPluginInfo[];
     set({ vstPluginList: plugins });

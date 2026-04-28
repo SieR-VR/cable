@@ -35,7 +35,6 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
 
   async function handleOpenEditor() {
     await invoke("node_command", {
-      nodeType: "vst",
       nodeId: id,
       data: { op: "openEditor", pluginPath: data.pluginPath },
     });

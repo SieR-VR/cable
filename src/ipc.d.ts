@@ -94,7 +94,12 @@ declare module "@tauri-apps/api/core" {
   ): Promise<string>;
 
   declare function invoke(
+    cmd: "plugin_command",
+    args: { pluginType: string; data: Record<string, unknown> },
+  ): Promise<unknown>;
+
+  declare function invoke(
     cmd: "node_command",
-    args: { nodeType: string; nodeId: string; data: Record<string, unknown> },
+    args: { nodeId: string; data: Record<string, unknown> },
   ): Promise<unknown>;
 }

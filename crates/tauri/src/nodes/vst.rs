@@ -700,12 +700,20 @@ impl VstNode {
 }
 
 // ============================================================================
-// Static (no-node) Tauri command: VST3 plugin scan
+// Plugin (no-instance) command dispatch for `plugin_command` IPC
 // ============================================================================
 
-/// Scans the system for VST3 plugins and returns the list.
-pub(crate) fn scan_plugins_command() -> Result<Vec<VstPluginInfo>, String> {
-  Ok(scan_vst3_plugins())
+/// Dispatches plugin-level (no node instance) commands for the VST plugin.
+/// Currently supports `op: "scan"`.
+pub(crate) fn plugin_command(data: serde_json::Value) -> Result<serde_json::Value, String> {
+  let op = data.get("op").and_then(|v| v.as_str()).unwrap_or("");
+  match op {
+    "scan" => {
+      let plugins = scan_vst3_plugins();
+      serde_json::to_value(plugins).map_err(|e| e.to_string())
+    }
+    other => Err(format!("vst plugin_command: unknown op '{}'", other)),
+  }
 }
 
 // WM_USER + 1 — triggers parameter channel processing in the editor WndProc
