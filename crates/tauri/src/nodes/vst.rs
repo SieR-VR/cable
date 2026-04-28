@@ -883,6 +883,13 @@ struct EditorWindowState {
   param_rx: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<(u32, f64)>>>,
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
   _lib: libloading::Library,
+  /// Join handle for the helper thread that called attached().
+  ///
+  /// Non-JUCE plugins create their child windows on this helper thread, so the
+  /// helper thread must run its own GetMessageW loop to dispatch UI messages.
+  /// WM_DESTROY posts WM_QUIT to the helper thread and joins it before dropping
+  /// the state (and thus the DLL), preventing use-after-free.
+  helper_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 /// VST3 editor thread entry point (Windows-only).
@@ -1320,6 +1327,7 @@ unsafe fn open_editor_once(
       param_rx: param_rx.clone(),
       params_shared: params_shared.clone(),
       _lib: lib2,
+      helper_handle: None,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
@@ -1376,42 +1384,65 @@ unsafe extern "system" fn vst_editor_wnd_proc(
       // (on the editor thread, before spawning) keeps the frame valid for the
       // entire lifetime of the window.
       //
-      // attached() is dispatched from a helper thread so the GetMessageW loop
-      // on THIS thread keeps pumping while JUCE's MessageManager sends internal
-      // PostMessage callbacks back to this thread (deadlock prevention).
+      // The helper thread calls attached() and then runs its own GetMessageW loop.
+      // This serves two purposes:
+      //
+      //  1. JUCE deadlock prevention: JUCE's callFunctionOnMessageThread posts to
+      //     the editor thread (Phase-1 IComponent::initialize() thread). If we
+      //     called attached() directly inside WndProc, GetMessageW would be blocked
+      //     by the executing WndProc and could never dispatch the JUCE message.
+      //     By spawning a helper, WndProc returns immediately and the editor thread
+      //     keeps pumping.
+      //
+      //  2. Non-JUCE UI interaction: non-JUCE plugins (e.g. OrilRiver) create their
+      //     child windows on the helper thread inside attached(). Windows routes
+      //     mouse/keyboard events to the owning thread's queue. If the helper thread
+      //     has no message loop, those messages are never dispatched and the UI
+      //     appears frozen. Running GetMessageW on the helper thread fixes this.
       if user_data != 0 {
-        let state = &*(user_data as *const EditorWindowState);
+        let state = &mut *(user_data as *mut EditorWindowState);
         if !state.plug_view.is_null() {
-          // Call setFrame on the editor thread before spawning attached().
           if !state.plug_frame.is_null() {
             (*state.plug_view).set_frame(state.plug_frame as *mut _);
           }
-          // Show the window before calling attached() so non-JUCE plugins that
-          // render synchronously inside attached() have a visible parent to paint
-          // into. For JUCE plugins this is harmless (JUCE defers rendering).
+          // Show before attached() so non-JUCE plugins that render synchronously
+          // inside attached() have a visible parent. SW_SHOWNA avoids focus steal.
           {
             use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
-            // SW_SHOWNA: show without stealing focus or changing activation
             let _ = ShowWindow(hwnd, SW_SHOWNA);
           }
           let view_addr = state.plug_view as usize;
           let hwnd_isize = hwnd.0 as isize;
-          std::thread::spawn(move || unsafe {
+          let handle = std::thread::spawn(move || unsafe {
             use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{
+              DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+            };
             let view = &mut *(view_addr as *mut vst3_com::IPlugView);
             let hwnd_copy = HWND(hwnd_isize as *mut _);
             println!("VST3 attach thread: calling IPlugView::attached()");
             let result = view.attached(hwnd_copy.0 as *mut _, b"HWND\0");
             println!("VST3 attach thread: IPlugView::attached returned {result:#x}");
-            use windows::Win32::Foundation::{LPARAM, WPARAM};
-            use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-            let _ = PostMessageW(
-              Some(hwnd_copy),
-              WM_VST_AFTER_ATTACH,
-              WPARAM(result as usize),
-              LPARAM(0),
-            );
+            {
+              use windows::Win32::Foundation::{LPARAM, WPARAM};
+              use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+              let _ = PostMessageW(
+                Some(hwnd_copy),
+                WM_VST_AFTER_ATTACH,
+                WPARAM(result as usize),
+                LPARAM(0),
+              );
+            }
+            // Pump messages for any child windows created by the plugin on this
+            // thread (non-JUCE case). This loop exits when WM_DESTROY posts
+            // WM_QUIT via PostThreadMessageW.
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+              let _ = TranslateMessage(&msg);
+              DispatchMessageW(&msg);
+            }
           });
+          state.helper_handle = Some(handle);
         }
       }
       LRESULT(0)
@@ -1575,8 +1606,24 @@ unsafe extern "system" fn vst_editor_wnd_proc(
     }
     WM_DESTROY => {
       if user_data != 0 {
-        drop(Box::from_raw(user_data as *mut EditorWindowState));
+        let mut state = Box::from_raw(user_data as *mut EditorWindowState);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        // Signal the helper thread to exit its message loop, then join it before
+        // dropping the DLL. Without joining, the DLL could be unloaded while the
+        // helper thread is still executing plugin code (use-after-free).
+        if let Some(handle) = state.helper_handle.take() {
+          use std::os::windows::io::AsRawHandle;
+          use windows::Win32::Foundation::{HANDLE, LPARAM, WPARAM};
+          use windows::Win32::System::Threading::GetThreadId;
+          use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+          let raw = handle.as_raw_handle();
+          let tid = GetThreadId(HANDLE(raw as *mut _));
+          if tid != 0 {
+            let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+          }
+          let _ = handle.join();
+        }
+        drop(state);
       }
       PostQuitMessage(0);
       LRESULT(0)
