@@ -1,4 +1,4 @@
-#![no_std]
+#![allow(dead_code)]
 
 /// Audio data type definition
 #[repr(u32)]

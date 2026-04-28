@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::{AudioEdge, AudioNode, nodes::{AudioBuffer, NodeTrait}};
+use crate::{
+  nodes::{AudioBuffer, NodeTrait},
+  AudioEdge, AudioNode,
+};
 use cpal::Host;
 
 #[cfg(windows)]
@@ -33,10 +36,7 @@ pub struct RuntimeState {
 ///
 /// Returns indices into `node_ids` in dependency order.
 /// Falls back to the original index order if the graph contains cycles.
-pub(crate) fn topological_order(
-  node_ids: &[&str],
-  edges: &[(String, String)],
-) -> Vec<usize> {
+pub(crate) fn topological_order(node_ids: &[&str], edges: &[(String, String)]) -> Vec<usize> {
   let n = node_ids.len();
   if n <= 1 {
     return (0..n).collect();
@@ -249,7 +249,7 @@ mod tests {
     // A must be first, D must be last
     assert_eq!(order[0], 0); // A
     assert_eq!(order[3], 3); // D
-    // B and C can be in either order
+                             // B and C can be in either order
     assert!(order[1] == 1 || order[1] == 2);
     assert!(order[2] == 1 || order[2] == 2);
     assert_ne!(order[1], order[2]);

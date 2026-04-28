@@ -6,23 +6,23 @@
 use std::mem;
 use std::ptr;
 
+use windows::core::GUID;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-  DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SP_DEVICE_INTERFACE_DATA,
-  SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA, SetupDiDestroyDeviceInfoList,
-  SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW, SetupDiGetDeviceInterfaceDetailW,
+  SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
+  SetupDiGetDeviceInterfaceDetailW, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SP_DEVICE_INTERFACE_DATA,
+  SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
 };
 use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::Storage::FileSystem::{
   CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 use windows::Win32::System::IO::DeviceIoControl;
-use windows::core::GUID;
 
-use common::{
-  AudioDataType, DeviceControlPayload, DeviceId, DeviceType, IOCTL_CABLE_CREATE_VIRTUAL_DEVICE,
-  IOCTL_CABLE_MAP_RING_BUFFER, IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE, IOCTL_CABLE_UNMAP_RING_BUFFER,
-  RING_BUFFER_MAGIC, RingBufferHeader, RingBufferMapRequest, RingBufferMapResponse,
-  RingBufferUnmapRequest,
+use crate::driver::types::{
+  AudioDataType, DeviceControlPayload, DeviceId, DeviceType, RingBufferHeader,
+  RingBufferMapRequest, RingBufferMapResponse, RingBufferUnmapRequest,
+  IOCTL_CABLE_CREATE_VIRTUAL_DEVICE, IOCTL_CABLE_MAP_RING_BUFFER,
+  IOCTL_CABLE_REMOVE_VIRTUAL_DEVICE, IOCTL_CABLE_UNMAP_RING_BUFFER, RING_BUFFER_MAGIC,
 };
 
 /// Result of a successful `create_virtual_device` IOCTL.

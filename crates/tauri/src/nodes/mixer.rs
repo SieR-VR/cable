@@ -45,10 +45,7 @@ impl NodeTrait for MixerNode {
       runtime
         .edges
         .iter()
-        .find(|e| {
-          e.to == self.id
-            && e.to_handle.as_deref() == Some(handle)
-        })
+        .find(|e| e.to == self.id && e.to_handle.as_deref() == Some(handle))
         .and_then(|e| state.edge_values.get(&e.id))
         .filter(|b| !b.samples.is_empty())
     };
@@ -58,9 +55,12 @@ impl NodeTrait for MixerNode {
 
     let (mixed_samples, channels, sample_rate, bits) = match (a, b) {
       (None, None) => return Ok(BTreeMap::new()),
-      (Some(buf), None) | (None, Some(buf)) => {
-        (buf.samples.clone(), buf.channels, buf.sample_rate, buf.bits_per_sample)
-      }
+      (Some(buf), None) | (None, Some(buf)) => (
+        buf.samples.clone(),
+        buf.channels,
+        buf.sample_rate,
+        buf.bits_per_sample,
+      ),
       (Some(a), Some(b)) => {
         // Use the minimum length to avoid zero-padding discontinuities.
         let len = a.samples.len().min(b.samples.len());
@@ -153,4 +153,3 @@ mod tests {
     assert!((result[2] - 0.3).abs() < 1e-5);
   }
 }
-

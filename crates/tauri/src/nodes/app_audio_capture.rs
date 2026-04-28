@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::{
-  Arc,
   atomic::{AtomicBool, AtomicUsize, Ordering},
+  Arc,
 };
 
 use ringbuf::{
-  HeapCons, HeapRb,
   traits::{Consumer, Observer, Producer, Split},
+  HeapCons, HeapRb,
 };
 use serde::{Deserialize, Serialize};
 
@@ -104,7 +104,10 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
 {
   fn ActivateCompleted(
     &self,
-    activateoperation: windows_core::Ref<'_, windows::Win32::Media::Audio::IActivateAudioInterfaceAsyncOperation>,
+    activateoperation: windows_core::Ref<
+      '_,
+      windows::Win32::Media::Audio::IActivateAudioInterfaceAsyncOperation,
+    >,
   ) -> windows::core::Result<()> {
     use windows::Win32::Media::Audio::IAudioClient;
     use windows_core::Interface;
@@ -120,7 +123,10 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
           .map_err(|e| format!("GetActivateResult: {e}"))?;
       }
       if hr.is_err() {
-        return Err(format!("Activation failed with HRESULT 0x{:08X}", hr.0 as u32));
+        return Err(format!(
+          "Activation failed with HRESULT 0x{:08X}",
+          hr.0 as u32
+        ));
       }
       unk
         .ok_or_else(|| "Activation returned no interface".to_string())?
@@ -163,8 +169,13 @@ unsafe fn wasapi_process_loopback_thread(
   use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
   let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
-  if let Err(e) = wasapi_process_loopback_inner(process_id, &mut producer, &stop_flag, &channel_count_out) {
-    eprintln!("AppAudioCapture process loopback error for pid {}: {}", process_id, e);
+  if let Err(e) =
+    wasapi_process_loopback_inner(process_id, &mut producer, &stop_flag, &channel_count_out)
+  {
+    eprintln!(
+      "AppAudioCapture process loopback error for pid {}: {}",
+      process_id, e
+    );
   }
 
   CoUninitialize();
@@ -179,18 +190,17 @@ unsafe fn wasapi_process_loopback_inner(
 ) -> Result<(), String> {
   use std::mem::ManuallyDrop;
   use std::sync::{Condvar, Mutex};
+  use windows::core::{Interface, PCWSTR};
   use windows::Win32::Media::Audio::{
-    ActivateAudioInterfaceAsync, IAudioCaptureClient, IAudioClient,
-    IActivateAudioInterfaceCompletionHandler, IMMDeviceEnumerator,
+    eConsole, eRender, ActivateAudioInterfaceAsync, IActivateAudioInterfaceCompletionHandler,
+    IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
     AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    MMDeviceEnumerator, eRender, eConsole,
   };
-  use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
   use windows::Win32::System::Com::StructuredStorage::{
     PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
   };
+  use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
   use windows::Win32::System::Variant::VT_BLOB;
-  use windows::core::{Interface, PCWSTR};
 
   // BLOB type: cbSize (u32) + padding (4) + pBlobData (*mut u8) on 64-bit.
   #[repr(C)]
@@ -227,13 +237,13 @@ unsafe fn wasapi_process_loopback_inner(
   //    capture; IMMDevice::Activate ignores the process filter and captures the
   //    entire render mix, causing a feedback loop when a Cable output node is
   //    connected to the same endpoint.
-  let shared_data: Arc<(Mutex<ActivationState>, Condvar)> = Arc::new((
-    Mutex::new(ActivationState { result: None }),
-    Condvar::new(),
-  ));
+  let shared_data: Arc<(Mutex<ActivationState>, Condvar)> =
+    Arc::new((Mutex::new(ActivationState { result: None }), Condvar::new()));
 
-  let handler: IActivateAudioInterfaceCompletionHandler =
-    ProcessActivationHandler { data: shared_data.clone() }.into();
+  let handler: IActivateAudioInterfaceCompletionHandler = ProcessActivationHandler {
+    data: shared_data.clone(),
+  }
+  .into();
 
   // "VAD\Process_Loopback" — virtual device path for process loopback capture.
   let device_path: Vec<u16> = "VAD\\Process_Loopback\0".encode_utf16().collect();
@@ -273,9 +283,8 @@ unsafe fn wasapi_process_loopback_inner(
   //    The process loopback IAudioClient returns E_NOTIMPL for GetMixFormat,
   //    so we query it from the render endpoint instead (process loopback always
   //    captures what the render device outputs, so the formats match).
-  let enumerator: IMMDeviceEnumerator =
-    CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-      .map_err(|e| format!("CoCreateInstance(IMMDeviceEnumerator): {e}"))?;
+  let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+    .map_err(|e| format!("CoCreateInstance(IMMDeviceEnumerator): {e}"))?;
 
   let render_device = enumerator
     .GetDefaultAudioEndpoint(eRender, eConsole)

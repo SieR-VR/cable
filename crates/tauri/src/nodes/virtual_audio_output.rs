@@ -15,9 +15,9 @@ use crate::{
 };
 
 #[cfg(windows)]
-use crate::driver_client::{DriverHandle, RingBufferMapping};
+use crate::driver::types::DeviceId;
 #[cfg(windows)]
-use common::DeviceId;
+use crate::driver_client::{DriverHandle, RingBufferMapping};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

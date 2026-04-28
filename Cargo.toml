@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/tauri", "crates/common"]
+members = ["crates/tauri"]
 
 [profile.dev]
 panic = "abort"

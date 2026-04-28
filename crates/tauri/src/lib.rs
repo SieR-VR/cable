@@ -8,10 +8,12 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
 use tauri::{async_runtime::Mutex, Builder, State};
 
+pub(crate) mod driver;
 #[cfg(windows)]
 pub(crate) mod driver_client;
 pub(crate) mod nodes;
 mod runtime;
+pub(crate) mod vst3_common;
 
 use nodes::app_audio_capture::AppAudioCaptureNode;
 use nodes::audio_input_device::AudioInputDeviceNode;
@@ -20,7 +22,7 @@ use nodes::mixer::MixerNode;
 use nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use nodes::virtual_audio_input::VirtualAudioInputNode;
 use nodes::virtual_audio_output::VirtualAudioOutputNode;
-use nodes::vst_node::{VstNode, VstPluginInfo, VstParamInfo};
+use nodes::vst_node::{VstNode, VstParamInfo, VstPluginInfo};
 use nodes::waveform_monitor::WaveformMonitorNode;
 use nodes::NodeTrait;
 
@@ -390,8 +392,8 @@ async fn create_virtual_device(
       drop(app); // release lock before blocking IOCTL
 
       let dt = match device_type.as_str() {
-        "render" => common::DeviceType::Render,
-        "capture" => common::DeviceType::Capture,
+        "render" => crate::driver::types::DeviceType::Render,
+        "capture" => crate::driver::types::DeviceType::Capture,
         _ => return Err(format!("Invalid device type: {}", device_type)),
       };
 
@@ -587,7 +589,7 @@ async fn rename_virtual_device(
 
 /// Convert hex string to 16-byte DeviceId.
 #[cfg(windows)]
-fn hex_to_device_id(hex: &str) -> Result<common::DeviceId, String> {
+fn hex_to_device_id(hex: &str) -> Result<crate::driver::types::DeviceId, String> {
   let bytes = hex::decode(hex).map_err(|e| format!("Invalid device ID hex: {}", e))?;
   if bytes.len() != 16 {
     return Err(format!("Device ID must be 16 bytes, got {}", bytes.len()));
@@ -1170,10 +1172,7 @@ async fn read_text_file(path: String) -> Result<String, String> {
 /// For VST nodes, temporarily loads the DLL to extract ctrl_cid,
 /// enabling the editor to be opened without pressing Apply first.
 #[tauri::command]
-async fn create_node(
-  state: State<'_, Mutex<AppData>>,
-  node: AudioNode,
-) -> Result<(), String> {
+async fn create_node(state: State<'_, Mutex<AppData>>, node: AudioNode) -> Result<(), String> {
   let mut node = node;
   if let AudioNode::Vst(ref mut n) = node {
     use crate::nodes::NodeTrait;
@@ -1189,9 +1188,7 @@ async fn create_node(
 /// Scans the system for VST3 plugins and returns the list.
 /// The result is cached in AppData.
 #[tauri::command]
-async fn scan_vst3_plugins(
-  state: State<'_, Mutex<AppData>>,
-) -> Result<Vec<VstPluginInfo>, String> {
+async fn scan_vst3_plugins(state: State<'_, Mutex<AppData>>) -> Result<Vec<VstPluginInfo>, String> {
   let plugins = nodes::vst_node::scan_vst3_plugins();
   let mut app = state.lock().await;
   app.vst_plugin_list = plugins.clone();
@@ -1242,7 +1239,12 @@ async fn set_vst_param(
         unsafe {
           use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
           use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-          let _ = PostMessageW(Some(HWND(hwnd_val as *mut _)), WM_VST_PARAM, WPARAM(0), LPARAM(0));
+          let _ = PostMessageW(
+            Some(HWND(hwnd_val as *mut _)),
+            WM_VST_PARAM,
+            WPARAM(0),
+            LPARAM(0),
+          );
         }
       }
     }
@@ -1272,7 +1274,9 @@ async fn open_vst_editor(
     if hwnd_val != 0 {
       unsafe {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+          SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
         let hwnd = HWND(hwnd_val as *mut _);
         let _ = ShowWindow(hwnd, SW_RESTORE);
         let _ = SetForegroundWindow(hwnd);
@@ -1294,38 +1298,49 @@ async fn open_vst_editor(
     Arc::new(std::sync::Mutex::new(Vec::new()));
   let (param_tx, param_rx) = std::sync::mpsc::sync_channel::<(u32, f64)>(64);
 
-  let ctrl_cid = app.vst_ctrl_cids
-                    .get(&node_id)
-                    .copied()
-                    .ok_or_else(|| format!("ctrl_cid not found. Please press Apply first."))?;
+  let ctrl_cid = app
+    .vst_ctrl_cids
+    .get(&node_id)
+    .copied()
+    .ok_or_else(|| format!("ctrl_cid not found. Please press Apply first."))?;
 
   let hwnd_clone = hwnd_arc.clone();
   let params_clone = params_arc.clone();
   let node_id_clone = node_id.clone();
 
   let thread = std::thread::spawn(move || {
-    run_vst_editor_thread(plugin_path, node_id_clone, ctrl_cid, hwnd_clone, param_rx, params_clone);
+    run_vst_editor_thread(
+      plugin_path,
+      node_id_clone,
+      ctrl_cid,
+      hwnd_clone,
+      param_rx,
+      params_clone,
+    );
   });
 
   // Register Arc in param_buffers so get_vst_params returns an empty list even
   // before the editor thread has populated it.
-  app.vst_param_buffers.insert(node_id.clone(), params_arc.clone());
+  app
+    .vst_param_buffers
+    .insert(node_id.clone(), params_arc.clone());
 
-  app.vst_editors.insert(node_id,
-                         VstEditorHandle { hwnd: hwnd_arc,
-                                           param_tx,
-                                           params: params_arc,
-                                           thread: Some(thread) });
+  app.vst_editors.insert(
+    node_id,
+    VstEditorHandle {
+      hwnd: hwnd_arc,
+      param_tx,
+      params: params_arc,
+      thread: Some(thread),
+    },
+  );
   Ok(())
 }
 
 /// Closes a VST3 editor window.
 #[cfg(windows)]
 #[tauri::command]
-async fn close_vst_editor(
-  state: State<'_, Mutex<AppData>>,
-  node_id: String,
-) -> Result<(), String> {
+async fn close_vst_editor(state: State<'_, Mutex<AppData>>, node_id: String) -> Result<(), String> {
   let mut app = state.lock().await;
   if let Some(handle) = app.vst_editors.get(&node_id) {
     let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
@@ -1333,7 +1348,12 @@ async fn close_vst_editor(
       unsafe {
         use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
-        let _ = PostMessageW(Some(HWND(hwnd_val as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(
+          Some(HWND(hwnd_val as *mut _)),
+          WM_CLOSE,
+          WPARAM(0),
+          LPARAM(0),
+        );
       }
     }
   }
@@ -1359,8 +1379,8 @@ struct VstEditorHandle {
 /// Per-window state accessed by the editor WndProc.
 #[cfg(windows)]
 struct EditorWindowState {
-  plug_view: *mut nodes::vst3_com::IPlugView,
-  controller: *mut nodes::vst3_com::IEditController,
+  plug_view: *mut vst3_common::IPlugView,
+  controller: *mut vst3_common::IEditController,
   param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
   _lib: libloading::Library,
@@ -1378,26 +1398,26 @@ fn run_vst_editor_thread(
   param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
 ) {
-  use nodes::vst3_com::{wchar_to_string, GetPluginFactoryFn, IID_IEDIT_CONTROLLER, K_RESULT_OK};
   use std::sync::atomic::Ordering;
+  use vst3_common::{wchar_to_string, GetPluginFactoryFn, IID_IEDIT_CONTROLLER, K_RESULT_OK};
   use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
   use windows::Win32::System::LibraryLoader::GetModuleHandleW;
   use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassExW, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, MSG, SW_SHOW,
-    WNDCLASSEXW, WS_CAPTION, WS_SYSMENU,
+    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, MSG, SW_SHOW, WNDCLASSEXW,
+    WS_CAPTION, WS_SYSMENU,
   };
 
   unsafe {
     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
     let result = (|| -> Result<(), String> {
-      let lib = libloading::Library::new(&plugin_path)
-        .map_err(|e| format!("Failed to load DLL: {e}"))?;
+      let lib =
+        libloading::Library::new(&plugin_path).map_err(|e| format!("Failed to load DLL: {e}"))?;
 
-      let get_factory: libloading::Symbol<GetPluginFactoryFn> =
-        lib.get(b"GetPluginFactory\0")
-           .map_err(|e| format!("GetPluginFactory symbol not found: {e}"))?;
+      let get_factory: libloading::Symbol<GetPluginFactoryFn> = lib
+        .get(b"GetPluginFactory\0")
+        .map_err(|e| format!("GetPluginFactory symbol not found: {e}"))?;
       let factory = get_factory();
       if factory.is_null() {
         return Err("factory null".into());
@@ -1405,13 +1425,16 @@ fn run_vst_editor_thread(
       let factory = &mut *factory;
 
       // // Create IEditController
-      let ctrl_ptr = factory.create_instance(&ctrl_cid, &IID_IEDIT_CONTROLLER)
-                            .ok_or("Failed to create IEditController")?;
-      let controller = &mut *(ctrl_ptr as *mut nodes::vst3_com::IEditController);
+      let ctrl_ptr = factory
+        .create_instance(&ctrl_cid, &IID_IEDIT_CONTROLLER)
+        .ok_or("Failed to create IEditController")?;
+      let controller = &mut *(ctrl_ptr as *mut vst3_common::IEditController);
       let init_result = controller.initialize(std::ptr::null_mut());
       if init_result != K_RESULT_OK {
         controller.release();
-        return Err(format!("IEditController::initialize failed: {init_result:#x}"));
+        return Err(format!(
+          "IEditController::initialize failed: {init_result:#x}"
+        ));
       }
 
       // // Read parameters
@@ -1420,19 +1443,26 @@ fn run_vst_editor_thread(
       for i in 0..count {
         if let Some(info) = controller.get_parameter_info(i) {
           let value = controller.get_param_normalized(info.id);
-          param_list.push(VstParamInfo { id: info.id,
-                                         title: wchar_to_string(&info.title),
-                                         value });
+          param_list.push(VstParamInfo {
+            id: info.id,
+            title: wchar_to_string(&info.title),
+            value,
+          });
         }
       }
       *params_shared.lock().map_err(|e| e.to_string())? = param_list;
 
       // Create IPlugView
-      let view_ptr = controller.create_view().ok_or("Failed to create IPlugView")?;
+      let view_ptr = controller
+        .create_view()
+        .ok_or("Failed to create IPlugView")?;
       let view = &mut *view_ptr;
-      let rect =
-        view.get_size()
-            .unwrap_or(nodes::vst3_com::ViewRect { left: 0, top: 0, right: 800, bottom: 600 });
+      let rect = view.get_size().unwrap_or(vst3_common::ViewRect {
+        left: 0,
+        top: 0,
+        right: 800,
+        bottom: 600,
+      });
       let w = rect.width().max(200) as i32;
       let h = rect.height().max(100) as i32;
 
@@ -1447,34 +1477,40 @@ fn run_vst_editor_thread(
         .chain(std::iter::once(0))
         .collect();
 
-      let wc = WNDCLASSEXW { cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                              style: CS_HREDRAW | CS_VREDRAW,
-                              lpfnWndProc: Some(vst_editor_wnd_proc),
-                              hInstance: windows::Win32::Foundation::HINSTANCE(hinstance.0),
-                              lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
-                              ..Default::default() };
+      let wc = WNDCLASSEXW {
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(vst_editor_wnd_proc),
+        hInstance: windows::Win32::Foundation::HINSTANCE(hinstance.0),
+        lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+        ..Default::default()
+      };
       RegisterClassExW(&wc);
 
-      let hwnd = CreateWindowExW(windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
-                                  windows::core::PCWSTR(class_name.as_ptr()),
-                                  windows::core::PCWSTR(window_title.as_ptr()),
-                                  WS_CAPTION | WS_SYSMENU,
-                                  windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
-                                  windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
-                                  w,
-                                  h,
-                                  None,
-                                  None,
-                                   Some(windows::Win32::Foundation::HINSTANCE(hinstance.0)),
-                                  None).map_err(|e| format!("CreateWindowExW failed: {e}"))?;
+      let hwnd = CreateWindowExW(
+        windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+        windows::core::PCWSTR(class_name.as_ptr()),
+        windows::core::PCWSTR(window_title.as_ptr()),
+        WS_CAPTION | WS_SYSMENU,
+        windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
+        windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
+        w,
+        h,
+        None,
+        None,
+        Some(windows::Win32::Foundation::HINSTANCE(hinstance.0)),
+        None,
+      )
+      .map_err(|e| format!("CreateWindowExW failed: {e}"))?;
 
       // Set up EditorWindowState
-      let state = Box::new(EditorWindowState { plug_view: view_ptr,
-                                               controller: ctrl_ptr
-                                                           as *mut nodes::vst3_com::IEditController,
-                                               param_rx,
-                                               params_shared: params_shared.clone(),
-                                               _lib: lib });
+      let state = Box::new(EditorWindowState {
+        plug_view: view_ptr,
+        controller: ctrl_ptr as *mut vst3_common::IEditController,
+        param_rx,
+        params_shared: params_shared.clone(),
+        _lib: lib,
+      });
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
       // Attach plugin UI

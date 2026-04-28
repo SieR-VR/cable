@@ -138,11 +138,19 @@ pub struct ProcessSetup {
 }
 
 impl ProcessSetup {
-  pub fn new(process_mode: i32, symbolic_sample_size: i32, max_samples: i32,
-             sample_rate: f64)
-             -> Self {
-    Self { process_mode, symbolic_sample_size, max_samples_per_block: max_samples, _pad: 0,
-           sample_rate }
+  pub fn new(
+    process_mode: i32,
+    symbolic_sample_size: i32,
+    max_samples: i32,
+    sample_rate: f64,
+  ) -> Self {
+    Self {
+      process_mode,
+      symbolic_sample_size,
+      max_samples_per_block: max_samples,
+      _pad: 0,
+      sample_rate,
+    }
   }
 }
 
@@ -163,7 +171,12 @@ pub struct AudioBusBuffers {
 
 impl AudioBusBuffers {
   pub fn new(num_channels: i32, silence_flags: u64, channel_buffers32: *mut *mut f32) -> Self {
-    Self { num_channels, _pad: 0, silence_flags, channel_buffers32 }
+    Self {
+      num_channels,
+      _pad: 0,
+      silence_flags,
+      channel_buffers32,
+    }
   }
 }
 
@@ -197,22 +210,28 @@ pub struct ProcessData {
 }
 
 impl ProcessData {
-  pub fn new(num_samples: i32, inputs: *mut AudioBusBuffers, num_inputs: i32,
-             outputs: *mut AudioBusBuffers, num_outputs: i32)
-             -> Self {
-    Self { process_mode: K_REALTIME,
-           symbolic_sample_size: K_SAMPLE32,
-           num_samples,
-           num_inputs,
-           num_outputs,
-           _pad: 0,
-           inputs,
-           outputs,
-           input_param_changes: std::ptr::null_mut(),
-           output_param_changes: std::ptr::null_mut(),
-           input_events: std::ptr::null_mut(),
-           output_events: std::ptr::null_mut(),
-           process_context: std::ptr::null_mut() }
+  pub fn new(
+    num_samples: i32,
+    inputs: *mut AudioBusBuffers,
+    num_inputs: i32,
+    outputs: *mut AudioBusBuffers,
+    num_outputs: i32,
+  ) -> Self {
+    Self {
+      process_mode: K_REALTIME,
+      symbolic_sample_size: K_SAMPLE32,
+      num_samples,
+      num_inputs,
+      num_outputs,
+      _pad: 0,
+      inputs,
+      outputs,
+      input_param_changes: std::ptr::null_mut(),
+      output_param_changes: std::ptr::null_mut(),
+      input_events: std::ptr::null_mut(),
+      output_events: std::ptr::null_mut(),
+      process_context: std::ptr::null_mut(),
+    }
   }
 }
 
@@ -262,7 +281,11 @@ impl Default for ParameterInfo {
 
 /// Converts a VST3 String128 (i16[128]) to a Rust String.
 pub fn wchar_to_string(chars: &[i16]) -> String {
-  let u16s: Vec<u16> = chars.iter().take_while(|&&c| c != 0).map(|&c| c as u16).collect();
+  let u16s: Vec<u16> = chars
+    .iter()
+    .take_while(|&&c| c != 0)
+    .map(|&c| c as u16)
+    .collect();
   String::from_utf16_lossy(&u16s)
 }
 
@@ -293,7 +316,7 @@ impl FUnknown {
   pub unsafe fn query_interface(&mut self, iid: &[u8; 16]) -> Option<*mut c_void> {
     let mut obj: *mut c_void = std::ptr::null_mut();
     if ((*self.vtable).query_interface)(self, iid.as_ptr(), &mut obj) == K_RESULT_OK
-       && !obj.is_null()
+      && !obj.is_null()
     {
       Some(obj)
     } else {
@@ -316,14 +339,11 @@ pub struct IPluginFactoryVtbl {
     unsafe extern "system" fn(*mut IPluginFactory, *const u8, *mut *mut c_void) -> i32,
   pub add_ref: unsafe extern "system" fn(*mut IPluginFactory) -> u32,
   pub release: unsafe extern "system" fn(*mut IPluginFactory) -> u32,
-  pub get_factory_info:
-    unsafe extern "system" fn(*mut IPluginFactory, *mut PFactoryInfo) -> i32,
+  pub get_factory_info: unsafe extern "system" fn(*mut IPluginFactory, *mut PFactoryInfo) -> i32,
   pub count_classes: unsafe extern "system" fn(*mut IPluginFactory) -> i32,
-  pub get_class_info:
-    unsafe extern "system" fn(*mut IPluginFactory, i32, *mut PClassInfo) -> i32,
+  pub get_class_info: unsafe extern "system" fn(*mut IPluginFactory, i32, *mut PClassInfo) -> i32,
   pub create_instance:
-    unsafe extern "system" fn(*mut IPluginFactory, *const u8, *const u8,
-                              *mut *mut c_void) -> i32,
+    unsafe extern "system" fn(*mut IPluginFactory, *const u8, *const u8, *mut *mut c_void) -> i32,
 }
 
 #[repr(C)]
@@ -355,9 +375,7 @@ impl IPluginFactory {
   }
 
   /// Creates an interface instance from a cid and iid.
-  pub unsafe fn create_instance(&mut self, cid: &[u8; 16],
-                                iid: &[u8; 16])
-                                -> Option<*mut c_void> {
+  pub unsafe fn create_instance(&mut self, cid: &[u8; 16], iid: &[u8; 16]) -> Option<*mut c_void> {
     let mut obj: *mut c_void = std::ptr::null_mut();
     let r = ((*self.vtable).create_instance)(self, cid.as_ptr(), iid.as_ptr(), &mut obj);
     if r == K_RESULT_OK && !obj.is_null() {
@@ -388,14 +406,11 @@ pub struct IComponentVtbl {
   pub initialize: unsafe extern "system" fn(*mut IComponent, *mut c_void) -> i32,
   pub terminate: unsafe extern "system" fn(*mut IComponent) -> i32,
   // IComponent
-  pub get_controller_class_id:
-    unsafe extern "system" fn(*mut IComponent, *mut [u8; 16]) -> i32,
+  pub get_controller_class_id: unsafe extern "system" fn(*mut IComponent, *mut [u8; 16]) -> i32,
   pub set_io_mode: unsafe extern "system" fn(*mut IComponent, i32) -> i32,
   pub get_bus_count: unsafe extern "system" fn(*mut IComponent, i32, i32) -> i32,
-  pub get_bus_info: unsafe extern "system" fn(*mut IComponent, i32, i32, i32,
-                                              *mut c_void) -> i32,
-  pub get_routing_info:
-    unsafe extern "system" fn(*mut IComponent, *mut c_void, *mut c_void) -> i32,
+  pub get_bus_info: unsafe extern "system" fn(*mut IComponent, i32, i32, i32, *mut c_void) -> i32,
+  pub get_routing_info: unsafe extern "system" fn(*mut IComponent, *mut c_void, *mut c_void) -> i32,
   pub activate_bus: unsafe extern "system" fn(*mut IComponent, i32, i32, i32, u8) -> i32,
   pub set_active: unsafe extern "system" fn(*mut IComponent, u8) -> i32,
   pub set_state: unsafe extern "system" fn(*mut IComponent, *mut c_void) -> i32,
@@ -411,7 +426,7 @@ impl IComponent {
   pub unsafe fn query_interface(&mut self, iid: &[u8; 16]) -> Option<*mut c_void> {
     let mut obj: *mut c_void = std::ptr::null_mut();
     if ((*self.vtable).query_interface)(self, iid.as_ptr(), &mut obj) == K_RESULT_OK
-       && !obj.is_null()
+      && !obj.is_null()
     {
       Some(obj)
     } else {
@@ -436,9 +451,7 @@ impl IComponent {
     }
   }
 
-  pub unsafe fn activate_bus(&mut self, media_type: i32, dir: i32, index: i32,
-                             state: bool)
-                             -> i32 {
+  pub unsafe fn activate_bus(&mut self, media_type: i32, dir: i32, index: i32, state: bool) -> i32 {
     ((*self.vtable).activate_bus)(self, media_type, dir, index, state as u8)
   }
 
@@ -467,11 +480,9 @@ pub struct IAudioProcessorVtbl {
     unsafe extern "system" fn(*mut IAudioProcessor, *mut u64, i32, *mut u64, i32) -> i32,
   pub get_bus_arrangement:
     unsafe extern "system" fn(*mut IAudioProcessor, i32, i32, *mut u64) -> i32,
-  pub can_process_sample_size:
-    unsafe extern "system" fn(*mut IAudioProcessor, i32) -> i32,
+  pub can_process_sample_size: unsafe extern "system" fn(*mut IAudioProcessor, i32) -> i32,
   pub get_latency_samples: unsafe extern "system" fn(*mut IAudioProcessor) -> u32,
-  pub setup_processing:
-    unsafe extern "system" fn(*mut IAudioProcessor, *const ProcessSetup) -> i32,
+  pub setup_processing: unsafe extern "system" fn(*mut IAudioProcessor, *const ProcessSetup) -> i32,
   pub set_processing: unsafe extern "system" fn(*mut IAudioProcessor, u8) -> i32,
   pub process: unsafe extern "system" fn(*mut IAudioProcessor, *mut ProcessData) -> i32,
   pub get_tail_samples: unsafe extern "system" fn(*mut IAudioProcessor) -> u32,
@@ -483,14 +494,14 @@ pub struct IAudioProcessor {
 }
 
 impl IAudioProcessor {
-  pub unsafe fn set_bus_arrangements(&mut self, inputs: &mut [u64],
-                                     outputs: &mut [u64])
-                                     -> i32 {
-    ((*self.vtable).set_bus_arrangements)(self,
-                                          inputs.as_mut_ptr(),
-                                          inputs.len() as i32,
-                                          outputs.as_mut_ptr(),
-                                          outputs.len() as i32)
+  pub unsafe fn set_bus_arrangements(&mut self, inputs: &mut [u64], outputs: &mut [u64]) -> i32 {
+    ((*self.vtable).set_bus_arrangements)(
+      self,
+      inputs.as_mut_ptr(),
+      inputs.len() as i32,
+      outputs.as_mut_ptr(),
+      outputs.len() as i32,
+    )
   }
 
   pub unsafe fn setup_processing(&mut self, setup: &ProcessSetup) -> i32 {
@@ -525,8 +536,7 @@ pub struct IEditControllerVtbl {
   pub initialize: unsafe extern "system" fn(*mut IEditController, *mut c_void) -> i32,
   pub terminate: unsafe extern "system" fn(*mut IEditController) -> i32,
   // IEditController
-  pub set_component_state:
-    unsafe extern "system" fn(*mut IEditController, *mut c_void) -> i32,
+  pub set_component_state: unsafe extern "system" fn(*mut IEditController, *mut c_void) -> i32,
   pub set_state: unsafe extern "system" fn(*mut IEditController, *mut c_void) -> i32,
   pub get_state: unsafe extern "system" fn(*mut IEditController, *mut c_void) -> i32,
   pub get_parameter_count: unsafe extern "system" fn(*mut IEditController) -> i32,
@@ -536,17 +546,12 @@ pub struct IEditControllerVtbl {
     unsafe extern "system" fn(*mut IEditController, u32, f64, *mut i16) -> i32,
   pub get_param_value_by_string:
     unsafe extern "system" fn(*mut IEditController, u32, *const i16, *mut f64) -> i32,
-  pub normalized_param_to_plain:
-    unsafe extern "system" fn(*mut IEditController, u32, f64) -> f64,
-  pub plain_param_to_normalized:
-    unsafe extern "system" fn(*mut IEditController, u32, f64) -> f64,
+  pub normalized_param_to_plain: unsafe extern "system" fn(*mut IEditController, u32, f64) -> f64,
+  pub plain_param_to_normalized: unsafe extern "system" fn(*mut IEditController, u32, f64) -> f64,
   pub get_param_normalized: unsafe extern "system" fn(*mut IEditController, u32) -> f64,
-  pub set_param_normalized:
-    unsafe extern "system" fn(*mut IEditController, u32, f64) -> i32,
-  pub set_component_handler:
-    unsafe extern "system" fn(*mut IEditController, *mut c_void) -> i32,
-  pub create_view:
-    unsafe extern "system" fn(*mut IEditController, *const i8) -> *mut IPlugView,
+  pub set_param_normalized: unsafe extern "system" fn(*mut IEditController, u32, f64) -> i32,
+  pub set_component_handler: unsafe extern "system" fn(*mut IEditController, *mut c_void) -> i32,
+  pub create_view: unsafe extern "system" fn(*mut IEditController, *const i8) -> *mut IPlugView,
 }
 
 #[repr(C)]
@@ -588,7 +593,11 @@ impl IEditController {
   pub unsafe fn create_view(&mut self) -> Option<*mut IPlugView> {
     let name = b"editor\0";
     let ptr = ((*self.vtable).create_view)(self, name.as_ptr() as *const i8);
-    if ptr.is_null() { None } else { Some(ptr) }
+    if ptr.is_null() {
+      None
+    } else {
+      Some(ptr)
+    }
   }
 
   pub unsafe fn release(&mut self) -> u32 {
@@ -608,8 +617,7 @@ pub struct IPlugViewVtbl {
   pub add_ref: unsafe extern "system" fn(*mut IPlugView) -> u32,
   pub release: unsafe extern "system" fn(*mut IPlugView) -> u32,
   // IPlugView
-  pub is_platform_type_supported:
-    unsafe extern "system" fn(*mut IPlugView, *const i8) -> i32,
+  pub is_platform_type_supported: unsafe extern "system" fn(*mut IPlugView, *const i8) -> i32,
   pub attached: unsafe extern "system" fn(*mut IPlugView, *mut c_void, *const i8) -> i32,
   pub removed: unsafe extern "system" fn(*mut IPlugView) -> i32,
   pub on_wheel: unsafe extern "system" fn(*mut IPlugView, f32) -> i32,

@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 
 use cpal::{
-  SampleFormat, Stream, StreamConfig,
   traits::{DeviceTrait, HostTrait, StreamTrait},
+  SampleFormat, Stream, StreamConfig,
 };
 use ringbuf::{
-  HeapProd, HeapRb,
   traits::{Consumer, Producer, Split},
+  HeapProd, HeapRb,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  AudioDevice,
   nodes::{AudioBuffer, NodeTrait},
   runtime::{Runtime, RuntimeState},
+  AudioDevice,
 };
 
 #[derive(Serialize, Deserialize)]

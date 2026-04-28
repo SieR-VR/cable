@@ -2,16 +2,15 @@ use std::collections::BTreeMap;
 
 use crate::runtime::{Runtime, RuntimeState};
 
+pub mod app_audio_capture;
 pub mod audio_input_device;
 pub mod audio_output_device;
+pub mod mixer;
+pub mod spectrum_analyzer;
 pub mod virtual_audio_input;
 pub mod virtual_audio_output;
-pub mod spectrum_analyzer;
-pub mod waveform_monitor;
-pub mod app_audio_capture;
-pub mod mixer;
 pub mod vst_node;
-pub(crate) mod vst3_com;
+pub mod waveform_monitor;
 
 /// Audio data buffer passed between nodes.
 ///
@@ -28,7 +27,12 @@ pub struct AudioBuffer {
 
 impl AudioBuffer {
   pub fn new(samples: Vec<f32>, channels: u16, sample_rate: u32, bits_per_sample: u16) -> Self {
-    Self { samples, channels, sample_rate, bits_per_sample }
+    Self {
+      samples,
+      channels,
+      sample_rate,
+      bits_per_sample,
+    }
   }
 
   /// Returns a silent buffer.

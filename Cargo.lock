@@ -389,7 +389,6 @@ dependencies = [
 name = "cable-tauri"
 version = "0.1.0"
 dependencies = [
- "common",
  "cpal",
  "hex",
  "libloading 0.8.9",
@@ -536,10 +535,6 @@ dependencies = [
  "bytes",
  "memchr",
 ]
-
-[[package]]
-name = "common"
-version = "0.1.0"
 
 [[package]]
 name = "concurrent-queue"

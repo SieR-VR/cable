@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -56,9 +56,7 @@ impl SpectrumAnalyzerNode {
   /// Compute Hann window coefficients for `size` samples.
   fn hann_window(size: usize) -> Vec<f32> {
     (0..size)
-      .map(|i| {
-        0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (size - 1) as f32).cos())
-      })
+      .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (size - 1) as f32).cos()))
       .collect()
   }
 
@@ -79,7 +77,10 @@ impl SpectrumAnalyzerNode {
     let mut buffer: Vec<Complex<f32>> = self.sample_accumulator[..self.fft_size]
       .iter()
       .enumerate()
-      .map(|(i, &s)| Complex { re: s * window[i], im: 0.0 })
+      .map(|(i, &s)| Complex {
+        re: s * window[i],
+        im: 0.0,
+      })
       .collect();
 
     fft.process(&mut buffer);
@@ -244,7 +245,10 @@ mod tests {
     node.compute_fft();
 
     let bins = node.spectrum_out.as_ref().unwrap().lock().unwrap().clone();
-    assert!(bins.iter().all(|&b| b >= 0.0), "All magnitude bins must be non-negative");
+    assert!(
+      bins.iter().all(|&b| b >= 0.0),
+      "All magnitude bins must be non-negative"
+    );
   }
 
   #[test]
@@ -259,7 +263,10 @@ mod tests {
     // No compute_fft call since we don't reach fft_size yet.
     // (The loop in process() wouldn't trigger either.)
     let bins = node.spectrum_out.as_ref().unwrap().lock().unwrap().clone();
-    assert!(bins.is_empty(), "Spectrum should not be updated before fft_size samples accumulate");
+    assert!(
+      bins.is_empty(),
+      "Spectrum should not be updated before fft_size samples accumulate"
+    );
   }
 
   #[test]
