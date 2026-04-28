@@ -7,3 +7,7 @@
 
 node_modules
 package-lock.json
+
+*storybook.log
+storybook-static
+storybook-shots*/

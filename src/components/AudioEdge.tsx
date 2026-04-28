@@ -93,6 +93,54 @@ function perpOffset(pos: Position, d: number): { dx: number; dy: number } {
   }
 }
 
+/** Parse "M sx,sy C cx1,cy1 cx2,cy2 tx,ty" into the four control points. */
+function parseBezier(
+  path: string,
+): { sx: number; sy: number; cx1: number; cy1: number; cx2: number; cy2: number; tx: number; ty: number } | null {
+  const m = /M\s*([-\d.]+)[, ]([-\d.]+)\s*C\s*([-\d.]+)[, ]([-\d.]+)\s+([-\d.]+)[, ]([-\d.]+)\s+([-\d.]+)[, ]([-\d.]+)/.exec(
+    path,
+  );
+  if (!m) return null;
+  const [, sx, sy, cx1, cy1, cx2, cy2, tx, ty] = m;
+  return {
+    sx: +sx, sy: +sy,
+    cx1: +cx1, cy1: +cy1,
+    cx2: +cx2, cy2: +cy2,
+    tx: +tx, ty: +ty,
+  };
+}
+
+/**
+ * Build a polyline path that follows the cubic bezier defined by
+ * (sx, sy) - (cx1, cy1) - (cx2, cy2) - (tx, ty), but displaced by `offset`
+ * pixels along the curve's normal at each sample point. This produces strands
+ * that stay evenly spaced even when the edge curves sharply (e.g. when
+ * vertically-arranged nodes connect via Left/Right handles).
+ */
+function offsetBezierPolyline(
+  ctrl: { sx: number; sy: number; cx1: number; cy1: number; cx2: number; cy2: number; tx: number; ty: number },
+  offset: number,
+  samples = 48,
+): string {
+  const { sx, sy, cx1, cy1, cx2, cy2, tx, ty } = ctrl;
+  let d = "";
+  for (let i = 0; i <= samples; i++) {
+    const t = i / samples;
+    const u = 1 - t;
+    const x = u * u * u * sx + 3 * u * u * t * cx1 + 3 * u * t * t * cx2 + t * t * t * tx;
+    const y = u * u * u * sy + 3 * u * u * t * cy1 + 3 * u * t * t * cy2 + t * t * t * ty;
+    const dx = 3 * u * u * (cx1 - sx) + 6 * u * t * (cx2 - cx1) + 3 * t * t * (tx - cx2);
+    const dy = 3 * u * u * (cy1 - sy) + 6 * u * t * (cy2 - cy1) + 3 * t * t * (ty - cy2);
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const px = x + nx * offset;
+    const py = y + ny * offset;
+    d += i === 0 ? `M ${px},${py}` : ` L ${px},${py}`;
+  }
+  return d;
+}
+
 function bezierAtOffset(
   sourceX: number,
   sourceY: number,
@@ -102,17 +150,31 @@ function bezierAtOffset(
   targetPosition: Position,
   d: number,
 ): string {
-  const so = perpOffset(sourcePosition, d);
-  const to = perpOffset(targetPosition, d);
   const [path] = getBezierPath({
-    sourceX: sourceX + so.dx,
-    sourceY: sourceY + so.dy,
-    targetX: targetX + to.dx,
-    targetY: targetY + to.dy,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
     sourcePosition,
     targetPosition,
   });
-  return path;
+  if (d === 0) return path;
+  const ctrl = parseBezier(path);
+  if (!ctrl) {
+    // Fallback to endpoint translation if parsing fails.
+    const so = perpOffset(sourcePosition, d);
+    const to = perpOffset(targetPosition, d);
+    const [translated] = getBezierPath({
+      sourceX: sourceX + so.dx,
+      sourceY: sourceY + so.dy,
+      targetX: targetX + to.dx,
+      targetY: targetY + to.dy,
+      sourcePosition,
+      targetPosition,
+    });
+    return translated;
+  }
+  return offsetBezierPolyline(ctrl, d);
 }
 
 // ---------------------------------------------------------------------------
