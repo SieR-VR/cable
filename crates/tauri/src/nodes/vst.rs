@@ -1224,8 +1224,43 @@ unsafe fn open_editor_once(
     };
     println!("VST3 editor thread: createView OK, creating Win32 window");
 
-    let w = 800_i32;
-    let h = 600_i32;
+    // Query the plugin's preferred size before creating the window so the client
+    // area matches exactly when attached() runs. Fall back to 800×600 if getSize
+    // is unavailable (e.g., before attached() some plugins return zeroes).
+    let (initial_client_w, initial_client_h) = unsafe {
+      let v = &mut *view_ptr;
+      match v.get_size() {
+        Some(r) if r.width() > 0 && r.height() > 0 => {
+          let w = r.width() as i32;
+          let h = r.height() as i32;
+          println!("VST3 editor thread: pre-attach getSize = {w}x{h}");
+          (w, h)
+        }
+        _ => (800_i32, 600_i32),
+      }
+    };
+
+    // Convert client area to window size so the plugin has exactly the right
+    // client area when attached() is called with our HWND.
+    let (w, h) = unsafe {
+      use windows::Win32::Foundation::RECT;
+      use windows::Win32::UI::WindowsAndMessaging::{
+        AdjustWindowRectEx, WINDOW_EX_STYLE, WS_CAPTION, WS_SYSMENU,
+      };
+      let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: initial_client_w,
+        bottom: initial_client_h,
+      };
+      let _ = AdjustWindowRectEx(
+        &mut rect,
+        WS_CAPTION | WS_SYSMENU,
+        false,
+        WINDOW_EX_STYLE(0),
+      );
+      (rect.right - rect.left, rect.bottom - rect.top)
+    };
 
     let hinstance = GetModuleHandleW(None).unwrap_or_default();
     let class_name: Vec<u16> = format!("VstEditor_{node_id}")
@@ -1424,10 +1459,19 @@ unsafe extern "system" fn vst_editor_wnd_proc(
               window_h,
               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
+            // Notify the plugin of the final client size so it can re-render.
+            // This is necessary when the plugin renders at creation time (before
+            // the window was resized) or when resizeView() was not called.
+            let new_rect = vst3_com::ViewRect {
+              left: 0,
+              top: 0,
+              right: client_w,
+              bottom: client_h,
+            };
+            view.on_size(&new_rect);
           }
           let _ = ShowWindow(hwnd, SW_SHOW);
-          // Force an immediate repaint so the plugin UI appears without requiring
-          // user interaction.
+          // Force an immediate repaint.
           let _ = InvalidateRect(Some(hwnd), None, false);
           let _ = UpdateWindow(hwnd);
         }
