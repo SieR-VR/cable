@@ -822,8 +822,7 @@ pub(crate) fn plugin_command(data: serde_json::Value) -> Result<serde_json::Valu
 const WM_VST_PARAM: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1;
 
 // WM_USER + 2 — WndProc spawns a helper thread that calls IPlugView::attached()
-// while the message loop keeps pumping. JUCE's MessageManager dispatch runs on
-// the editor STA thread, so attached() must NOT block the message loop.
+// while the message loop keeps pumping.
 #[cfg(windows)]
 const WM_VST_ATTACH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 2;
 
@@ -831,6 +830,12 @@ const WM_VST_ATTACH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 2;
 // WndProc re-queries the plugin size, resizes the window, and shows it.
 #[cfg(windows)]
 const WM_VST_AFTER_ATTACH: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 3;
+
+// WM_USER + 4 — IPlugFrame::resizeView() posts this to request a window resize
+// from the editor thread (safe to call SetWindowPos on the owning thread).
+// WPARAM = desired client width (i32 as usize), LPARAM = desired client height.
+#[cfg(windows)]
+const WM_VST_RESIZE_VIEW: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 4;
 
 /// VST3 editor window handle (Windows-only).
 #[cfg(windows)]
@@ -862,6 +867,9 @@ impl std::fmt::Debug for VstEditorHandle {
 struct EditorWindowState {
   plug_view: *mut vst3_com::IPlugView,
   controller: *mut vst3_com::IEditController,
+  /// Host-side IPlugFrame implementation allocated on the heap.
+  /// Released when the window closes (WM_CLOSE).
+  plug_frame: *mut HostPlugFrame,
   /// Single-component plugins: the IComponent that backs the controller (same object, extra ref).
   /// WM_CLOSE must NOT call terminate() on the controller when this is Some.
   component_holder: Option<*mut vst3_com::IComponent>,
@@ -1259,9 +1267,14 @@ unsafe fn open_editor_once(
 
     println!("VST3 editor thread: CreateWindowExW ok, hwnd={:?}", hwnd);
 
+    // Allocate a HostPlugFrame so plugins can call resizeView() during attached().
+    let frame = HostPlugFrame::new(hwnd);
+    let frame_ptr = Box::into_raw(frame) as *mut HostPlugFrame;
+
     let state = Box::new(EditorWindowState {
       plug_view: view_ptr,
       controller: ctrl_ptr,
+      plug_frame: frame_ptr,
       component_holder,
       separated_comp,
       comp_cp,
@@ -1319,26 +1332,22 @@ unsafe extern "system" fn vst_editor_wnd_proc(
   match msg {
     WM_VST_ATTACH => {
       println!("VST3 WndProc: WM_VST_ATTACH received, user_data={user_data:#x}");
-      // Spawn a helper thread to call IPlugView::attached() so the GetMessageW
-      // loop on THIS thread remains pumping.
+      // Call setFrame() then spawn a helper thread to call IPlugView::attached().
       //
-      // Why: IComponent::initialize() ran on this thread (the editor thread) in
-      // Phase 1, so JUCE MessageManager treats this thread as its "message thread".
-      // JUCE's attached() internally calls callFunctionOnMessageThread, which posts
-      // a message to this thread's message queue and waits for a reply.
+      // setFrame must be called before attached() per VST3 spec. Doing it here
+      // (on the editor thread, before spawning) keeps the frame valid for the
+      // entire lifetime of the window.
       //
-      // If we called attached() directly here inside WndProc, GetMessageW would be
-      // blocked by the still-executing WndProc call and could never dispatch the
-      // posted JUCE message → deadlock.
-      //
-      // By spawning a helper thread, the WndProc returns immediately, GetMessageW
-      // continues pumping, and JUCE's internal PostMessage is processed normally.
+      // attached() is dispatched from a helper thread so the GetMessageW loop
+      // on THIS thread keeps pumping while JUCE's MessageManager sends internal
+      // PostMessage callbacks back to this thread (deadlock prevention).
       if user_data != 0 {
         let state = &*(user_data as *const EditorWindowState);
         if !state.plug_view.is_null() {
-          // Cast raw pointers to usize to cross the Send boundary.
-          // Safety: the editor thread (GetMessageW loop) keeps the window and
-          // EditorWindowState alive for the duration of this helper thread.
+          // Call setFrame on the editor thread before spawning attached().
+          if !state.plug_frame.is_null() {
+            (*state.plug_view).set_frame(state.plug_frame as *mut _);
+          }
           let view_addr = state.plug_view as usize;
           let hwnd_isize = hwnd.0 as isize;
           std::thread::spawn(move || unsafe {
@@ -1363,30 +1372,92 @@ unsafe extern "system" fn vst_editor_wnd_proc(
     }
     WM_VST_AFTER_ATTACH => {
       // attached() finished on the helper thread. Re-query the real plugin size,
-      // resize the container window, and make it visible.
+      // convert client size to window size (AdjustWindowRectEx), resize the
+      // container window, and make it visible.
       if user_data != 0 {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
         use windows::Win32::UI::WindowsAndMessaging::{
-          SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW,
+          AdjustWindowRectEx, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+          SW_SHOW, WINDOW_EX_STYLE, WS_CAPTION, WS_SYSMENU,
         };
         let state = &mut *(user_data as *mut EditorWindowState);
         if !state.plug_view.is_null() {
           let view = &mut *state.plug_view;
           if let Some(r) = view.get_size() {
-            let nw = r.width().max(200) as i32;
-            let nh = r.height().max(100) as i32;
-            println!("VST3 WndProc: post-attach size = {nw}x{nh}");
+            let client_w = r.width().max(200) as i32;
+            let client_h = r.height().max(100) as i32;
+            println!("VST3 WndProc: post-attach content size = {client_w}x{client_h}");
+            // getSize() returns client area dimensions; inflate to window size.
+            let mut rect = RECT {
+              left: 0,
+              top: 0,
+              right: client_w,
+              bottom: client_h,
+            };
+            let _ = AdjustWindowRectEx(
+              &mut rect,
+              WS_CAPTION | WS_SYSMENU,
+              false,
+              WINDOW_EX_STYLE(0),
+            );
+            let window_w = rect.right - rect.left;
+            let window_h = rect.bottom - rect.top;
+            println!("VST3 WndProc: adjusted window size = {window_w}x{window_h}");
             let _ = SetWindowPos(
               hwnd,
               None,
               0,
               0,
-              nw,
-              nh,
+              window_w,
+              window_h,
               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
             );
           }
           let _ = ShowWindow(hwnd, SW_SHOW);
+          // Force an immediate repaint so the plugin UI appears without requiring
+          // user interaction.
+          let _ = InvalidateRect(Some(hwnd), None, false);
+          let _ = UpdateWindow(hwnd);
         }
+      }
+      LRESULT(0)
+    }
+    WM_VST_RESIZE_VIEW => {
+      // IPlugFrame::resizeView() was called by the plugin — resize the window to
+      // match the requested client area. Only valid after attached().
+      let client_w = wparam.0 as i32;
+      let client_h = lparam.0 as i32;
+      if client_w > 0 && client_h > 0 {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow};
+        use windows::Win32::UI::WindowsAndMessaging::{
+          AdjustWindowRectEx, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+          WINDOW_EX_STYLE, WS_CAPTION, WS_SYSMENU,
+        };
+        let mut rect = RECT {
+          left: 0,
+          top: 0,
+          right: client_w,
+          bottom: client_h,
+        };
+        let _ = AdjustWindowRectEx(
+          &mut rect,
+          WS_CAPTION | WS_SYSMENU,
+          false,
+          WINDOW_EX_STYLE(0),
+        );
+        let _ = SetWindowPos(
+          hwnd,
+          None,
+          0,
+          0,
+          rect.right - rect.left,
+          rect.bottom - rect.top,
+          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        let _ = InvalidateRect(Some(hwnd), None, false);
+        let _ = UpdateWindow(hwnd);
       }
       LRESULT(0)
     }
@@ -1394,9 +1465,17 @@ unsafe extern "system" fn vst_editor_wnd_proc(
       if user_data != 0 {
         let state = &mut *(user_data as *mut EditorWindowState);
         if !state.plug_view.is_null() {
+          // Clear the frame reference before removing the view.
+          (*state.plug_view).set_frame(std::ptr::null_mut());
           (*state.plug_view).removed();
           (*state.plug_view).release();
           state.plug_view = std::ptr::null_mut();
+        }
+        // Release the HostPlugFrame after the view no longer holds a reference to it.
+        if !state.plug_frame.is_null() {
+          let frame = &mut *(state.plug_frame as *mut vst3_com::IPlugFrame);
+          frame.release();
+          state.plug_frame = std::ptr::null_mut();
         }
         if !state.controller.is_null() {
           // Disconnect IConnectionPoint before releasing (separated model).
@@ -1466,5 +1545,124 @@ unsafe extern "system" fn vst_editor_wnd_proc(
       LRESULT(0)
     }
     _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// HostPlugFrame — IPlugFrame implementation
+//
+// The host allocates one HostPlugFrame per editor window. The plugin calls
+// resizeView() to request the host to resize the window; the host posts
+// WM_VST_RESIZE_VIEW so that SetWindowPos is called on the owning thread.
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+#[repr(C)]
+pub(crate) struct HostPlugFrame {
+  /// Must be first field: the COM vtable pointer.
+  vtable: *const vst3_com::IPlugFrameVtbl,
+  /// HWND of the editor window, stored as isize so the struct is Send.
+  hwnd: isize,
+  ref_count: std::sync::atomic::AtomicU32,
+}
+
+#[cfg(windows)]
+unsafe impl Send for HostPlugFrame {}
+#[cfg(windows)]
+unsafe impl Sync for HostPlugFrame {}
+
+#[cfg(windows)]
+static HOST_PLUG_FRAME_VTBL: vst3_com::IPlugFrameVtbl = vst3_com::IPlugFrameVtbl {
+  query_interface: host_plug_frame_query_interface,
+  add_ref: host_plug_frame_add_ref,
+  release: host_plug_frame_release,
+  resize_view: host_plug_frame_resize_view,
+};
+
+#[cfg(windows)]
+unsafe extern "system" fn host_plug_frame_query_interface(
+  this: *mut vst3_com::IPlugFrame,
+  iid: *const u8,
+  out: *mut *mut std::ffi::c_void,
+) -> i32 {
+  use std::slice;
+  let iid_bytes = slice::from_raw_parts(iid, 16);
+  if iid_bytes == vst3_com::IID_IPLUG_FRAME || iid_bytes == vst3_com::IID_FUNKNOWN {
+    host_plug_frame_add_ref(this);
+    *out = this as *mut _;
+    vst3_com::K_RESULT_OK
+  } else {
+    *out = std::ptr::null_mut();
+    vst3_com::K_NO_INTERFACE
+  }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn host_plug_frame_add_ref(this: *mut vst3_com::IPlugFrame) -> u32 {
+  let frame = &*(this as *const HostPlugFrame);
+  frame
+    .ref_count
+    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    + 1
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn host_plug_frame_release(this: *mut vst3_com::IPlugFrame) -> u32 {
+  let frame = &*(this as *const HostPlugFrame);
+  let prev = frame
+    .ref_count
+    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+  if prev == 1 {
+    // Reconstruct the Box to drop it.
+    drop(Box::from_raw(this as *mut HostPlugFrame));
+    0
+  } else {
+    prev - 1
+  }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn host_plug_frame_resize_view(
+  this: *mut vst3_com::IPlugFrame,
+  view: *mut vst3_com::IPlugView,
+  new_rect: *const vst3_com::ViewRect,
+) -> i32 {
+  use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+  use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+
+  let frame = &*(this as *const HostPlugFrame);
+  let hwnd = HWND(frame.hwnd as *mut _);
+  if hwnd.0.is_null() || new_rect.is_null() {
+    return vst3_com::K_INVALID_ARGUMENT;
+  }
+  let r = &*new_rect;
+  let w = r.width().max(1) as usize;
+  let h = r.height().max(1) as usize;
+  println!("IPlugFrame::resizeView requested {w}x{h}");
+
+  // Notify the view that the size was accepted before posting the resize,
+  // so the plugin doesn't retry.
+  if !view.is_null() {
+    (*view).on_size(new_rect);
+  }
+
+  // Hand off to the editor thread (owner of the HWND) to call SetWindowPos.
+  let _ = PostMessageW(
+    Some(hwnd),
+    WM_VST_RESIZE_VIEW,
+    WPARAM(w),
+    LPARAM(h as isize),
+  );
+  vst3_com::K_RESULT_OK
+}
+
+#[cfg(windows)]
+impl HostPlugFrame {
+  pub fn new(hwnd: windows::Win32::Foundation::HWND) -> Box<Self> {
+    Box::new(HostPlugFrame {
+      vtable: &HOST_PLUG_FRAME_VTBL,
+      hwnd: hwnd.0 as isize,
+      ref_count: std::sync::atomic::AtomicU32::new(1),
+    })
   }
 }

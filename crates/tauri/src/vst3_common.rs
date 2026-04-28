@@ -17,6 +17,7 @@ use std::ffi::c_void;
 pub const K_RESULT_OK: i32 = 0;
 pub const K_NOT_IMPLEMENTED: i32 = 0x80004001u32 as i32;
 pub const K_NO_INTERFACE: i32 = 0x80004002u32 as i32;
+pub const K_INVALID_ARGUMENT: i32 = 0x80070057u32 as i32;
 pub const K_RESULT_FALSE: i32 = 1;
 
 // ---------------------------------------------------------------------------
@@ -88,6 +89,10 @@ pub const IID_IPLUG_VIEW: [u8; 16] = vst3_iid(0x5BC32507, 0xD060049E, 0xA6151B52
 // IConnectionPoint : DECLARE_CLASS_IID(IConnectionPoint, 0x70A4156F, 0x6E6E4026, 0x989148BF, 0xAA60D8D1)
 pub const IID_ICONNECTION_POINT: [u8; 16] =
   vst3_iid(0x70A4156F, 0x6E6E4026, 0x989148BF, 0xAA60D8D1);
+// IPlugFrame : DECLARE_CLASS_IID(IPlugFrame, 0x367FAF01, 0xAFA96726, 0x98EA71E4, 0x8AC5B0E7)
+pub const IID_IPLUG_FRAME: [u8; 16] = vst3_iid(0x367FAF01, 0xAFA96726, 0x98EA71E4, 0x8AC5B0E7);
+// FUnknown : DECLARE_CLASS_IID(FUnknown, 0x00000000, 0x00000000, 0xC0000000, 0x00000046)
+pub const IID_FUNKNOWN: [u8; 16] = vst3_iid(0x00000000, 0x00000000, 0xC0000000, 0x00000046);
 
 // ---------------------------------------------------------------------------
 // Common data structures
@@ -676,6 +681,45 @@ impl IPlugView {
     }
   }
 
+  pub unsafe fn on_size(&mut self, new_size: *const ViewRect) -> i32 {
+    ((*self.vtable).on_size)(self, new_size)
+  }
+
+  pub unsafe fn set_frame(&mut self, frame: *mut c_void) -> i32 {
+    ((*self.vtable).set_frame)(self, frame)
+  }
+
+  pub unsafe fn release(&mut self) -> u32 {
+    ((*self.vtable).release)(self)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IPlugFrame vtable
+//
+// Hosts implement IPlugFrame and call IPlugView::setFrame(frame) before
+// calling attached(). Plugins (JUCE in particular) use resizeView() to
+// request a host window resize during and after initialization.
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+pub struct IPlugFrameVtbl {
+  // FUnknown
+  pub query_interface:
+    unsafe extern "system" fn(*mut IPlugFrame, *const u8, *mut *mut c_void) -> i32,
+  pub add_ref: unsafe extern "system" fn(*mut IPlugFrame) -> u32,
+  pub release: unsafe extern "system" fn(*mut IPlugFrame) -> u32,
+  // IPlugFrame
+  pub resize_view:
+    unsafe extern "system" fn(*mut IPlugFrame, *mut IPlugView, *const ViewRect) -> i32,
+}
+
+#[repr(C)]
+pub struct IPlugFrame {
+  pub vtable: *const IPlugFrameVtbl,
+}
+
+impl IPlugFrame {
   pub unsafe fn release(&mut self) -> u32 {
     ((*self.vtable).release)(self)
   }
