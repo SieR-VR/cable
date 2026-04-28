@@ -66,4 +66,10 @@ export const NODE_ACCENTS = {
   virtualAudioOutput: "#14b8a6", // teal-500
   waveformMonitor: "#10b981", // emerald-500
   vst: "#8b5cf6", // violet-500
+  gain: "#f59e0b", // amber-400
+  channelSplit: "#06b6d4", // cyan-500
+  delay: "#38bdf8", // sky-400
+  compressor: "#fb7185", // rose-400
+  reverb: "#22d3ee", // cyan-400
+  echo: "#a78bfa", // violet-400
 } as const;

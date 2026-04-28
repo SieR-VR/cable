@@ -4,7 +4,13 @@ import { NodeDefinition } from "./node-definition";
 import appAudioCaptureDef from "./nodes/AppAudioCapture";
 import audioInputDeviceDef from "./nodes/AudioInputDevice";
 import audioOutputDeviceDef from "./nodes/AudioOutputDevice";
+import channelSplitDef from "./nodes/ChannelSplit";
+import compressorDef from "./nodes/Compressor";
+import delayDef from "./nodes/Delay";
+import echoDef from "./nodes/Echo";
+import gainDef from "./nodes/Gain";
 import mixerDef from "./nodes/Mixer";
+import reverbDef from "./nodes/Reverb";
 import spectrumAnalyzerDef from "./nodes/SpectrumAnalyzer";
 import virtualAudioInputDef from "./nodes/VirtualAudioInput";
 import virtualAudioOutputDef from "./nodes/VirtualAudioOutput";
@@ -62,6 +68,12 @@ const nodeDefs = {
   waveformMonitor: waveformMonitorDef,
   appAudioCapture: appAudioCaptureDef,
   mixer: mixerDef,
+  gain: gainDef,
+  channelSplit: channelSplitDef,
+  delay: delayDef,
+  compressor: compressorDef,
+  reverb: reverbDef,
+  echo: echoDef,
   vst: vstNodeDef,
 };
 
@@ -102,6 +114,7 @@ export function serializeEdge(edge: EdgeType): AudioEdge {
   return {
     id: edge.id,
     from: edge.source,
+    fromHandle: edge.sourceHandle ?? undefined,
     to: edge.target,
     toHandle: edge.targetHandle ?? undefined,
     frequency: edge.data?.frequency,
@@ -134,6 +147,8 @@ export type AudioNode = {
 export type AudioEdge = {
   id: string;
   from: string;
+  /** Source handle ID (e.g. "ch-0", "ch-1" for ChannelSplit node) */
+  fromHandle?: string;
   to: string;
   /** Target handle ID (e.g. "input-a", "input-b" for Mixer node) */
   toHandle?: string;

@@ -10,7 +10,13 @@ use tauri::State;
 use crate::nodes::app_audio_capture::AppAudioCaptureNode;
 use crate::nodes::audio_input_device::AudioInputDeviceNode;
 use crate::nodes::audio_output_device::AudioOutputDeviceNode;
+use crate::nodes::channel_split::ChannelSplitNode;
+use crate::nodes::compressor::CompressorNode;
+use crate::nodes::delay::DelayNode;
+use crate::nodes::echo::EchoNode;
+use crate::nodes::gain::GainNode;
 use crate::nodes::mixer::MixerNode;
+use crate::nodes::reverb::ReverbNode;
 use crate::nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use crate::nodes::virtual_audio_input::VirtualAudioInputNode;
 use crate::nodes::virtual_audio_output::VirtualAudioOutputNode;
@@ -37,6 +43,12 @@ pub(crate) enum AudioNode {
   WaveformMonitor(WaveformMonitorNode),
   AppAudioCapture(AppAudioCaptureNode),
   Mixer(MixerNode),
+  Gain(GainNode),
+  ChannelSplit(ChannelSplitNode),
+  Delay(DelayNode),
+  Compressor(CompressorNode),
+  Reverb(ReverbNode),
+  Echo(EchoNode),
   Vst(VstNode),
 }
 
@@ -51,6 +63,12 @@ impl AudioNode {
       AudioNode::WaveformMonitor(n) => n.id(),
       AudioNode::AppAudioCapture(n) => n.id(),
       AudioNode::Mixer(n) => n.id(),
+      AudioNode::Gain(n) => n.id(),
+      AudioNode::ChannelSplit(n) => n.id(),
+      AudioNode::Delay(n) => n.id(),
+      AudioNode::Compressor(n) => n.id(),
+      AudioNode::Reverb(n) => n.id(),
+      AudioNode::Echo(n) => n.id(),
       AudioNode::Vst(n) => n.id(),
     }
   }
@@ -65,6 +83,12 @@ impl AudioNode {
       AudioNode::WaveformMonitor(n) => n.command(data),
       AudioNode::AppAudioCapture(n) => n.command(data),
       AudioNode::Mixer(n) => n.command(data),
+      AudioNode::Gain(n) => n.command(data),
+      AudioNode::ChannelSplit(n) => n.command(data),
+      AudioNode::Delay(n) => n.command(data),
+      AudioNode::Compressor(n) => n.command(data),
+      AudioNode::Reverb(n) => n.command(data),
+      AudioNode::Echo(n) => n.command(data),
       AudioNode::Vst(n) => n.command(data),
     }
   }
@@ -79,6 +103,12 @@ impl AudioNode {
       AudioNode::WaveformMonitor(n) => n.init(runtime),
       AudioNode::AppAudioCapture(n) => n.init(runtime),
       AudioNode::Mixer(n) => n.init(runtime),
+      AudioNode::Gain(n) => n.init(runtime),
+      AudioNode::ChannelSplit(n) => n.init(runtime),
+      AudioNode::Delay(n) => n.init(runtime),
+      AudioNode::Compressor(n) => n.init(runtime),
+      AudioNode::Reverb(n) => n.init(runtime),
+      AudioNode::Echo(n) => n.init(runtime),
       AudioNode::Vst(n) => n.init(runtime),
     }
   }
@@ -93,6 +123,12 @@ impl AudioNode {
       AudioNode::WaveformMonitor(n) => n.dispose(runtime),
       AudioNode::AppAudioCapture(n) => n.dispose(runtime),
       AudioNode::Mixer(n) => n.dispose(runtime),
+      AudioNode::Gain(n) => n.dispose(runtime),
+      AudioNode::ChannelSplit(n) => n.dispose(runtime),
+      AudioNode::Delay(n) => n.dispose(runtime),
+      AudioNode::Compressor(n) => n.dispose(runtime),
+      AudioNode::Reverb(n) => n.dispose(runtime),
+      AudioNode::Echo(n) => n.dispose(runtime),
       AudioNode::Vst(n) => n.dispose(runtime),
     }
   }
@@ -111,6 +147,12 @@ impl AudioNode {
       AudioNode::WaveformMonitor(n) => n.process(runtime, state),
       AudioNode::AppAudioCapture(n) => n.process(runtime, state),
       AudioNode::Mixer(n) => n.process(runtime, state),
+      AudioNode::Gain(n) => n.process(runtime, state),
+      AudioNode::ChannelSplit(n) => n.process(runtime, state),
+      AudioNode::Delay(n) => n.process(runtime, state),
+      AudioNode::Compressor(n) => n.process(runtime, state),
+      AudioNode::Reverb(n) => n.process(runtime, state),
+      AudioNode::Echo(n) => n.process(runtime, state),
       AudioNode::Vst(n) => n.process(runtime, state),
     }
   }
@@ -121,6 +163,7 @@ impl AudioNode {
 pub(crate) struct AudioEdge {
   pub id: String,
   pub from: String,
+  pub from_handle: Option<String>,
   pub to: String,
   pub to_handle: Option<String>,
   pub frequency: Option<u32>,
