@@ -1253,7 +1253,10 @@ unsafe fn open_editor_once(
       windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
       windows::core::PCWSTR(class_name.as_ptr()),
       windows::core::PCWSTR(window_title.as_ptr()),
-      WS_CAPTION | WS_SYSMENU,
+      // WS_CLIPCHILDREN: prevents the host window from painting over the plugin's
+      // child window area during WM_PAINT, which causes the blank white screen seen
+      // with non-JUCE plugins.
+      WS_CAPTION | WS_SYSMENU | windows::Win32::UI::WindowsAndMessaging::WS_CLIPCHILDREN,
       windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
       windows::Win32::UI::WindowsAndMessaging::CW_USEDEFAULT,
       w,
@@ -1347,6 +1350,14 @@ unsafe extern "system" fn vst_editor_wnd_proc(
           // Call setFrame on the editor thread before spawning attached().
           if !state.plug_frame.is_null() {
             (*state.plug_view).set_frame(state.plug_frame as *mut _);
+          }
+          // Show the window before calling attached() so non-JUCE plugins that
+          // render synchronously inside attached() have a visible parent to paint
+          // into. For JUCE plugins this is harmless (JUCE defers rendering).
+          {
+            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
+            // SW_SHOWNA: show without stealing focus or changing activation
+            let _ = ShowWindow(hwnd, SW_SHOWNA);
           }
           let view_addr = state.plug_view as usize;
           let hwnd_isize = hwnd.0 as isize;
