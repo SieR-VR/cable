@@ -358,7 +358,11 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   loadGraph: (nodes: NodeType[], edges: EdgeType[]) => set({ nodes, edges }),
 
   scanVstPlugins: async () => {
-    const plugins = await invoke("scan_vst3_plugins");
+    const plugins = (await invoke("node_command", {
+      nodeType: "vst",
+      nodeId: "",
+      data: { op: "scan" },
+    })) as VstPluginInfo[];
     set({ vstPluginList: plugins });
   },
 

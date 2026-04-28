@@ -34,7 +34,11 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
   }
 
   async function handleOpenEditor() {
-    await invoke("open_vst_editor", { nodeId: id, pluginPath: data.pluginPath });
+    await invoke("node_command", {
+      nodeType: "vst",
+      nodeId: id,
+      data: { op: "openEditor", pluginPath: data.pluginPath },
+    });
   }
 
   const inputHandles = Array.from({ length: data.numInputs }, (_, i) => `vst-in-${i}`);

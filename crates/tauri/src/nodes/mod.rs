@@ -64,4 +64,10 @@ pub(crate) trait NodeTrait {
     runtime: &Runtime,
     state: &RuntimeState,
   ) -> Result<BTreeMap<String, AudioBuffer>, String>;
+
+  /// Optional unified IPC entry point. Default returns Err.
+  /// Nodes that expose subcommands implement this and dispatch on `data["op"]`.
+  fn command(&mut self, _data: serde_json::Value) -> Result<serde_json::Value, String> {
+    Err("command not supported by this node".into())
+  }
 }
