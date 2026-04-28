@@ -106,6 +106,9 @@ pub(crate) struct VstNode {
   /// `load_plugin`. Read by `openEditor` to instantiate the editor.
   #[serde(skip)]
   ctrl_cid: Option<[u8; 16]>,
+  /// Audio Module Class CID, stored during load_plugin for the editor thread.
+  #[serde(skip)]
+  audio_cid: Option<[u8; 16]>,
   /// Latest parameter snapshot. Written by the editor thread and by
   /// `setParam`; read by `getParams`.
   #[serde(skip)]
@@ -236,6 +239,7 @@ impl VstNode {
       }
     }
     let audio_cid = audio_cid.ok_or_else(|| "Audio Module Class not found.".to_string())?;
+    self.audio_cid = Some(audio_cid);
 
     // Create IComponent
     let comp_ptr = factory
@@ -643,9 +647,10 @@ impl VstNode {
     // thread will exit on its own once Win32 cleanup finishes.
     self.editor = None;
 
-    let ctrl_cid = self
-      .ctrl_cid
-      .ok_or_else(|| "ctrl_cid not found. Please press Apply first.".to_string())?;
+    let ctrl_cid = self.ctrl_cid;
+    let audio_cid = self
+      .audio_cid
+      .ok_or_else(|| "audio_cid not found. Please press Apply first.".to_string())?;
 
     let hwnd_arc = Arc::new(std::sync::atomic::AtomicIsize::new(0));
     let params_arc = self.param_buffer.clone();
@@ -660,6 +665,7 @@ impl VstNode {
         plugin_path,
         node_id_clone,
         ctrl_cid,
+        audio_cid,
         hwnd_clone,
         param_rx,
         params_clone,
@@ -747,6 +753,10 @@ impl std::fmt::Debug for VstEditorHandle {
 struct EditorWindowState {
   plug_view: *mut vst3_com::IPlugView,
   controller: *mut vst3_com::IEditController,
+  /// For single-component plugins: the IComponent that was created to back the controller.
+  /// When Some, the WM_CLOSE handler must terminate/release the component (not the controller)
+  /// to avoid calling terminate() twice on the same object.
+  component_holder: Option<*mut vst3_com::IComponent>,
   param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
   _lib: libloading::Library,
@@ -755,17 +765,23 @@ struct EditorWindowState {
 /// VST3 editor thread entry point (Windows-only).
 ///
 /// Load DLL → create IEditController → create IPlugView → create Win32 window → message loop.
+///
+/// Supports two VST3 architectures:
+/// - Separated: IComponent and IEditController are distinct factory classes.
+/// - Single-component: one object implements both; IEditController is obtained via
+///   IComponent::queryInterface rather than a separate factory creation.
 #[cfg(windows)]
 pub(crate) fn run_vst_editor_thread(
   plugin_path: String,
   node_id: String,
-  ctrl_cid: [u8; 16],
+  ctrl_cid: Option<[u8; 16]>,
+  audio_cid: [u8; 16],
   hwnd_out: Arc<std::sync::atomic::AtomicIsize>,
   param_rx: std::sync::mpsc::Receiver<(u32, f64)>,
   params_shared: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
 ) {
   use std::sync::atomic::Ordering;
-  use vst3_com::{wchar_to_string, GetPluginFactoryFn, IID_IEDIT_CONTROLLER, K_RESULT_OK};
+  use vst3_com::{wchar_to_string, GetPluginFactoryFn, IID_ICOMPONENT, IID_IEDIT_CONTROLLER, K_RESULT_OK};
   use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
   use windows::Win32::System::LibraryLoader::GetModuleHandleW;
   use windows::Win32::UI::WindowsAndMessaging::{
@@ -790,20 +806,59 @@ pub(crate) fn run_vst_editor_thread(
       }
       let factory = &mut *factory;
 
-      // // Create IEditController
-      let ctrl_ptr = factory
-        .create_instance(&ctrl_cid, &IID_IEDIT_CONTROLLER)
-        .ok_or("Failed to create IEditController")?;
-      let controller = &mut *(ctrl_ptr as *mut vst3_com::IEditController);
-      let init_result = controller.initialize(std::ptr::null_mut());
-      if init_result != K_RESULT_OK {
-        controller.release();
-        return Err(format!(
-          "IEditController::initialize failed: {init_result:#x}"
-        ));
-      }
+      // Determine whether this is a separated or single-component plugin.
+      //
+      // Separated: ctrl_cid is known and differs from audio_cid.
+      //   → create IEditController directly via factory.
+      // Single-component: ctrl_cid is None (getControllerClassId unsupported) or equals
+      //   audio_cid (same class implements both interfaces).
+      //   → create IComponent via factory, then queryInterface for IEditController.
+      let is_separated = match ctrl_cid {
+        Some(cid) if cid != audio_cid => true,
+        _ => false,
+      };
 
-      // // Read parameters
+      let (ctrl_ptr, component_holder): (*mut vst3_com::IEditController, Option<*mut vst3_com::IComponent>) =
+        if is_separated {
+          let cid = ctrl_cid.unwrap();
+          let ptr = factory
+            .create_instance(&cid, &IID_IEDIT_CONTROLLER)
+            .ok_or("Failed to create IEditController (separated model)")?;
+          let controller = &mut *(ptr as *mut vst3_com::IEditController);
+          let init_result = controller.initialize(std::ptr::null_mut());
+          if init_result != K_RESULT_OK {
+            controller.release();
+            return Err(format!(
+              "IEditController::initialize failed: {init_result:#x}"
+            ));
+          }
+          (ptr as *mut vst3_com::IEditController, None)
+        } else {
+          // Single-component: create IComponent and queryInterface for IEditController.
+          let cid = ctrl_cid.unwrap_or(audio_cid);
+          let comp_ptr = factory
+            .create_instance(&cid, &IID_ICOMPONENT)
+            .ok_or("Failed to create IComponent (single-component model)")?;
+          let component = &mut *(comp_ptr as *mut vst3_com::IComponent);
+          let init_result = component.initialize(std::ptr::null_mut());
+          if init_result != K_RESULT_OK {
+            component.release();
+            return Err(format!(
+              "IComponent::initialize failed (single-component): {init_result:#x}"
+            ));
+          }
+          let ctrl_ptr = component
+            .query_interface(&IID_IEDIT_CONTROLLER)
+            .ok_or("IEditController interface not found via queryInterface (single-component)")?;
+          (
+            ctrl_ptr as *mut vst3_com::IEditController,
+            Some(comp_ptr as *mut vst3_com::IComponent),
+          )
+        };
+
+      let controller = &mut *ctrl_ptr;
+
+      // Read parameters
       let count = controller.get_parameter_count();
       let mut param_list: Vec<VstParamInfo> = Vec::new();
       for i in 0..count {
@@ -872,7 +927,8 @@ pub(crate) fn run_vst_editor_thread(
       // Set up EditorWindowState
       let state = Box::new(EditorWindowState {
         plug_view: view_ptr,
-        controller: ctrl_ptr as *mut vst3_com::IEditController,
+        controller: ctrl_ptr,
+        component_holder,
         param_rx,
         params_shared: params_shared.clone(),
         _lib: lib,
@@ -934,9 +990,20 @@ unsafe extern "system" fn vst_editor_wnd_proc(
           state.plug_view = std::ptr::null_mut();
         }
         if !state.controller.is_null() {
-          (*state.controller).terminate();
+          // For single-component plugins, the controller IS the component — only release
+          // the extra ref from queryInterface; terminate/release via component_holder below.
+          // For separated plugins (component_holder is None), do a full terminate + release.
+          if state.component_holder.is_none() {
+            (*state.controller).terminate();
+          }
           (*state.controller).release();
           state.controller = std::ptr::null_mut();
+        }
+        if let Some(comp) = state.component_holder.take() {
+          if !comp.is_null() {
+            (*comp).terminate();
+            (*comp).release();
+          }
         }
       }
       let _ = DestroyWindow(hwnd);
