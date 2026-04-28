@@ -68,6 +68,54 @@ function strandOffsets(channels: number): number[] | null {
   return null;
 }
 
+/**
+ * Returns the perpendicular offset (dx, dy) to apply to an endpoint at the
+ * given handle position so that parallel strands stay evenly spaced regardless
+ * of overall edge direction.
+ *
+ * The strand "spread" axis is perpendicular to the handle's outward direction:
+ *   - Left / Right handles  -> spread vertically (offset y)
+ *   - Top / Bottom handles  -> spread horizontally (offset x)
+ *
+ * Without this, vertically-arranged nodes (Top/Bottom handles) would have
+ * strands offset along the same axis as the edge curve, causing them to
+ * collapse onto each other near the midpoint.
+ */
+function perpOffset(pos: Position, d: number): { dx: number; dy: number } {
+  switch (pos) {
+    case Position.Left:
+    case Position.Right:
+      return { dx: 0, dy: d };
+    case Position.Top:
+    case Position.Bottom:
+      return { dx: d, dy: 0 };
+    default:
+      return { dx: 0, dy: d };
+  }
+}
+
+function bezierAtOffset(
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+  sourcePosition: Position,
+  targetPosition: Position,
+  d: number,
+): string {
+  const so = perpOffset(sourcePosition, d);
+  const to = perpOffset(targetPosition, d);
+  const [path] = getBezierPath({
+    sourceX: sourceX + so.dx,
+    sourceY: sourceY + so.dy,
+    targetX: targetX + to.dx,
+    targetY: targetY + to.dy,
+    sourcePosition,
+    targetPosition,
+  });
+  return path;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -116,52 +164,33 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
   const [hovered, setHovered] = useState(false);
   const showChip = hovered || !!selected;
 
+  const sp = sourcePosition as Position;
+  const tp = targetPosition as Position;
+
   const [, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
     targetX,
     targetY,
-    sourcePosition: sourcePosition as Position,
-    targetPosition: targetPosition as Position,
+    sourcePosition: sp,
+    targetPosition: tp,
   });
 
   const strandPaths: { d: string; key: string }[] = [];
   if (offsets) {
     for (let i = 0; i < offsets.length; i++) {
-      const dy = offsets[i];
-      const [d] = getBezierPath({
-        sourceX,
-        sourceY: sourceY + dy,
-        targetX,
-        targetY: targetY + dy,
-        sourcePosition: sourcePosition as Position,
-        targetPosition: targetPosition as Position,
-      });
+      const d = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, offsets[i]);
       strandPaths.push({ d, key: `s-${i}` });
     }
   } else {
     for (let i = 0; i < 2; i++) {
       const dy = i === 0 ? -4 : 4;
-      const [d] = getBezierPath({
-        sourceX,
-        sourceY: sourceY + dy,
-        targetX,
-        targetY: targetY + dy,
-        sourcePosition: sourcePosition as Position,
-        targetPosition: targetPosition as Position,
-      });
+      const d = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, dy);
       strandPaths.push({ d, key: `b-${i}` });
     }
   }
 
-  const [hitPath] = getBezierPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition: sourcePosition as Position,
-    targetPosition: targetPosition as Position,
-  });
+  const hitPath = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, 0);
 
   const chipLabel = `${channels}ch · ${rateLabel(sampleRate)} · ${bits >= 32 ? "32f" : bits}`;
   const showInlineCountBadge = !offsets && !showChip;
