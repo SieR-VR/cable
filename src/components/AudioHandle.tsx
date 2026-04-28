@@ -106,24 +106,10 @@ export function AudioHandle(props: AudioHandleProps) {
   const disabled = !fmt || offsets.length === 0;
   const color = disabled ? DISABLED_COLOR : hueForRate(sampleRate);
 
-  // Dot anchor: ReactFlow uses the handle's *outer* edge (in the direction
-  // pointed away from the node) as the connection point for sourceX/targetX,
-  // not the handle DOM center. Place dots on that edge so they sit exactly
-  // where the edge attaches.
-  const dotAnchor: { left: string; top: string } = (() => {
-    switch (props.position) {
-      case Position.Left:
-        return { left: "0%", top: "50%" };
-      case Position.Right:
-        return { left: "100%", top: "50%" };
-      case Position.Top:
-        return { left: "50%", top: "0%" };
-      case Position.Bottom:
-        return { left: "50%", top: "100%" };
-      default:
-        return { left: "50%", top: "50%" };
-    }
-  })();
+  // Dot center is at the handle DOM box center, which sits *inside* the node
+  // visually. ReactFlow's connection point (sourceX/targetX) is at the handle
+  // outer edge, so AudioEdge shifts those points inward by HANDLE_SIZE/2 to
+  // make the strand actually start/end at the dot.
 
   // Strand-spread axis is perpendicular to the handle's outward direction.
   // Left / Right -> dots stack vertically (Y axis offsets).
@@ -182,8 +168,8 @@ export function AudioHandle(props: AudioHandleProps) {
           <span
             style={{
               position: "absolute",
-              left: dotAnchor.left,
-              top: dotAnchor.top,
+              left: "50%",
+              top: "50%",
               transform: "translate(-50%, -50%)",
               width: 9,
               height: 9,
@@ -203,8 +189,8 @@ export function AudioHandle(props: AudioHandleProps) {
                 key={i}
                 style={{
                   position: "absolute",
-                  left: dotAnchor.left,
-                  top: dotAnchor.top,
+                  left: "50%",
+                  top: "50%",
                   transform,
                   width: DOT_SIZE,
                   height: DOT_SIZE,

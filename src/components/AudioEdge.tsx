@@ -141,6 +141,30 @@ function offsetBezierPolyline(
   return d;
 }
 
+/**
+ * Inset (in graph coords) by which we pull each endpoint inward toward the
+ * node so the strand visually starts/ends at the dot center inside the
+ * AudioHandle, rather than at the handle's outer edge that ReactFlow uses
+ * as the raw connection point. Half of AudioHandle.HANDLE_SIZE.
+ */
+const HANDLE_HALF = 9;
+
+/** Offset in the direction *into* the node, given the handle position. */
+function inwardOffset(pos: Position): { dx: number; dy: number } {
+  switch (pos) {
+    case Position.Left:
+      return { dx: HANDLE_HALF, dy: 0 };
+    case Position.Right:
+      return { dx: -HANDLE_HALF, dy: 0 };
+    case Position.Top:
+      return { dx: 0, dy: HANDLE_HALF };
+    case Position.Bottom:
+      return { dx: 0, dy: -HANDLE_HALF };
+    default:
+      return { dx: 0, dy: 0 };
+  }
+}
+
 function bezierAtOffset(
   sourceX: number,
   sourceY: number,
@@ -150,11 +174,18 @@ function bezierAtOffset(
   targetPosition: Position,
   d: number,
 ): string {
+  const sIn = inwardOffset(sourcePosition);
+  const tIn = inwardOffset(targetPosition);
+  const sx = sourceX + sIn.dx;
+  const sy = sourceY + sIn.dy;
+  const tx = targetX + tIn.dx;
+  const ty = targetY + tIn.dy;
+
   const [path] = getBezierPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
+    sourceX: sx,
+    sourceY: sy,
+    targetX: tx,
+    targetY: ty,
     sourcePosition,
     targetPosition,
   });
@@ -165,10 +196,10 @@ function bezierAtOffset(
     const so = perpOffset(sourcePosition, d);
     const to = perpOffset(targetPosition, d);
     const [translated] = getBezierPath({
-      sourceX: sourceX + so.dx,
-      sourceY: sourceY + so.dy,
-      targetX: targetX + to.dx,
-      targetY: targetY + to.dy,
+      sourceX: sx + so.dx,
+      sourceY: sy + so.dy,
+      targetX: tx + to.dx,
+      targetY: ty + to.dy,
       sourcePosition,
       targetPosition,
     });
