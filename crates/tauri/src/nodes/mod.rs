@@ -10,7 +10,7 @@ pub mod shared_store;
 pub mod spectrum_analyzer;
 pub mod virtual_audio_input;
 pub mod virtual_audio_output;
-pub mod vst_node;
+pub mod vst;
 pub mod waveform_monitor;
 
 pub(crate) use shared_store::NodeSharedStore;

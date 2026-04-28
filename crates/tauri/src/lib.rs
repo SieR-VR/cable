@@ -13,7 +13,7 @@ pub(crate) mod vst3_common;
 #[cfg(windows)]
 pub use driver::endpoint::rename_endpoint_elevated;
 
-use nodes::vst_node::VstPluginInfo;
+use nodes::vst::VstPluginInfo;
 use nodes::NodeSharedStore;
 use runtime::AudioNode;
 
@@ -272,7 +272,7 @@ async fn node_command(
   if node_id.is_empty() {
     return match (node_type.as_str(), data.get("op").and_then(|v| v.as_str())) {
       ("vst", Some("scan")) => {
-        let plugins = nodes::vst_node::scan_plugins_command(state).await?;
+        let plugins = nodes::vst::scan_plugins_command(state).await?;
         serde_json::to_value(plugins).map_err(|e| e.to_string())
       }
       (t, op) => Err(format!(

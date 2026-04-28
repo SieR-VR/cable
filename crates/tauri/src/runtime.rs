@@ -227,7 +227,7 @@ use crate::nodes::mixer::MixerNode;
 use crate::nodes::spectrum_analyzer::SpectrumAnalyzerNode;
 use crate::nodes::virtual_audio_input::VirtualAudioInputNode;
 use crate::nodes::virtual_audio_output::VirtualAudioOutputNode;
-use crate::nodes::vst_node::VstNode;
+use crate::nodes::vst::VstNode;
 use crate::nodes::waveform_monitor::WaveformMonitorNode;
 use crate::AppData;
 
