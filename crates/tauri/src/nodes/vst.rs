@@ -1058,14 +1058,12 @@ pub(crate) fn run_vst_editor_thread(
         }
       };
       let view = &mut *view_ptr;
-      let rect = view.get_size().unwrap_or(vst3_com::ViewRect {
-        left: 0,
-        top: 0,
-        right: 800,
-        bottom: 600,
-      });
-      let w = rect.width().max(200) as i32;
-      let h = rect.height().max(100) as i32;
+      println!("VST3 editor thread: createView OK, creating Win32 window");
+
+      // Use a placeholder size for the initial window. The real plugin size is
+      // only available after IPlugView::attached() has run, so we resize below.
+      let w = 800_i32;
+      let h = 600_i32;
 
       // Register and create Win32 window
       let hinstance = GetModuleHandleW(None).unwrap_or_default();
