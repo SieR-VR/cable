@@ -894,7 +894,8 @@ pub(crate) fn run_vst_editor_thread(
   use windows::Win32::System::LibraryLoader::GetModuleHandleW;
   use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DispatchMessageW, GetMessageW, RegisterClassExW, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, MSG, SW_SHOW, WNDCLASSEXW,
+    SetWindowPos, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
+    GWLP_USERDATA, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOW, WNDCLASSEXW,
     WS_CAPTION, WS_SYSMENU,
   };
 
@@ -1117,8 +1118,25 @@ pub(crate) fn run_vst_editor_thread(
       });
       SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
-      // Attach plugin UI
-      view.attached(hwnd.0 as *mut _, b"HWND\0");
+      // Attach plugin UI. Then re-query size — JUCE reports the real size only
+      // after attached() has run and the plugin has measured its contents.
+      let attach_result = view.attached(hwnd.0 as *mut _, b"HWND\0");
+      println!("VST3 editor thread: IPlugView::attached result={attach_result:#x}");
+
+      if let Some(r) = view.get_size() {
+        let nw = r.width().max(200) as i32;
+        let nh = r.height().max(100) as i32;
+        println!("VST3 editor thread: post-attach size = {nw}x{nh}");
+        let _ = SetWindowPos(
+          hwnd,
+          None,
+          0,
+          0,
+          nw,
+          nh,
+          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+      }
 
       // Store HWND and show window
       hwnd_out.store(hwnd.0 as isize, Ordering::SeqCst);
