@@ -3,6 +3,7 @@ import { Node, NodeProps, Position } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { AppState, useAppStore } from "@/state";
 import { WindowInfo } from "@/types";
 import { NodeDefinition } from "@/node-definition";
@@ -32,48 +33,33 @@ export function AppAudioCapture({ id, data }: NodeProps<AppAudioCaptureNode>) {
   }, []);
 
   return (
-    <div className="bg-gray-700 rounded-lg flex flex-col text-white">
-      <div className="w-full h-6 bg-orange-500 rounded-t-lg flex items-center text-sm font-bold p-2 drag-handle__custom">
-        App Audio Capture
-      </div>
-      <div className="flex flex-col gap-2 p-2">
-        <div className="w-full flex flex-col">
-          {windowList !== null ? (
-            <select
-              className="w-full p-1 rounded bg-gray-500"
-              value={data.processId ?? ""}
-              onChange={(e) => {
-                const selected = windowList.find(
-                  (w) => w.processId === Number(e.target.value),
-                );
-                if (selected) setWindow(selected.processId, selected.title);
-              }}
-            >
-              <option value="">-- Select a window --</option>
-              {windowList.map((w, i) => (
-                <option key={`${w.processId}-${i}`} value={w.processId}>
-                  {w.title}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <select className="w-full p-1 rounded bg-gray-500" disabled>
-              <option>Loading windows...</option>
-            </select>
-          )}
-        </div>
-        {data.processId !== null && data.windowTitle && (
-          <div className="text-xs text-gray-300 truncate max-w-48">
-            PID: {data.processId}
-          </div>
-        )}
-        <AudioHandle
-          type="source"
-          position={Position.Right}
-          id="AppAudioCapture-source"
-        />
-      </div>
-    </div>
+    <NodeShell accent={NODE_ACCENTS.appAudioCapture} title="App Audio Capture">
+      {windowList !== null ? (
+        <select
+          className="w-full p-1 rounded bg-gray-600 text-white text-xs"
+          value={data.processId ?? ""}
+          onChange={(e) => {
+            const selected = windowList.find((w) => w.processId === Number(e.target.value));
+            if (selected) setWindow(selected.processId, selected.title);
+          }}
+        >
+          <option value="">-- Select a window --</option>
+          {windowList.map((w, i) => (
+            <option key={`${w.processId}-${i}`} value={w.processId}>
+              {w.title}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <select className="w-full p-1 rounded bg-gray-600 text-white text-xs" disabled>
+          <option>Loading windows...</option>
+        </select>
+      )}
+      {data.processId !== null && data.windowTitle && (
+        <div className="text-xs text-gray-300 truncate max-w-48">PID: {data.processId}</div>
+      )}
+      <AudioHandle type="source" position={Position.Right} id="AppAudioCapture-source" />
+    </NodeShell>
   );
 }
 

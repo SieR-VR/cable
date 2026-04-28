@@ -1,6 +1,7 @@
 import { Node, NodeProps, Position } from "@xyflow/react";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { NodeDefinition } from "@/node-definition";
 
 export type MixerNodeData = {
@@ -9,45 +10,48 @@ export type MixerNodeData = {
 
 export type MixerNodeType = Node<MixerNodeData, "mixer">;
 
+const INPUTS = [
+  { id: "input-a", label: "A" },
+  { id: "input-b", label: "B" },
+] as const;
+const ROW_HEIGHT = 24;
+
 export function Mixer({ id }: NodeProps<MixerNodeType>) {
   void id;
   return (
-    <div className="bg-gray-700 rounded-lg flex flex-col text-white min-w-48">
-      <div className="w-full h-6 bg-orange-500 rounded-t-lg flex items-center text-sm font-bold p-2 drag-handle__custom">
-        Mixer
+    <NodeShell accent={NODE_ACCENTS.mixer} title="Mixer">
+      {/*
+        Negative horizontal margin cancels NodeShell's `p-2` body padding so
+        the relative container spans the full card width. Handle dots then sit
+        flush with the card's left/right edges (matching every other handle
+        in the app).
+      */}
+      <div
+        className="relative -mx-2"
+        style={{ height: INPUTS.length * ROW_HEIGHT }}
+      >
+        {INPUTS.map((input, i) => {
+          const top = i * ROW_HEIGHT + ROW_HEIGHT / 2;
+          return (
+            <div key={input.id}>
+              <AudioHandle
+                type="target"
+                position={Position.Left}
+                id={input.id}
+                style={{ top }}
+              />
+              <span
+                className="absolute text-xs text-gray-300"
+                style={{ top, left: 16, transform: "translateY(-50%)" }}
+              >
+                {input.label}
+              </span>
+            </div>
+          );
+        })}
       </div>
-      <div className="flex flex-col gap-2 p-2 relative">
-        <div className="flex flex-row gap-1 items-center">
-          <span className="rounded-md text-xs bg-orange-300 text-orange-900 p-1">sum + clamp</span>
-          <span className="rounded-md text-xs bg-gray-500 p-1">passthrough</span>
-        </div>
-        {/* Input A */}
-        <div className="flex items-center gap-2 h-6 relative">
-          <AudioHandle
-            type="target"
-            position={Position.Left}
-            id="input-a"
-            className="!static !transform-none"
-          />
-          <span className="text-xs text-gray-300">A</span>
-        </div>
-        {/* Input B */}
-        <div className="flex items-center gap-2 h-6 relative">
-          <AudioHandle
-            type="target"
-            position={Position.Left}
-            id="input-b"
-            className="!static !transform-none"
-          />
-          <span className="text-xs text-gray-300">B</span>
-        </div>
-        <AudioHandle
-          type="source"
-          position={Position.Right}
-          id="Mixer-source"
-        />
-      </div>
-    </div>
+      <AudioHandle type="source" position={Position.Right} id="Mixer-source" />
+    </NodeShell>
   );
 }
 

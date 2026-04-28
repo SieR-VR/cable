@@ -1,6 +1,7 @@
 import { Node, NodeProps, Position } from "@xyflow/react";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { formatAudioEdgeType } from "@/lib/utils";
 import { AppState, useAppStore } from "@/state";
 import { AudioDevice } from "@/types";
@@ -23,56 +24,38 @@ const selector = (id: string) => (store: AppState) => ({
 });
 
 export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) {
+  void data;
   const { availableAudioInputDevices } = useAppStore();
-
   const { setDevice } = useAppStore(selector(id));
-  const selectedDevice = data.device;
 
   return (
-    <div className="bg-gray-700 rounded-lg flex flex-col text-white">
-      {/* Header */}
-      <div className="w-full h-6 bg-red-400 rounded-t-lg flex items-center text-sm font-bold p-2 drag-handle__custom">
-        Audio input device
-      </div>
-      <div className="flex flex-col gap-2 p-2">
-        <div className="w-full flex flex-col">
-          <select
-            className="w-full p-1 rounded bg-gray-500"
-            onChange={(e) => {
-              setDevice(
-                availableAudioInputDevices?.find((device) => device.id === e.target.value) || null,
-              );
-            }}
-          >
-            {availableAudioInputDevices ? (
-              <>
-                <option value="">-- Select an audio input device --</option>
-                {availableAudioInputDevices.map((device) => (
-                  <option key={device.id} value={device.id}>
-                    {device.descriptions?.join("\n")}
-                  </option>
-                ))}
-              </>
-            ) : (
-              <option disabled>Loading devices...</option>
-            )}
-          </select>
-        </div>
-        {!availableAudioInputDevices && <div className="text-xs text-gray-400">{"Loading..."}</div>}
-        {selectedDevice && (
-          <div className="flex flex-row gap-2 items-center">
-            <span className="rounded-md text-xs bg-amber-200 p-1">{`${selectedDevice.frequency}Hz`}</span>
-            <span className="rounded-md text-xs bg-blue-200 p-1">{`${selectedDevice.channels}ch`}</span>
-            <span className="rounded-md text-xs bg-lime-200 p-1">{`${selectedDevice.bitsPerSample}bit`}</span>
-          </div>
+    <NodeShell accent={NODE_ACCENTS.audioInputDevice} title="Audio Input">
+      <select
+        className="w-full p-1 rounded bg-gray-600 text-white text-xs"
+        onChange={(e) => {
+          setDevice(
+            availableAudioInputDevices?.find((device) => device.id === e.target.value) || null,
+          );
+        }}
+      >
+        {availableAudioInputDevices ? (
+          <>
+            <option value="">-- Select an audio input device --</option>
+            {availableAudioInputDevices.map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.descriptions?.join("\n")}
+              </option>
+            ))}
+          </>
+        ) : (
+          <option disabled>Loading devices...</option>
         )}
-        <AudioHandle
-          type="source"
-          position={Position.Right}
-          id="AudioInputDevice-source"
-        />
-      </div>
-    </div>
+      </select>
+      {!availableAudioInputDevices && (
+        <div className="text-xs text-gray-400">{"Loading..."}</div>
+      )}
+      <AudioHandle type="source" position={Position.Right} id="AudioInputDevice-source" />
+    </NodeShell>
   );
 }
 

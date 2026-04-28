@@ -114,8 +114,7 @@ export function AudioHandle(props: AudioHandleProps) {
   // Strand-spread axis is perpendicular to the handle's outward direction.
   // Left / Right -> dots stack vertically (Y axis offsets).
   // Top  / Bottom -> dots line up horizontally (X axis offsets).
-  const isHorizontalHandle =
-    props.position === Position.Left || props.position === Position.Right;
+  const isHorizontalHandle = props.position === Position.Left || props.position === Position.Right;
 
   // Tooltip placement: opposite the node body so it doesn't overlap node UI.
   const tooltipStyle: React.CSSProperties = (() => {
@@ -180,26 +179,56 @@ export function AudioHandle(props: AudioHandleProps) {
             }}
           />
         ) : (
-          offsets.map((off, i) => {
-            const transform = isHorizontalHandle
-              ? `translate(-50%, calc(-50% + ${off}px))`
-              : `translate(calc(-50% + ${off}px), -50%)`;
-            return (
-              <span
-                key={i}
-                style={{
-                  position: "absolute",
-                  left: "50%",
-                  top: "50%",
-                  transform,
-                  width: DOT_SIZE,
-                  height: DOT_SIZE,
-                  borderRadius: "50%",
-                  background: color,
-                }}
-              />
-            );
-          })
+          <>
+            {offsets.length >= 2 &&
+              (() => {
+                // Gray capsule border tying all dots together so users can
+                // recognize a multi-channel handle as one group when several
+                // handles sit on the same node.
+                const maxOff = Math.max(...offsets.map(Math.abs));
+                const PAD = 2.5;
+                const along = (maxOff + DOT_SIZE / 2 + PAD) * 2;
+                const across = DOT_SIZE + PAD * 2;
+                const w = isHorizontalHandle ? across : along;
+                const h = isHorizontalHandle ? along : across;
+                return (
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: "50%",
+                      top: "50%",
+                      transform: "translate(-50%, -50%)",
+                      width: w,
+                      height: h,
+                      borderRadius: 9999,
+                      border: `2px solid ${DISABLED_COLOR}`,
+                      boxSizing: "border-box",
+                      opacity: 0.6,
+                    }}
+                  />
+                );
+              })()}
+            {offsets.map((off, i) => {
+              const transform = isHorizontalHandle
+                ? `translate(-50%, calc(-50% + ${off}px))`
+                : `translate(calc(-50% + ${off}px), -50%)`;
+              return (
+                <span
+                  key={i}
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    top: "50%",
+                    transform,
+                    width: DOT_SIZE,
+                    height: DOT_SIZE,
+                    borderRadius: "50%",
+                    background: color,
+                  }}
+                />
+              );
+            })}
+          </>
         )}
       </div>
 

@@ -3,6 +3,7 @@ import { Node, NodeProps, Position } from "@xyflow/react";
 import { useState } from "react";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { NodeDefinition } from "@/node-definition";
 import { useAppStore } from "@/state";
 
@@ -52,93 +53,88 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
   const maxHandles = Math.max(inputHandles.length, outputHandles.length, 1);
 
   return (
-    <div className="bg-gray-700 rounded-lg flex flex-col text-white min-w-56">
-      <div className="w-full h-6 bg-violet-500 rounded-t-lg flex items-center text-sm font-bold p-2 drag-handle__custom">
-        VST Plugin
-      </div>
-      <div className="flex flex-col gap-2 p-2">
-        {/* Plugin selector */}
-        <div className="flex gap-1">
-          <select
-            className="flex-1 text-xs bg-gray-600 text-white rounded px-1 py-0.5 border border-gray-500"
-            value={data.pluginPath}
-            onChange={(e) => {
-              const plugin = vstPluginList.find((p) => p.path === e.target.value);
-              if (plugin) {
-                updateNode(id, {
-                  pluginPath: plugin.path,
-                  numInputs: plugin.numInputs,
-                  numOutputs: plugin.numOutputs,
-                });
-              } else {
-                updateNode(id, { pluginPath: "" });
-              }
-            }}
-          >
-            <option value="">-- Select Plugin --</option>
-            {vstPluginList.map((p) => (
-              <option key={p.path} value={p.path}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <button
-            className="text-xs bg-gray-600 hover:bg-gray-500 rounded px-2 py-0.5 border border-gray-500"
-            onClick={handleScan}
-            disabled={scanning}
-            title="Scan for VST3 plugins"
-          >
-            {scanning ? "…" : "Scan"}
-          </button>
-        </div>
-
-        {/* Plugin info */}
-        {selectedPlugin && (
-          <div className="text-xs text-gray-400 flex gap-2">
-            <span>{selectedPlugin.vendor || "Unknown vendor"}</span>
-            <span>·</span>
-            <span>in:{selectedPlugin.numInputs} out:{selectedPlugin.numOutputs}</span>
-          </div>
-        )}
-
-        {/* Open editor button */}
-        {selectedPlugin && (
-          <button
-            className="text-xs bg-violet-600 hover:bg-violet-500 rounded px-2 py-1"
-            onClick={handleOpenEditor}
-          >
-            Open Editor
-          </button>
-        )}
-
-        {/* No-editor feedback */}
-        {editorError && (
-          <div className="text-xs text-yellow-300 leading-snug">{editorError}</div>
-        )}
-
-        {/* I/O handle rows */}
-        <div className="relative" style={{ height: `${maxHandles * 24}px` }}>
-          {inputHandles.map((handleId, i) => (
-            <AudioHandle
-              key={handleId}
-              type="target"
-              position={Position.Left}
-              id={handleId}
-              style={{ top: `${(i + 0.5) * (100 / maxHandles)}%` }}
-            />
+    <NodeShell accent={NODE_ACCENTS.vst} title="VST Plugin" minWidth="14rem">
+      {/* Plugin selector */}
+      <div className="flex gap-1">
+        <select
+          className="flex-1 text-xs bg-gray-600 text-white rounded px-1 py-0.5 border border-gray-500"
+          value={data.pluginPath}
+          onChange={(e) => {
+            const plugin = vstPluginList.find((p) => p.path === e.target.value);
+            if (plugin) {
+              updateNode(id, {
+                pluginPath: plugin.path,
+                numInputs: plugin.numInputs,
+                numOutputs: plugin.numOutputs,
+              });
+            } else {
+              updateNode(id, { pluginPath: "" });
+            }
+          }}
+        >
+          <option value="">-- Select Plugin --</option>
+          {vstPluginList.map((p) => (
+            <option key={p.path} value={p.path}>
+              {p.name}
+            </option>
           ))}
-          {outputHandles.map((handleId, i) => (
-            <AudioHandle
-              key={handleId}
-              type="source"
-              position={Position.Right}
-              id={handleId}
-              style={{ top: `${(i + 0.5) * (100 / maxHandles)}%` }}
-            />
-          ))}
-        </div>
+        </select>
+        <button
+          className="text-xs bg-gray-600 hover:bg-gray-500 rounded px-2 py-0.5 border border-gray-500"
+          onClick={handleScan}
+          disabled={scanning}
+          title="Scan for VST3 plugins"
+        >
+          {scanning ? "…" : "Scan"}
+        </button>
       </div>
-    </div>
+
+      {/* Plugin info */}
+      {selectedPlugin && (
+        <div className="text-xs text-gray-400 flex gap-2">
+          <span>{selectedPlugin.vendor || "Unknown vendor"}</span>
+          <span>·</span>
+          <span>
+            in:{selectedPlugin.numInputs} out:{selectedPlugin.numOutputs}
+          </span>
+        </div>
+      )}
+
+      {/* Open editor button */}
+      {selectedPlugin && (
+        <button
+          className="text-xs bg-violet-600 hover:bg-violet-500 rounded px-2 py-1"
+          onClick={handleOpenEditor}
+        >
+          Open Editor
+        </button>
+      )}
+
+      {/* No-editor feedback */}
+      {editorError && <div className="text-xs text-yellow-300 leading-snug">{editorError}</div>}
+
+      {/* I/O handle rows */}
+      <div className="relative" style={{ height: `${maxHandles * 24}px` }}>
+        {inputHandles.map((handleId, i) => (
+          <AudioHandle
+            key={handleId}
+            type="target"
+            position={Position.Left}
+            id={handleId}
+            style={{ top: `${(i + 0.5) * (100 / maxHandles)}%` }}
+          />
+        ))}
+        {outputHandles.map((handleId, i) => (
+          <AudioHandle
+            key={handleId}
+            type="source"
+            position={Position.Right}
+            id={handleId}
+            style={{ top: `${(i + 0.5) * (100 / maxHandles)}%` }}
+          />
+        ))}
+      </div>
+    </NodeShell>
   );
 }
 

@@ -1,0 +1,173 @@
+name: Release
+
+on:
+  release:
+    types: [created, published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to upload artifacts to"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  app:
+    name: Tauri app (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app
+        run: pnpm tauri build
+
+      - name: Collect installers
+        shell: pwsh
+        run: |
+          $stage = "release-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $bundle = "target/release/bundle"
+          if (Test-Path "$bundle/msi") {
+            Get-ChildItem "$bundle/msi" -File | Where-Object { $_.Extension -in '.msi','.zip','.sig' } | ForEach-Object {
+              Copy-Item $_.FullName $stage
+            }
+          }
+          if (Test-Path "$bundle/nsis") {
+            Get-ChildItem "$bundle/nsis" -File | Where-Object { $_.Extension -in '.exe','.zip','.sig' } | ForEach-Object {
+              Copy-Item $_.FullName $stage
+            }
+          }
+          Get-ChildItem $stage
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cable-app-windows
+          path: release-stage/*
+
+      - name: Determine release tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'release') {
+            "tag=${{ github.event.release.tag_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "tag=${{ inputs.tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: release-stage/*
+          fail_on_unmatched_files: false
+
+  driver:
+    name: Driver (CableAudio.sys)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install Windows Driver Kit
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $url = "https://go.microsoft.com/fwlink/?linkid=2196230"
+          $installer = "$env:RUNNER_TEMP\wdksetup.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $proc = Start-Process -FilePath $installer -ArgumentList "/quiet","/norestart","/features","+" -Wait -PassThru
+          Write-Host "WDK installer exit code: $($proc.ExitCode)"
+          $vsixDir = "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix"
+          if (Test-Path $vsixDir) {
+            $vsix = Get-ChildItem $vsixDir -Filter "*.vsix" -Recurse | Select-Object -First 1
+            if ($vsix) {
+              $vsixInstaller = "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\VSIXInstaller.exe"
+              if (-not (Test-Path $vsixInstaller)) {
+                $vsixInstaller = (Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\*\Common7\IDE\VSIXInstaller.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+              }
+              if ($vsixInstaller) {
+                & $vsixInstaller /quiet /admin $vsix.FullName
+              }
+            }
+          }
+
+      - name: Build driver
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          .\scripts\build.ps1 -Target Driver -Configuration Release
+
+      - name: Stage driver artifacts
+        id: stage
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $stage = "driver-stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $pkg = "driver/x64/Release/package"
+          if (-not (Test-Path $pkg)) {
+            Write-Host "No driver package directory found; skipping."
+            "produced=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+          $zip = "$stage/CableAudio-driver-x64.zip"
+          Compress-Archive -Path "$pkg/*" -DestinationPath $zip -Force
+          Get-ChildItem $stage
+          "produced=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload artifact
+        if: steps.stage.outputs.produced == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cable-driver-windows
+          path: driver-stage/*
+
+      - name: Determine release tag
+        id: tag
+        if: steps.stage.outputs.produced == 'true'
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'release') {
+            "tag=${{ github.event.release.tag_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            "tag=${{ inputs.tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
+      - name: Upload to release
+        if: steps.stage.outputs.produced == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: driver-stage/*
+          fail_on_unmatched_files: false

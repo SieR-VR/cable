@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Node, NodeProps, Position } from "@xyflow/react";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "../state";
 import { NodeDefinition } from "@/node-definition";
 
@@ -49,35 +50,17 @@ export function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>) {
   }, [bins]);
 
   return (
-    <div className="bg-gray-700 rounded-lg flex flex-col text-white min-w-64">
-      {/* Header */}
-      <div className="w-full h-6 bg-purple-500 rounded-t-lg flex items-center text-sm font-bold p-2 drag-handle__custom">
-        Spectrum Analyzer
-      </div>
-      <div className="flex flex-col gap-2 p-2 relative">
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_WIDTH}
-          height={CANVAS_HEIGHT}
-          className="rounded"
-          style={{ background: BACKGROUND_COLOR }}
-        />
-        <div className="flex flex-row gap-1 items-center">
-          <span className="rounded-md text-xs bg-purple-300 text-purple-900 p-1">FFT</span>
-          <span className="rounded-md text-xs bg-gray-500 p-1">passthrough</span>
-        </div>
-        <AudioHandle
-          type="target"
-          position={Position.Left}
-          id="SpectrumAnalyzer-target"
-        />
-        <AudioHandle
-          type="source"
-          position={Position.Right}
-          id="SpectrumAnalyzer-source"
-        />
-      </div>
-    </div>
+    <NodeShell accent={NODE_ACCENTS.spectrumAnalyzer} title="Spectrum Analyzer" minWidth="16rem">
+      <canvas
+        ref={canvasRef}
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        className="rounded"
+        style={{ background: BACKGROUND_COLOR }}
+      />
+      <AudioHandle type="target" position={Position.Left} id="SpectrumAnalyzer-target" />
+      <AudioHandle type="source" position={Position.Right} id="SpectrumAnalyzer-source" />
+    </NodeShell>
   );
 }
 

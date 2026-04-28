@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Node, NodeProps, Position } from "@xyflow/react";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "../state";
 import { NodeDefinition } from "@/node-definition";
 
@@ -65,35 +66,17 @@ export function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) {
   }, [samples]);
 
   return (
-    <div className="bg-gray-700 rounded-lg flex flex-col text-white min-w-64">
-      {/* Header */}
-      <div className="w-full h-6 bg-emerald-500 rounded-t-lg flex items-center text-sm font-bold p-2 drag-handle__custom">
-        Waveform Monitor
-      </div>
-      <div className="flex flex-col gap-2 p-2 relative">
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_WIDTH}
-          height={CANVAS_HEIGHT}
-          className="rounded"
-          style={{ background: BACKGROUND_COLOR }}
-        />
-        <div className="flex flex-row gap-1 items-center">
-          <span className="rounded-md text-xs bg-emerald-300 text-emerald-900 p-1">time-domain</span>
-          <span className="rounded-md text-xs bg-gray-500 p-1">passthrough</span>
-        </div>
-        <AudioHandle
-          type="target"
-          position={Position.Left}
-          id="WaveformMonitor-target"
-        />
-        <AudioHandle
-          type="source"
-          position={Position.Right}
-          id="WaveformMonitor-source"
-        />
-      </div>
-    </div>
+    <NodeShell accent={NODE_ACCENTS.waveformMonitor} title="Waveform Monitor" minWidth="16rem">
+      <canvas
+        ref={canvasRef}
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        className="rounded"
+        style={{ background: BACKGROUND_COLOR }}
+      />
+      <AudioHandle type="target" position={Position.Left} id="WaveformMonitor-target" />
+      <AudioHandle type="source" position={Position.Right} id="WaveformMonitor-source" />
+    </NodeShell>
   );
 }
 
