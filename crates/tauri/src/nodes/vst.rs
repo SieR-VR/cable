@@ -1138,18 +1138,21 @@ pub(crate) fn run_vst_editor_thread(
       {
         use windows::Win32::Foundation::{LPARAM, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-        let _ = PostMessageW(Some(hwnd), WM_VST_ATTACH, WPARAM(0), LPARAM(0));
+        let post_result = PostMessageW(Some(hwnd), WM_VST_ATTACH, WPARAM(0), LPARAM(0));
+        println!("VST3 editor thread: PostMessageW(WM_VST_ATTACH) result={post_result:?}");
       }
 
       // Store HWND before entering the message loop so the frontend can see it.
       hwnd_out.store(hwnd.0 as isize, Ordering::SeqCst);
 
       // Message loop
+      println!("VST3 editor thread: entering message loop");
       let mut msg = MSG::default();
       while GetMessageW(&mut msg, None, 0, 0).as_bool() {
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
       }
+      println!("VST3 editor thread: message loop exited");
 
       // Window closed; reset hwnd to 0 for re-open detection
       hwnd_out.store(0, Ordering::SeqCst);
@@ -1184,6 +1187,7 @@ unsafe extern "system" fn vst_editor_wnd_proc(
 
   match msg {
     WM_VST_ATTACH => {
+      println!("VST3 WndProc: WM_VST_ATTACH received, user_data={user_data:#x}");
       // Spawn a helper thread that calls IPlugView::attached() while this STA
       // thread keeps pumping messages. JUCE's MessageManager dispatches callbacks
       // back onto the STA thread; if attached() is called on the STA thread while
