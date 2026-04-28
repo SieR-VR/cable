@@ -64,8 +64,9 @@ interface AudioHandleProps {
  *
  * Visual encoding (matches AudioEdge):
  *   - Channel count -> N dots (1..4, capped) arranged perpendicular to the
- *     handle direction. Dot centers align with the corresponding edge strand
- *     offsets so the edge starts/ends exactly at a dot.
+ *     handle direction. Dot centers are placed on the handle's *outer* edge
+ *     (the actual connection point ReactFlow uses for sourceX/targetX) so the
+ *     edge starts/ends exactly at a dot.
  *   - Sample rate   -> dot color (hue palette).
  *   - Disabled / no format -> single hollow gray circle.
  *
@@ -104,6 +105,25 @@ export function AudioHandle(props: AudioHandleProps) {
   const offsets = dotOffsets(channels);
   const disabled = !fmt || offsets.length === 0;
   const color = disabled ? DISABLED_COLOR : hueForRate(sampleRate);
+
+  // Dot anchor: ReactFlow uses the handle's *outer* edge (in the direction
+  // pointed away from the node) as the connection point for sourceX/targetX,
+  // not the handle DOM center. Place dots on that edge so they sit exactly
+  // where the edge attaches.
+  const dotAnchor: { left: string; top: string } = (() => {
+    switch (props.position) {
+      case Position.Left:
+        return { left: "0%", top: "50%" };
+      case Position.Right:
+        return { left: "100%", top: "50%" };
+      case Position.Top:
+        return { left: "50%", top: "0%" };
+      case Position.Bottom:
+        return { left: "50%", top: "100%" };
+      default:
+        return { left: "50%", top: "50%" };
+    }
+  })();
 
   // Strand-spread axis is perpendicular to the handle's outward direction.
   // Left / Right -> dots stack vertically (Y axis offsets).
@@ -162,8 +182,8 @@ export function AudioHandle(props: AudioHandleProps) {
           <span
             style={{
               position: "absolute",
-              left: "50%",
-              top: "50%",
+              left: dotAnchor.left,
+              top: dotAnchor.top,
               transform: "translate(-50%, -50%)",
               width: 9,
               height: 9,
@@ -183,8 +203,8 @@ export function AudioHandle(props: AudioHandleProps) {
                 key={i}
                 style={{
                   position: "absolute",
-                  left: "50%",
-                  top: "50%",
+                  left: dotAnchor.left,
+                  top: dotAnchor.top,
                   transform,
                   width: DOT_SIZE,
                   height: DOT_SIZE,
