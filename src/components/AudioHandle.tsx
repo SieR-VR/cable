@@ -141,49 +141,61 @@ export function AudioHandle(props: AudioHandleProps) {
         borderRadius: HANDLE_SIZE / 2,
         background: "transparent",
         border: "none",
-        position: "relative",
         ...props.style,
       }}
     >
-      {disabled ? (
-        <span
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
-            width: 9,
-            height: 9,
-            borderRadius: "50%",
-            background: "transparent",
-            border: `1.5px solid ${DISABLED_COLOR}`,
-            pointerEvents: "none",
-            boxSizing: "border-box",
-          }}
-        />
-      ) : (
-        offsets.map((off, i) => {
-          const transform = isHorizontalHandle
-            ? `translate(-50%, calc(-50% + ${off}px))`
-            : `translate(calc(-50% + ${off}px), -50%)`;
-          return (
-            <span
-              key={i}
-              style={{
-                position: "absolute",
-                left: "50%",
-                top: "50%",
-                transform,
-                width: DOT_SIZE,
-                height: DOT_SIZE,
-                borderRadius: "50%",
-                background: color,
-                pointerEvents: "none",
-              }}
-            />
-          );
-        })
-      )}
+      {/*
+        Inner positioning context. Required because some call sites apply
+        `!static` to the outer Handle (e.g. Mixer's in-flow handles). Without
+        this wrapper, absolutely-positioned dots would resolve against an
+        ancestor instead of the handle box.
+      */}
+      <div
+        style={{
+          position: "relative",
+          width: HANDLE_SIZE,
+          height: HANDLE_SIZE,
+          pointerEvents: "none",
+        }}
+      >
+        {disabled ? (
+          <span
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              width: 9,
+              height: 9,
+              borderRadius: "50%",
+              background: "transparent",
+              border: `1.5px solid ${DISABLED_COLOR}`,
+              boxSizing: "border-box",
+            }}
+          />
+        ) : (
+          offsets.map((off, i) => {
+            const transform = isHorizontalHandle
+              ? `translate(-50%, calc(-50% + ${off}px))`
+              : `translate(calc(-50% + ${off}px), -50%)`;
+            return (
+              <span
+                key={i}
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  transform,
+                  width: DOT_SIZE,
+                  height: DOT_SIZE,
+                  borderRadius: "50%",
+                  background: color,
+                }}
+              />
+            );
+          })
+        )}
+      </div>
 
       {showTooltip && (
         <div
