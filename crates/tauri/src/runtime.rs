@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::{
-  nodes::{AudioBuffer, NodeTrait},
-  AudioEdge, AudioNode,
-};
+use crate::nodes::{AudioBuffer, NodeTrait};
 use cpal::Host;
 
 #[cfg(windows)]
@@ -211,6 +208,286 @@ impl Runtime {
     }
     std::time::Duration::from_secs_f64(self.buffer_size as f64 / self.sample_rate as f64)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime data model and Tauri commands
+// (moved from lib.rs in Phase 4 of the refactor)
+// ---------------------------------------------------------------------------
+
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::async_runtime::Mutex as AsyncMutex;
+use tauri::State;
+
+use crate::nodes::app_audio_capture::AppAudioCaptureNode;
+use crate::nodes::audio_input_device::AudioInputDeviceNode;
+use crate::nodes::audio_output_device::AudioOutputDeviceNode;
+use crate::nodes::mixer::MixerNode;
+use crate::nodes::spectrum_analyzer::SpectrumAnalyzerNode;
+use crate::nodes::virtual_audio_input::VirtualAudioInputNode;
+use crate::nodes::virtual_audio_output::VirtualAudioOutputNode;
+use crate::nodes::vst_node::VstNode;
+use crate::nodes::waveform_monitor::WaveformMonitorNode;
+use crate::AppData;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct AudioGraph {
+  pub nodes: Vec<AudioNode>,
+  pub edges: Vec<AudioEdge>,
+}
+
+/// Per-frame render data returned by `get_node_render_data` for visualizer nodes.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+pub(crate) enum NodeRenderData {
+  SpectrumAnalyzer { bins: Vec<f32> },
+  WaveformMonitor { samples: Vec<f32> },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+pub(crate) enum AudioNode {
+  AudioInputDevice(AudioInputDeviceNode),
+  AudioOutputDevice(AudioOutputDeviceNode),
+  VirtualAudioInput(VirtualAudioInputNode),
+  VirtualAudioOutput(VirtualAudioOutputNode),
+  SpectrumAnalyzer(SpectrumAnalyzerNode),
+  WaveformMonitor(WaveformMonitorNode),
+  AppAudioCapture(AppAudioCaptureNode),
+  Mixer(MixerNode),
+  Vst(VstNode),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AudioEdge {
+  pub id: String,
+
+  pub from: String,
+  pub to: String,
+  pub to_handle: Option<String>,
+
+  pub frequency: Option<u32>,
+  pub channels: Option<u16>,
+  pub bits_per_sample: Option<usize>,
+}
+
+pub(crate) fn start_runtime_thread(state: &mut AppData, mut runtime: Runtime) {
+  let running = Arc::new(AtomicBool::new(true));
+  let running_clone = running.clone();
+
+  let sleep_duration = runtime.buffer_duration();
+  println!("Enabling runtime with sleep duration: {:?}", sleep_duration);
+
+  let handle = std::thread::spawn(move || {
+    // Use a spin-loop with Instant for precise audio timing.
+    // std::thread::sleep on Windows has ~15.6ms granularity by default,
+    // which causes systematic underruns when sleep_duration < 15.6ms.
+    let mut next_tick = std::time::Instant::now() + sleep_duration;
+    while running_clone.load(Ordering::Relaxed) {
+      if let Err(e) = runtime.process() {
+        eprintln!("Error processing audio graph: {}", e);
+      }
+
+      // Spin-wait until the next tick for sub-millisecond accuracy.
+      // Yield to the OS when we're more than 2ms away to reduce CPU usage,
+      // then spin for the final stretch.
+      loop {
+        let now = std::time::Instant::now();
+        if now >= next_tick {
+          break;
+        }
+        let remaining = next_tick - now;
+        if remaining > std::time::Duration::from_millis(2) {
+          std::thread::sleep(std::time::Duration::from_millis(1));
+        } else {
+          std::hint::spin_loop();
+        }
+      }
+      next_tick += sleep_duration;
+
+      // If we fell behind (e.g. system stall), snap forward to avoid
+      // a burst of catch-up iterations.
+      let now = std::time::Instant::now();
+      if next_tick < now {
+        next_tick = now + sleep_duration;
+      }
+    }
+
+    println!("Runtime thread stopped.");
+    runtime
+  });
+
+  state.runtime_running = Some(running);
+  state.runtime_thread = Some(handle);
+}
+
+pub(crate) fn stop_runtime_thread(state: &mut AppData) -> Result<(), String> {
+  if let Some(running) = state.runtime_running.take() {
+    running.store(false, Ordering::Relaxed);
+  }
+
+  if let Some(handle) = state.runtime_thread.take() {
+    let runtime = handle
+      .join()
+      .map_err(|_| "Failed to join runtime thread".to_string())?;
+    // Restore the runtime so enable_runtime can restart it without
+    // requiring a full setup_runtime call.
+    state.runtime = Some(runtime);
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn setup_runtime(
+  state: State<'_, AsyncMutex<AppData>>,
+  graph: AudioGraph,
+  host: String,
+  buffer_size: u32,
+) -> Result<(), String> {
+  println!("Setting up audio graph: {:?}", graph);
+  let host_id = match cpal::available_hosts()
+    .into_iter()
+    .find(|h| format!("{:?}", h) == host)
+  {
+    Some(h) => h,
+    None => return Err(format!("Audio host not found: {}", host)),
+  };
+  let audio_host = cpal::host_from_id(host_id).unwrap();
+
+  let sample_rate = graph
+    .edges
+    .first()
+    .and_then(|e| e.frequency)
+    .unwrap_or(48000);
+
+  let mut app_state = state.lock().await;
+
+  let was_running = app_state.runtime_running.is_some();
+  if was_running {
+    stop_runtime_thread(&mut app_state)?;
+  }
+
+  // Dispose the previous runtime (restored by stop_runtime_thread, or idle).
+  if let Some(mut old_runtime) = app_state.runtime.take() {
+    if let Err(e) = old_runtime.dispose_nodes() {
+      eprintln!("Error disposing previous runtime nodes: {}", e);
+    }
+  }
+
+  #[cfg(windows)]
+  let driver_handle = app_state.driver_handle.clone();
+  #[cfg(not(windows))]
+  let driver_handle: Option<()> = None;
+
+  // Build spectrum buffers for any SpectrumAnalyzer nodes in the new graph.
+  let mut spectrum_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>> = BTreeMap::new();
+  for node in &graph.nodes {
+    if let AudioNode::SpectrumAnalyzer(n) = node {
+      spectrum_buffers.insert(
+        n.id().to_string(),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+      );
+    }
+  }
+  app_state.spectrum_buffers = spectrum_buffers.clone();
+
+  // Build waveform buffers for any WaveformMonitor nodes in the new graph.
+  let mut waveform_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>> = BTreeMap::new();
+  for node in &graph.nodes {
+    if let AudioNode::WaveformMonitor(n) = node {
+      waveform_buffers.insert(
+        n.id().to_string(),
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+      );
+    }
+  }
+  app_state.waveform_buffers = waveform_buffers.clone();
+
+  drop(app_state);
+
+  let mut runtime = Runtime::new(
+    buffer_size,
+    sample_rate,
+    graph.nodes,
+    graph.edges,
+    audio_host,
+    driver_handle,
+    spectrum_buffers,
+    waveform_buffers,
+  );
+
+  runtime.init_nodes()?;
+
+  // Extract ctrl_cid from VST nodes and store in AppData.
+  let mut vst_ctrl_cids: BTreeMap<String, [u8; 16]> = BTreeMap::new();
+  for node in &runtime.nodes {
+    if let AudioNode::Vst(n) = node {
+      if let Some(cid) = n.ctrl_cid {
+        vst_ctrl_cids.insert(n.id().to_string(), cid);
+      }
+    }
+  }
+
+  let mut state = state.lock().await;
+  state.vst_ctrl_cids = vst_ctrl_cids;
+  state.runtime = Some(runtime);
+
+  // Always start (or restart) runtime after applying graph so users
+  // immediately hear the route without requiring a separate enable step.
+  if let Some(runtime_to_start) = state.runtime.take() {
+    start_runtime_thread(&mut state, runtime_to_start);
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub async fn enable_runtime(state: State<'_, AsyncMutex<AppData>>) -> Result<(), String> {
+  let mut state = state.lock().await;
+  if let Some(runtime) = state.runtime.take() {
+    start_runtime_thread(&mut state, runtime);
+  }
+  Ok(())
+}
+
+/// Return per-frame render data for all active visualizer nodes.
+/// Returns a map of node_id → NodeRenderData covering every visualizer buffer.
+/// A single call fetches data for all visualizer nodes in the current graph.
+#[tauri::command]
+pub async fn get_node_render_data(
+  state: State<'_, AsyncMutex<AppData>>,
+) -> Result<BTreeMap<String, NodeRenderData>, String> {
+  let app = state.lock().await;
+  let mut result: BTreeMap<String, NodeRenderData> = BTreeMap::new();
+  for (id, buf) in &app.spectrum_buffers {
+    result.insert(
+      id.clone(),
+      NodeRenderData::SpectrumAnalyzer {
+        bins: buf.lock().unwrap().clone(),
+      },
+    );
+  }
+  for (id, buf) in &app.waveform_buffers {
+    result.insert(
+      id.clone(),
+      NodeRenderData::WaveformMonitor {
+        samples: buf.lock().unwrap().clone(),
+      },
+    );
+  }
+  Ok(result)
+}
+
+#[tauri::command]
+pub async fn disable_runtime(state: State<'_, AsyncMutex<AppData>>) -> Result<(), String> {
+  let mut state = state.lock().await;
+  stop_runtime_thread(&mut state)?;
+
+  println!("Runtime disabled.");
+  Ok(())
 }
 
 #[cfg(test)]
