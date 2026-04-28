@@ -1,6 +1,7 @@
 import { Handle, Position, useNodeId } from "@xyflow/react";
 import { useState } from "react";
 
+import { STRAND_OFFSETS } from "@/components/AudioEdge";
 import { parseAudioEdgeType } from "@/lib/utils";
 import { useAppStore } from "@/state";
 
@@ -35,6 +36,17 @@ function rateLabel(rate: number | undefined): string {
   return String(rate);
 }
 
+/** Dot offsets along the strand-spread axis. Capped at 4 to match AudioEdge. */
+function dotOffsets(channels: number | undefined): number[] {
+  if (!channels || channels < 1) return [];
+  const c = Math.min(channels, 4);
+  return STRAND_OFFSETS[c];
+}
+
+const HANDLE_SIZE = 18;
+const DOT_SIZE = 4;
+const DISABLED_COLOR = "#6e7681";
+
 interface AudioHandleProps {
   type: "source" | "target";
   position: Position;
@@ -50,11 +62,14 @@ interface AudioHandleProps {
 /**
  * Audio-aware connection handle.
  *
- * - Renders a row of small colored dots equal to the channel count (1-4).
- *   For >=5 channels the dots collapse into a single ring with a numeric badge.
- * - The dot/ring color is the sample-rate hue (same palette as AudioEdge).
- * - When the handle is not currently connected, hovering reveals a tooltip
- *   with the exact `Nch . rate . bits` triple.
+ * Visual encoding (matches AudioEdge):
+ *   - Channel count -> N dots (1..4, capped) arranged perpendicular to the
+ *     handle direction. Dot centers align with the corresponding edge strand
+ *     offsets so the edge starts/ends exactly at a dot.
+ *   - Sample rate   -> dot color (hue palette).
+ *   - Disabled / no format -> single hollow gray circle.
+ *
+ * Hover tooltip (only when not connected) shows `Nch . rate . bits`.
  */
 export function AudioHandle(props: AudioHandleProps) {
   const nodeId = useNodeId();
@@ -82,13 +97,19 @@ export function AudioHandle(props: AudioHandleProps) {
   const channels = fmt?.channels;
   const sampleRate = fmt?.frequency;
   const bits = fmt?.bitsPerSample;
-  const color = hueForRate(sampleRate);
 
   const [hovered, setHovered] = useState(false);
   const showTooltip = hovered && !isConnected;
 
-  const dotCount = channels ?? 0;
-  const showRing = dotCount === 0 || dotCount >= 5;
+  const offsets = dotOffsets(channels);
+  const disabled = !fmt || offsets.length === 0;
+  const color = disabled ? DISABLED_COLOR : hueForRate(sampleRate);
+
+  // Strand-spread axis is perpendicular to the handle's outward direction.
+  // Left / Right -> dots stack vertically (Y axis offsets).
+  // Top  / Bottom -> dots line up horizontally (X axis offsets).
+  const isHorizontalHandle =
+    props.position === Position.Left || props.position === Position.Right;
 
   // Tooltip placement: opposite the node body so it doesn't overlap node UI.
   const tooltipStyle: React.CSSProperties = (() => {
@@ -115,54 +136,53 @@ export function AudioHandle(props: AudioHandleProps) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        width: 18,
-        height: 14,
-        borderRadius: 7,
-        background: "#0e1116",
-        border: `1.5px solid ${color}`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 2,
-        padding: "0 2px",
+        width: HANDLE_SIZE,
+        height: HANDLE_SIZE,
+        borderRadius: HANDLE_SIZE / 2,
+        background: "transparent",
+        border: "none",
+        position: "relative",
         ...props.style,
       }}
     >
-      {showRing ? (
-        <div
+      {disabled ? (
+        <span
           style={{
-            width: 8,
-            height: 8,
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            width: 9,
+            height: 9,
             borderRadius: "50%",
-            border: `1.5px solid ${color}`,
             background: "transparent",
-            fontSize: 7,
-            color: color,
-            lineHeight: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontFamily: "ui-monospace, monospace",
-            fontWeight: 700,
+            border: `1.5px solid ${DISABLED_COLOR}`,
             pointerEvents: "none",
+            boxSizing: "border-box",
           }}
-        >
-          {dotCount >= 5 ? dotCount : ""}
-        </div>
+        />
       ) : (
-        Array.from({ length: dotCount }, (_, i) => (
-          <span
-            key={i}
-            style={{
-              width: dotCount <= 2 ? 4 : 3,
-              height: dotCount <= 2 ? 4 : 3,
-              borderRadius: "50%",
-              background: color,
-              flex: "0 0 auto",
-              pointerEvents: "none",
-            }}
-          />
-        ))
+        offsets.map((off, i) => {
+          const transform = isHorizontalHandle
+            ? `translate(-50%, calc(-50% + ${off}px))`
+            : `translate(calc(-50% + ${off}px), -50%)`;
+          return (
+            <span
+              key={i}
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: "50%",
+                transform,
+                width: DOT_SIZE,
+                height: DOT_SIZE,
+                borderRadius: "50%",
+                background: color,
+                pointerEvents: "none",
+              }}
+            />
+          );
+        })
       )}
 
       {showTooltip && (

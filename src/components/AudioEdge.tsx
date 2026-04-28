@@ -51,16 +51,20 @@ function bitStyle(bits: number): BitStyle {
 }
 
 /**
- * Returns vertical offsets for parallel strands (centered around 0).
- * Returns null for >=6 channels — render bundled (2 strands + count badge).
+ * Returns perpendicular offsets for parallel strands (centered around 0).
+ * Capped at 4 strands — the same offsets are used by AudioHandle so that
+ * edge endpoints align with the dot centers on the connected handles.
  */
-function strandOffsets(channels: number): number[] | null {
-  if (channels <= 1) return [0];
-  if (channels === 2) return [-3, 3];
-  if (channels === 3) return [-5, 0, 5];
-  if (channels === 4) return [-6, -2, 2, 6];
-  if (channels === 5) return [-8, -4, 0, 4, 8];
-  return null;
+export const STRAND_OFFSETS: Record<number, number[]> = {
+  1: [0],
+  2: [-3, 3],
+  3: [-5, 0, 5],
+  4: [-6, -2, 2, 6],
+};
+
+function strandOffsets(channels: number): number[] {
+  const c = Math.min(Math.max(channels, 1), 4);
+  return STRAND_OFFSETS[c];
 }
 
 /**
@@ -172,23 +176,15 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
   });
 
   const strandPaths: { d: string; key: string }[] = [];
-  if (offsets) {
-    for (let i = 0; i < offsets.length; i++) {
-      const d = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, offsets[i]);
-      strandPaths.push({ d, key: `s-${i}` });
-    }
-  } else {
-    for (let i = 0; i < 2; i++) {
-      const dy = i === 0 ? -4 : 4;
-      const d = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, dy);
-      strandPaths.push({ d, key: `b-${i}` });
-    }
+  for (let i = 0; i < offsets.length; i++) {
+    const d = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, offsets[i]);
+    strandPaths.push({ d, key: `s-${i}` });
   }
 
   const hitPath = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, 0);
 
   const chipLabel = `${channels}ch · ${rateLabel(sampleRate)} · ${bits >= 32 ? "32f" : bits}`;
-  const showInlineCountBadge = !offsets && !showChip;
+  const showInlineCountBadge = channels > 4 && !showChip;
 
   return (
     <>
@@ -211,7 +207,7 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
           d={p.d}
           fill="none"
           stroke={stroke}
-          strokeWidth={offsets ? bs.width : bs.width + 0.6}
+          strokeWidth={bs.width}
           strokeOpacity={bs.opacity}
           strokeDasharray={bs.dash}
           pointerEvents="none"
