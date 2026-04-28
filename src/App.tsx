@@ -8,6 +8,7 @@ import { MouseEvent as ReactMouseEvent, useCallback, useEffect, useState } from 
 import { ContextMenu } from "./components/ContextMenu";
 import Menu from "./components/Menu";
 
+import { edgeTypes } from "./edges/AudioEdge";
 import { useAppStore } from "./state";
 import { CableGraphFile, EdgeType, NodeType, nodeTypes } from "./types";
 
@@ -130,6 +131,8 @@ function App() {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        defaultEdgeOptions={{ type: "audio" }}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}

@@ -374,7 +374,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       return;
     }
 
-    const nextEdges = addEdge(connection, edges);
+    const nextEdges = addEdge({ ...connection, type: "audio" }, edges);
     set({ edges: nextEdges });
 
     const newEdge = nextEdges.find(
@@ -397,12 +397,13 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   },
 
   loadGraph: (nodes: NodeType[], edges: EdgeType[]) => {
-    set({ nodes, edges });
+    const typedEdges = edges.map((e) => (e.type ? e : { ...e, type: "audio" }));
+    set({ nodes, edges: typedEdges });
     fireAndForget(
       invoke("replace_graph", {
         graph: {
           nodes: nodes.map(serializeNode),
-          edges: edges.map(serializeEdge),
+          edges: typedEdges.map(serializeEdge),
         },
       }),
       "replace_graph",
