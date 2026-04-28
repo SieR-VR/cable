@@ -13,8 +13,8 @@ pub(crate) mod vst3_common;
 #[cfg(windows)]
 pub use driver::endpoint::rename_endpoint_elevated;
 
-use nodes::vst_node::{VstParamInfo, VstPluginInfo};
-use nodes::NodeTrait;
+use nodes::vst_node::VstPluginInfo;
+use nodes::NodeSharedStore;
 use runtime::AudioNode;
 
 /// A virtual audio device managed by the driver, independent of the audio graph.
@@ -46,17 +46,16 @@ struct AppData {
   spectrum_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
   /// Waveform buffers for WaveformMonitor nodes (node_id -> rolling sample window).
   waveform_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<f32>>>>,
-  /// Cached VST3 plugin scan results.
+  /// Cached VST3 plugin scan results (global, not per-node).
   vst_plugin_list: Vec<VstPluginInfo>,
-  /// VST3 parameter buffer (node_id → parameter list).
-  /// Populated from IEditController when the editor is opened.
-  vst_param_buffers: BTreeMap<String, Arc<std::sync::Mutex<Vec<VstParamInfo>>>>,
-  /// VST3 IEditController CID cache (node_id → 16-byte CID).
-  /// Populated after setup_runtime completes; read by open_vst_editor.
-  vst_ctrl_cids: BTreeMap<String, [u8; 16]>,
-  /// Open VST3 editor windows (node_id → handle). Windows-only.
-  #[cfg(windows)]
-  vst_editors: BTreeMap<String, crate::nodes::vst_node::VstEditorHandle>,
+  /// Type-erased per-node-instance shared state. Each node type stores its
+  /// own state struct (e.g. `VstNodeShared`) keyed by node id. Plugin nodes
+  /// added later can use the same mechanism.
+  node_shared_store: Arc<NodeSharedStore>,
+  /// Persistent node instances created via `create_node`. Used as the
+  /// dispatch target for `node_command` so that node-specific IPC works
+  /// regardless of whether the runtime is currently running.
+  nodes: BTreeMap<String, AudioNode>,
 }
 
 /// A visible top-level window enumerated via `EnumWindows`.
@@ -233,29 +232,35 @@ async fn read_text_file(path: String) -> Result<String, String> {
 // VST3 commands
 // ---------------------------------------------------------------------------
 
-/// Called at node creation time to run NodeTrait::create().
-/// For VST nodes, temporarily loads the DLL to extract ctrl_cid,
-/// enabling the editor to be opened without pressing Apply first.
+/// Called at node creation time to run NodeTrait::create() and register the
+/// instance into AppData. The persisted instance is the dispatch target for
+/// `node_command` and shares its mutable state with the runtime instance via
+/// `NodeSharedStore`.
 #[tauri::command]
 async fn create_node(state: State<'_, Mutex<AppData>>, node: AudioNode) -> Result<(), String> {
   let mut node = node;
+  let mut app = state.lock().await;
+  let store = app.node_shared_store.clone();
+
+  // Inject shared store into node-types that need it.
   if let AudioNode::Vst(ref mut n) = node {
-    use crate::nodes::NodeTrait;
-    n.create()?;
-    if let Some(cid) = n.ctrl_cid {
-      let mut app = state.lock().await;
-      app.vst_ctrl_cids.insert(n.id().to_string(), cid);
-    }
+    n.shared_store = Some(store.clone());
   }
+
+  // Run NodeTrait::create() which may populate shared state (e.g. VST
+  // ctrl_cid) before the node is used.
+  node.create_node()?;
+
+  let id = node.id().to_string();
+  app.nodes.insert(id, node);
   Ok(())
 }
 
 /// Unified IPC entry point for all node-specific subcommands.
 ///
-/// Dispatches by `node_type` to the appropriate per-type handler. For nodes
-/// whose state lives on the node instance itself, this would call into
-/// `NodeTrait::command`; for nodes whose state lives in `AppData` (like VST),
-/// it delegates to a free function in the node module.
+/// For static (no-instance) operations such as `vst:scan`, dispatches based
+/// on `node_type` only. For per-instance operations, looks up the node in
+/// `AppData.nodes` and forwards to `NodeTrait::command`.
 #[tauri::command]
 async fn node_command(
   state: State<'_, Mutex<AppData>>,
@@ -263,10 +268,27 @@ async fn node_command(
   node_id: String,
   data: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-  match node_type.as_str() {
-    "vst" => nodes::vst_node::handle_command(state, node_id, data).await,
-    other => Err(format!("node_command: unknown node type '{other}'")),
+  // Static (no node id) ops first.
+  if node_id.is_empty() {
+    return match (node_type.as_str(), data.get("op").and_then(|v| v.as_str())) {
+      ("vst", Some("scan")) => {
+        let plugins = nodes::vst_node::scan_plugins_command(state).await?;
+        serde_json::to_value(plugins).map_err(|e| e.to_string())
+      }
+      (t, op) => Err(format!(
+        "node_command: unsupported static op '{}' for type '{}'",
+        op.unwrap_or(""),
+        t
+      )),
+    };
   }
+
+  let mut app = state.lock().await;
+  let node = app
+    .nodes
+    .get_mut(&node_id)
+    .ok_or_else(|| format!("node_command: node '{node_id}' not found"))?;
+  node.command(data)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -283,10 +305,8 @@ pub fn run() {
       spectrum_buffers: BTreeMap::new(),
       waveform_buffers: BTreeMap::new(),
       vst_plugin_list: Vec::new(),
-      vst_param_buffers: BTreeMap::new(),
-      vst_ctrl_cids: BTreeMap::new(),
-      #[cfg(windows)]
-      vst_editors: BTreeMap::new(),
+      node_shared_store: Arc::new(NodeSharedStore::new()),
+      nodes: BTreeMap::new(),
     }))
     .invoke_handler(tauri::generate_handler![
       get_window_list,

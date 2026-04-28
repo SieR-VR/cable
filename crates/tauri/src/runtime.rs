@@ -259,6 +259,54 @@ pub(crate) enum AudioNode {
   Vst(VstNode),
 }
 
+impl AudioNode {
+  /// Returns the node's unique id, dispatching to `NodeTrait::id`.
+  pub fn id(&self) -> &str {
+    match self {
+      AudioNode::AudioInputDevice(n) => n.id(),
+      AudioNode::AudioOutputDevice(n) => n.id(),
+      AudioNode::VirtualAudioInput(n) => n.id(),
+      AudioNode::VirtualAudioOutput(n) => n.id(),
+      AudioNode::SpectrumAnalyzer(n) => n.id(),
+      AudioNode::WaveformMonitor(n) => n.id(),
+      AudioNode::AppAudioCapture(n) => n.id(),
+      AudioNode::Mixer(n) => n.id(),
+      AudioNode::Vst(n) => n.id(),
+    }
+  }
+
+  /// Dispatches `NodeTrait::create()` to the inner node. Renamed from
+  /// `create` to avoid clashing with the Tauri command.
+  pub fn create_node(&mut self) -> Result<(), String> {
+    match self {
+      AudioNode::AudioInputDevice(n) => n.create(),
+      AudioNode::AudioOutputDevice(n) => n.create(),
+      AudioNode::VirtualAudioInput(n) => n.create(),
+      AudioNode::VirtualAudioOutput(n) => n.create(),
+      AudioNode::SpectrumAnalyzer(n) => n.create(),
+      AudioNode::WaveformMonitor(n) => n.create(),
+      AudioNode::AppAudioCapture(n) => n.create(),
+      AudioNode::Mixer(n) => n.create(),
+      AudioNode::Vst(n) => n.create(),
+    }
+  }
+
+  /// Dispatches `NodeTrait::command` to the inner node.
+  pub fn command(&mut self, data: serde_json::Value) -> Result<serde_json::Value, String> {
+    match self {
+      AudioNode::AudioInputDevice(n) => n.command(data),
+      AudioNode::AudioOutputDevice(n) => n.command(data),
+      AudioNode::VirtualAudioInput(n) => n.command(data),
+      AudioNode::VirtualAudioOutput(n) => n.command(data),
+      AudioNode::SpectrumAnalyzer(n) => n.command(data),
+      AudioNode::WaveformMonitor(n) => n.command(data),
+      AudioNode::AppAudioCapture(n) => n.command(data),
+      AudioNode::Mixer(n) => n.command(data),
+      AudioNode::Vst(n) => n.command(data),
+    }
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AudioEdge {
@@ -406,12 +454,23 @@ pub async fn setup_runtime(
   }
   app_state.waveform_buffers = waveform_buffers.clone();
 
+  // Inject the shared node-state store into nodes that need it. The store is
+  // also held by `AppData.nodes` (via `create_node`), so editor handles,
+  // ctrl_cid, and parameter buffers stay synchronised across both.
+  let node_shared_store = app_state.node_shared_store.clone();
+  let mut graph_nodes = graph.nodes;
+  for node in &mut graph_nodes {
+    if let AudioNode::Vst(n) = node {
+      n.shared_store = Some(node_shared_store.clone());
+    }
+  }
+
   drop(app_state);
 
   let mut runtime = Runtime::new(
     buffer_size,
     sample_rate,
-    graph.nodes,
+    graph_nodes,
     graph.edges,
     audio_host,
     driver_handle,
@@ -421,18 +480,7 @@ pub async fn setup_runtime(
 
   runtime.init_nodes()?;
 
-  // Extract ctrl_cid from VST nodes and store in AppData.
-  let mut vst_ctrl_cids: BTreeMap<String, [u8; 16]> = BTreeMap::new();
-  for node in &runtime.nodes {
-    if let AudioNode::Vst(n) = node {
-      if let Some(cid) = n.ctrl_cid {
-        vst_ctrl_cids.insert(n.id().to_string(), cid);
-      }
-    }
-  }
-
   let mut state = state.lock().await;
-  state.vst_ctrl_cids = vst_ctrl_cids;
   state.runtime = Some(runtime);
 
   // Always start (or restart) runtime after applying graph so users

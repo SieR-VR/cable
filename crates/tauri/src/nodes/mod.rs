@@ -6,11 +6,14 @@ pub mod app_audio_capture;
 pub mod audio_input_device;
 pub mod audio_output_device;
 pub mod mixer;
+pub mod shared_store;
 pub mod spectrum_analyzer;
 pub mod virtual_audio_input;
 pub mod virtual_audio_output;
 pub mod vst_node;
 pub mod waveform_monitor;
+
+pub(crate) use shared_store::NodeSharedStore;
 
 /// Audio data buffer passed between nodes.
 ///

@@ -3,11 +3,12 @@
 /// Dynamically loads the selected VST3 plugin DLL and processes audio.
 /// Opens the DLL with libloading and calls IAudioProcessor via COM vtable dispatch.
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  nodes::{AudioBuffer, NodeTrait},
+  nodes::{AudioBuffer, NodeSharedStore, NodeTrait},
   runtime::{Runtime, RuntimeState},
   vst3_common as vst3_com,
 };
@@ -100,9 +101,16 @@ pub(crate) struct VstNode {
 
   #[serde(skip)]
   plugin: Option<Vst3Plugin>,
-  /// CID obtained from IComponent::getControllerClassId(). Set after load_plugin.
+  /// Shared state store. Cloned in from `AppData` when the node is created
+  /// (via `create_node` Tauri command) or when `setup_runtime` constructs
+  /// fresh node instances from the deserialized graph.
+  ///
+  /// Per-node mutable state (ctrl_cid, param_buffer, editor handle) lives in
+  /// `VstNodeShared` keyed by `self.id` inside this store, so the AppData
+  /// command-dispatch instance and the Runtime audio-thread instance share
+  /// the same data.
   #[serde(skip)]
-  pub ctrl_cid: Option<[u8; 16]>,
+  pub(crate) shared_store: Option<Arc<NodeSharedStore>>,
 }
 
 impl NodeTrait for VstNode {
@@ -158,6 +166,58 @@ impl NodeTrait for VstNode {
       )
     }
   }
+
+  fn command(&mut self, data: serde_json::Value) -> Result<serde_json::Value, String> {
+    let op = data
+      .get("op")
+      .and_then(|v| v.as_str())
+      .ok_or_else(|| "missing 'op' field".to_string())?
+      .to_string();
+    let shared = self
+      .shared()
+      .ok_or_else(|| "VstNode shared store not initialised".to_string())?;
+
+    match op.as_str() {
+      "getParams" => {
+        let params = shared
+          .param_buffer
+          .lock()
+          .map_err(|e| e.to_string())?
+          .clone();
+        serde_json::to_value(params).map_err(|e| e.to_string())
+      }
+      "setParam" => {
+        let param_id = data
+          .get("paramId")
+          .and_then(|v| v.as_u64())
+          .ok_or_else(|| "missing 'paramId'".to_string())? as u32;
+        let value = data
+          .get("value")
+          .and_then(|v| v.as_f64())
+          .ok_or_else(|| "missing 'value'".to_string())?;
+        Self::do_set_param(&shared, param_id, value);
+        Ok(serde_json::Value::Null)
+      }
+      #[cfg(windows)]
+      "openEditor" => {
+        let plugin_path = data
+          .get("pluginPath")
+          .and_then(|v| v.as_str())
+          .ok_or_else(|| "missing 'pluginPath'".to_string())?
+          .to_string();
+        Self::do_open_editor(&shared, self.id.clone(), plugin_path)?;
+        Ok(serde_json::Value::Null)
+      }
+      #[cfg(windows)]
+      "closeEditor" => {
+        Self::do_close_editor(&shared);
+        Ok(serde_json::Value::Null)
+      }
+      #[cfg(not(windows))]
+      "openEditor" | "closeEditor" => Err("VST editor is Windows-only".into()),
+      other => Err(format!("unknown VST op: {other}")),
+    }
+  }
 }
 
 impl VstNode {
@@ -192,7 +252,8 @@ impl VstNode {
     if let Some(comp_ptr) = factory.create_instance(&audio_cid, &vst3_com::IID_ICOMPONENT) {
       let component = comp_ptr as *mut vst3_com::IComponent;
       if (*component).initialize(std::ptr::null_mut()) == vst3_com::K_RESULT_OK {
-        self.ctrl_cid = (*component).get_controller_class_id();
+        let cid = (*component).get_controller_class_id();
+        self.store_ctrl_cid(cid);
         (*component).terminate();
       }
       (*component).release();
@@ -280,8 +341,9 @@ impl VstNode {
     (*component).set_active(true);
     (*processor).set_processing(true);
 
-    // Store ctrl_cid so the editor thread can reuse it without reloading the DLL.
-    self.ctrl_cid = (*component).get_controller_class_id();
+    // Cache ctrl_cid so the editor thread can reuse it without reloading the DLL.
+    let cid = (*component).get_controller_class_id();
+    self.store_ctrl_cid(cid);
 
     self.plugin = Some(Vst3Plugin {
       lib,
@@ -577,12 +639,176 @@ fn scan_single_dll(dll_path: &str, fallback_name: &str) -> Result<VstPluginInfo,
 }
 
 // ============================================================================
-// VST3 Tauri command handlers (moved from lib.rs in Phase 5)
+// Per-instance shared state (NodeSharedStore-backed)
 // ============================================================================
 
 use crate::AppData;
-use std::sync::Arc;
 use tauri::{async_runtime::Mutex as AsyncMutex, State};
+
+/// Per-VstNode mutable state shared between the AppData command-dispatch
+/// instance and the Runtime audio-thread instance via `NodeSharedStore`.
+#[derive(Default)]
+pub(crate) struct VstNodeShared {
+  /// IEditController class id, populated by `extract_ctrl_cid` /
+  /// `load_plugin`. Read by `openEditor` to instantiate the editor in the
+  /// editor thread.
+  pub ctrl_cid: std::sync::Mutex<Option<[u8; 16]>>,
+  /// Latest parameter snapshot. Written by the editor thread and by
+  /// `setParam`; read by `getParams`.
+  pub param_buffer: Arc<std::sync::Mutex<Vec<VstParamInfo>>>,
+  /// Currently-open editor handle (Windows-only).
+  #[cfg(windows)]
+  pub editor: std::sync::Mutex<Option<VstEditorHandle>>,
+}
+
+impl VstNode {
+  /// Returns the shared state for this node, allocating it on first access.
+  /// Returns `None` only if `shared_store` was never injected.
+  pub(crate) fn shared(&self) -> Option<Arc<VstNodeShared>> {
+    let store = self.shared_store.as_ref()?;
+    store.get_or_init::<VstNodeShared, _>(&self.id, VstNodeShared::default)
+  }
+
+  /// Writes the controller class id into shared state when available.
+  pub(crate) fn store_ctrl_cid(&self, cid: Option<[u8; 16]>) {
+    let Some(cid) = cid else {
+      return;
+    };
+    if let Some(shared) = self.shared() {
+      if let Ok(mut slot) = shared.ctrl_cid.lock() {
+        *slot = Some(cid);
+      }
+    }
+  }
+
+  /// Updates a parameter value in the shared buffer and forwards it to the
+  /// editor window if one is open (Windows).
+  pub(crate) fn do_set_param(shared: &Arc<VstNodeShared>, param_id: u32, value: f64) {
+    if let Ok(mut params) = shared.param_buffer.lock() {
+      if let Some(p) = params.iter_mut().find(|p| p.id == param_id) {
+        p.value = value;
+      }
+    }
+
+    #[cfg(windows)]
+    {
+      if let Ok(editor) = shared.editor.lock() {
+        if let Some(handle) = editor.as_ref() {
+          let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+          if hwnd_val != 0 {
+            let _ = handle.param_tx.try_send((param_id, value));
+            unsafe {
+              use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+              use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+              let _ = PostMessageW(
+                Some(HWND(hwnd_val as *mut _)),
+                WM_VST_PARAM,
+                WPARAM(0),
+                LPARAM(0),
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /// Opens (or focuses) the VST3 editor window for this node.
+  #[cfg(windows)]
+  pub(crate) fn do_open_editor(
+    shared: &Arc<VstNodeShared>,
+    node_id: String,
+    plugin_path: String,
+  ) -> Result<(), String> {
+    let mut editor_slot = shared
+      .editor
+      .lock()
+      .map_err(|e| format!("editor lock poisoned: {e}"))?;
+
+    if let Some(handle) = editor_slot.as_ref() {
+      let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+      if hwnd_val != 0 {
+        unsafe {
+          use windows::Win32::Foundation::HWND;
+          use windows::Win32::UI::WindowsAndMessaging::{
+            SetForegroundWindow, ShowWindow, SW_RESTORE,
+          };
+          let hwnd = HWND(hwnd_val as *mut _);
+          let _ = ShowWindow(hwnd, SW_RESTORE);
+          let _ = SetForegroundWindow(hwnd);
+        }
+        return Ok(());
+      }
+    }
+    // Stale handle (window already closed). Drop without joining; the worker
+    // thread will exit on its own once Win32 cleanup finishes.
+    *editor_slot = None;
+
+    let ctrl_cid = shared
+      .ctrl_cid
+      .lock()
+      .map_err(|e| format!("ctrl_cid lock poisoned: {e}"))?
+      .ok_or_else(|| "ctrl_cid not found. Please press Apply first.".to_string())?;
+
+    let hwnd_arc = Arc::new(std::sync::atomic::AtomicIsize::new(0));
+    let params_arc = shared.param_buffer.clone();
+    let (param_tx, param_rx) = std::sync::mpsc::sync_channel::<(u32, f64)>(64);
+
+    let hwnd_clone = hwnd_arc.clone();
+    let params_clone = params_arc.clone();
+    let node_id_clone = node_id.clone();
+
+    let thread = std::thread::spawn(move || {
+      run_vst_editor_thread(
+        plugin_path,
+        node_id_clone,
+        ctrl_cid,
+        hwnd_clone,
+        param_rx,
+        params_clone,
+      );
+    });
+
+    *editor_slot = Some(VstEditorHandle {
+      hwnd: hwnd_arc,
+      param_tx,
+      params: params_arc,
+      thread: Some(thread),
+    });
+    Ok(())
+  }
+
+  /// Closes the editor window (best-effort) and detaches the worker thread.
+  #[cfg(windows)]
+  pub(crate) fn do_close_editor(shared: &Arc<VstNodeShared>) {
+    let mut editor_slot = match shared.editor.lock() {
+      Ok(g) => g,
+      Err(_) => return,
+    };
+    if let Some(handle) = editor_slot.take() {
+      let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+      if hwnd_val != 0 {
+        unsafe {
+          use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+          use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+          let _ = PostMessageW(
+            Some(HWND(hwnd_val as *mut _)),
+            WM_CLOSE,
+            WPARAM(0),
+            LPARAM(0),
+          );
+        }
+      }
+      // JoinHandle dropped without join — the worker thread continues until
+      // Win32/COM cleanup finishes and exits on its own.
+      drop(handle);
+    }
+  }
+}
+
+// ============================================================================
+// Static (no-node) Tauri command: VST3 plugin scan
+// ============================================================================
 
 /// Scans the system for VST3 plugins and returns the list.
 /// The result is cached in AppData.
@@ -595,175 +821,9 @@ pub(crate) async fn scan_plugins_command(
   Ok(plugins)
 }
 
-/// Returns the parameter list for a plugin.
-/// Returns cached values when the editor is open.
-pub(crate) async fn get_vst_params(
-  state: State<'_, AsyncMutex<AppData>>,
-  node_id: String,
-) -> Result<Vec<VstParamInfo>, String> {
-  let app = state.lock().await;
-  if let Some(buf) = app.vst_param_buffers.get(&node_id) {
-    Ok(buf.lock().map_err(|e| e.to_string())?.clone())
-  } else {
-    Ok(Vec::new())
-  }
-}
-
-/// Sets a single parameter value from the editor window.
-pub(crate) async fn set_vst_param(
-  state: State<'_, AsyncMutex<AppData>>,
-  node_id: String,
-  param_id: u32,
-  value: f64,
-) -> Result<(), String> {
-  let app = state.lock().await;
-
-  // Update shared parameter buffer
-  if let Some(buf) = app.vst_param_buffers.get(&node_id) {
-    if let Ok(mut params) = buf.lock() {
-      if let Some(p) = params.iter_mut().find(|p| p.id == param_id) {
-        p.value = value;
-      }
-    }
-  }
-
-  // Forward parameter to editor thread
-  #[cfg(windows)]
-  {
-    if let Some(handle) = app.vst_editors.get(&node_id) {
-      let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
-      if hwnd_val != 0 {
-        let _ = handle.param_tx.try_send((param_id, value));
-        unsafe {
-          use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-          use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
-          let _ = PostMessageW(
-            Some(HWND(hwnd_val as *mut _)),
-            WM_VST_PARAM,
-            WPARAM(0),
-            LPARAM(0),
-          );
-        }
-      }
-    }
-  }
-
-  Ok(())
-}
-
 // WM_USER + 1 — triggers parameter channel processing in the editor WndProc
 #[cfg(windows)]
 const WM_VST_PARAM: u32 = windows::Win32::UI::WindowsAndMessaging::WM_USER + 1;
-
-/// Opens a VST3 editor window.
-/// If already open, brings the window to the foreground.
-#[cfg(windows)]
-pub(crate) async fn open_vst_editor(
-  state: State<'_, AsyncMutex<AppData>>,
-  node_id: String,
-  plugin_path: String,
-) -> Result<(), String> {
-  let mut app = state.lock().await;
-
-  // If the editor is already open, focus it; if hwnd == 0 the window was closed — remove stale entry
-  if let Some(handle) = app.vst_editors.get(&node_id) {
-    let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
-    if hwnd_val != 0 {
-      unsafe {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{
-          SetForegroundWindow, ShowWindow, SW_RESTORE,
-        };
-        let hwnd = HWND(hwnd_val as *mut _);
-        let _ = ShowWindow(hwnd, SW_RESTORE);
-        let _ = SetForegroundWindow(hwnd);
-      }
-      return Ok(());
-    }
-  }
-  // hwnd == 0 or no entry: remove stale handle and create a new one
-  if let Some(mut stale) = app.vst_editors.remove(&node_id) {
-    if let Some(t) = stale.thread.take() {
-      drop(app);
-      let _: Result<_, _> = t.join();
-      app = state.lock().await;
-    }
-  }
-
-  let hwnd_arc = Arc::new(std::sync::atomic::AtomicIsize::new(0));
-  let params_arc: Arc<std::sync::Mutex<Vec<VstParamInfo>>> =
-    Arc::new(std::sync::Mutex::new(Vec::new()));
-  let (param_tx, param_rx) = std::sync::mpsc::sync_channel::<(u32, f64)>(64);
-
-  let ctrl_cid = app
-    .vst_ctrl_cids
-    .get(&node_id)
-    .copied()
-    .ok_or_else(|| format!("ctrl_cid not found. Please press Apply first."))?;
-
-  let hwnd_clone = hwnd_arc.clone();
-  let params_clone = params_arc.clone();
-  let node_id_clone = node_id.clone();
-
-  let thread = std::thread::spawn(move || {
-    run_vst_editor_thread(
-      plugin_path,
-      node_id_clone,
-      ctrl_cid,
-      hwnd_clone,
-      param_rx,
-      params_clone,
-    );
-  });
-
-  // Register Arc in param_buffers so get_vst_params returns an empty list even
-  // before the editor thread has populated it.
-  app
-    .vst_param_buffers
-    .insert(node_id.clone(), params_arc.clone());
-
-  app.vst_editors.insert(
-    node_id,
-    VstEditorHandle {
-      hwnd: hwnd_arc,
-      param_tx,
-      params: params_arc,
-      thread: Some(thread),
-    },
-  );
-  Ok(())
-}
-
-/// Closes a VST3 editor window.
-#[cfg(windows)]
-pub(crate) async fn close_vst_editor(
-  state: State<'_, AsyncMutex<AppData>>,
-  node_id: String,
-) -> Result<(), String> {
-  let mut app = state.lock().await;
-  if let Some(handle) = app.vst_editors.get(&node_id) {
-    let hwnd_val = handle.hwnd.load(std::sync::atomic::Ordering::SeqCst);
-    if hwnd_val != 0 {
-      unsafe {
-        use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-        use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
-        let _ = PostMessageW(
-          Some(HWND(hwnd_val as *mut _)),
-          WM_CLOSE,
-          WPARAM(0),
-          LPARAM(0),
-        );
-      }
-    }
-  }
-  if let Some(mut handle) = app.vst_editors.remove(&node_id) {
-    if let Some(t) = handle.thread.take() {
-      drop(app); // Release Mutex before join to avoid deadlock
-      let _: Result<_, _> = t.join();
-    }
-  }
-  Ok(())
-}
 
 /// VST3 editor window handle (Windows-only).
 #[cfg(windows)]
@@ -1000,64 +1060,5 @@ unsafe extern "system" fn vst_editor_wnd_proc(
       LRESULT(0)
     }
     _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-  }
-}
-
-// ============================================================================
-// Unified VST command dispatcher (Phase 5)
-// ============================================================================
-
-/// Single entry point for all VST node IPC commands.
-/// Dispatches on `data["op"]`.
-pub(crate) async fn handle_command(
-  state: State<'_, AsyncMutex<AppData>>,
-  node_id: String,
-  data: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-  let op = data
-    .get("op")
-    .and_then(|v| v.as_str())
-    .ok_or_else(|| "missing 'op' field".to_string())?
-    .to_string();
-
-  match op.as_str() {
-    "scan" => {
-      let plugins = scan_plugins_command(state.clone()).await?;
-      serde_json::to_value(plugins).map_err(|e| e.to_string())
-    }
-    "getParams" => {
-      let params = get_vst_params(state.clone(), node_id).await?;
-      serde_json::to_value(params).map_err(|e| e.to_string())
-    }
-    "setParam" => {
-      let param_id = data
-        .get("paramId")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| "missing 'paramId'".to_string())? as u32;
-      let value = data
-        .get("value")
-        .and_then(|v| v.as_f64())
-        .ok_or_else(|| "missing 'value'".to_string())?;
-      set_vst_param(state.clone(), node_id, param_id, value).await?;
-      Ok(serde_json::Value::Null)
-    }
-    #[cfg(windows)]
-    "openEditor" => {
-      let plugin_path = data
-        .get("pluginPath")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing 'pluginPath'".to_string())?
-        .to_string();
-      open_vst_editor(state.clone(), node_id, plugin_path).await?;
-      Ok(serde_json::Value::Null)
-    }
-    #[cfg(windows)]
-    "closeEditor" => {
-      close_vst_editor(state.clone(), node_id).await?;
-      Ok(serde_json::Value::Null)
-    }
-    #[cfg(not(windows))]
-    "openEditor" | "closeEditor" => Err("VST editor is Windows-only".into()),
-    other => Err(format!("unknown VST op: {other}")),
   }
 }
