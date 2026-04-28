@@ -1084,7 +1084,9 @@ pub(crate) fn run_vst_editor_thread(
         lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
         ..Default::default()
       };
+      println!("VST3 editor thread: calling RegisterClassExW");
       RegisterClassExW(&wc);
+      println!("VST3 editor thread: calling CreateWindowExW w={w} h={h}");
 
       let hwnd = CreateWindowExW(
         windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
@@ -1101,6 +1103,8 @@ pub(crate) fn run_vst_editor_thread(
         None,
       )
       .map_err(|e| format!("CreateWindowExW failed: {e}"))?;
+
+      println!("VST3 editor thread: CreateWindowExW ok, hwnd={:?}", hwnd);
 
       // Set up EditorWindowState
       let state = Box::new(EditorWindowState {
@@ -1154,7 +1158,7 @@ pub(crate) fn run_vst_editor_thread(
     })();
 
     if let Err(e) = result {
-      eprintln!("VST editor thread error: {e}");
+      println!("VST editor thread error: {e}");
       hwnd_out.store(0, Ordering::SeqCst);
     }
 
