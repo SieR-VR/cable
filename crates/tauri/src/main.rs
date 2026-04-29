@@ -3,7 +3,7 @@
 
 fn main() {
   // ---------------------------------------------------------------------------
-  // Elevated helper mode: cable-ui.exe --rename-endpoint <endpoint_id> <name>
+  // Elevated helper mode: Cable.exe --rename-endpoint <endpoint_id> <name>
   //
   // When the main app needs to write PKEY_Device_DeviceDesc it re-launches
   // itself with these arguments via ShellExecute "runas".  This sub-process

@@ -1,6 +1,6 @@
 [package]
 name = "cable-tauri"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cable tauri application"
 authors = ["SieR <me@sier-vr.dev>"]
 edition = "2021"
