@@ -1,5 +1,6 @@
 import { Edge, Node, NodeTypes } from "@xyflow/react";
 
+import { EdgeType as GraphEdgeType } from "./graph/edge-type";
 import { NodeDefinition } from "./node-definition";
 import appAudioCaptureDef from "./nodes/AppAudioCapture";
 import audioInputDeviceDef from "./nodes/AudioInputDevice";
@@ -111,15 +112,19 @@ export function serializeNode(node: NodeType): AudioNode {
 }
 
 export function serializeEdge(edge: EdgeType): AudioEdge {
+  const t = edge.data?.edgeType;
+  const audio = t && t.kind === "audio" ? t : null;
   return {
     id: edge.id,
     from: edge.source,
     fromHandle: edge.sourceHandle ?? undefined,
     to: edge.target,
     toHandle: edge.targetHandle ?? undefined,
-    frequency: edge.data?.frequency,
-    channels: edge.data?.channels,
-    bitsPerSample: edge.data?.bitsPerSample,
+    edgeType: t,
+    invalid: edge.data?.invalid,
+    frequency: audio?.frequency ?? edge.data?.frequency,
+    channels: audio?.channels ?? edge.data?.channels,
+    bitsPerSample: audio?.bitsPerSample ?? edge.data?.bitsPerSample,
   };
 }
 
@@ -152,6 +157,16 @@ export type AudioEdge = {
   to: string;
   /** Target handle ID (e.g. "input-a", "input-b" for Mixer node) */
   toHandle?: string;
+
+  /**
+   * Phase 1: structured edge type carried alongside the legacy flat fields.
+   * Determined by the source node's `producedOutputs[fromHandle]` once the
+   * Phase 4 validation engine is wired up. UI code may read this in addition
+   * to the flat fields below.
+   */
+  edgeType?: GraphEdgeType;
+  /** Set by the validation engine when the sink's expected input doesn't match `edgeType`. */
+  invalid?: boolean;
 
   frequency?: number;
   channels?: number;
