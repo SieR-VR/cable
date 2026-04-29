@@ -192,7 +192,7 @@ This document records kernel-mode safety fixes applied to `driver/` with a focus
 
 ## Reproducible Static Analysis Commands
 
-Run from repository root (`C:\Users\nwh63\cable`).
+Run from repository root.
 
 ```powershell
 # 1) Clean driver build via project script (sanity gate)

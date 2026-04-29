@@ -5,7 +5,7 @@ vulnerabilities identified in the Cable codebase.
 
 ---
 
-## VST3 Node (`crates/tauri/src/nodes/vst_node.rs`)
+## VST3 Node (`crates/tauri/src/nodes/vst.rs`)
 
 ### Single output bus is always used
 **Location:** `process_with_plugin`, line `let bus_idx: usize = 0; // use single output bus`
@@ -40,7 +40,7 @@ scanning will be incorrect for most plugins.
 ---
 
 ### `unsafe` blocks throughout VST3 COM dispatch have no null-pointer guards after the vtable call
-**Location:** `vst_node.rs`, `vst3_com.rs`
+**Location:** `vst.rs`, `vst3_common.rs`
 
 **Description:** Raw COM pointers (`*mut IComponent`, `*mut IAudioProcessor`, etc.)
 are dereferenced after querying the vtable, but intermediate results (e.g., the
@@ -53,20 +53,20 @@ incompatible VST3 plugin.
 
 ---
 
-## VST3 Editor (`crates/tauri/src/lib.rs`)
+## VST3 Editor (`crates/tauri/src/nodes/vst.rs`)
 
-### `open_vst_editor` requires `apply_graph` to be called first on some code paths
-**Location:** `open_vst_editor` command, `vst_ctrl_cids` lookup
+### Editor open requires the node to have been `init()`-ed
+**Location:** `VstNode::command(op="openEditor")` → `do_open_editor`
 
-**Description:** If a VST node was never passed through `create_node` (i.e., the
-user restored a saved graph and opened the editor without pressing Apply),
-`ctrl_cid` will not be present in `vst_ctrl_cids` and the command returns an error
-message.
+**Description:** Opening the VST editor relies on the editor thread spawned by
+`init()` (and on `ctrl_cid`/`audio_cid` populated from the plugin factory at
+init time). If the runtime has never seen the node (e.g. graph loaded but
+validation never produced a `replace_graph` push), the editor cannot open and
+the `node_command` returns an error.
 
-**Error message:** `"ctrl_cid not found. Please press Apply first."`
-
-**Mitigation:** On graph load, proactively call `create_node` for every VST node to
-pre-populate `vst_ctrl_cids`.
+**Mitigation:** Ensure the graph is fully validated and pushed before exposing
+the "Open Editor" UI affordance, or trigger an explicit `add_node` on graph
+load.
 
 ---
 
@@ -85,7 +85,7 @@ due to a plugin crash during `attached()`) the `Box` will be leaked, holding a l
 ## Audio Device Nodes (`crates/tauri/src/nodes/audio_output_device.rs`, `audio_input_device.rs`)
 
 ### `unwrap()` in device enumeration panics if cpal returns an error
-**Location:** `get_audio_devices` command in `lib.rs` (lines 273–299)
+**Location:** `get_audio_devices` command in `lib.rs`
 
 **Description:** Several calls in the device-enumeration block use `.unwrap()` on
 `DeviceTrait` methods (`description()`, `id()`, `default_input_config()`). If a
@@ -174,7 +174,7 @@ reflected after `apply_graph` updates the node data.
 ## General
 
 ### Extensive use of `unwrap()` on `Mutex::lock()`
-**Locations:** Throughout `lib.rs`, `nodes/vst3_com.rs`, `nodes/app_audio_capture.rs`
+**Locations:** Throughout `lib.rs`, `vst3_common.rs`, `nodes/app_audio_capture.rs`
 
 **Description:** Shared state is protected by `std::sync::Mutex`. If any thread
 panics while holding the lock, subsequent `lock().unwrap()` calls from other threads
