@@ -1,10 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
+import { LazyStore } from "@tauri-apps/plugin-store";
 import { MenuIcon, XIcon, PlusIcon, TrashIcon, PencilIcon, CheckIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { cn } from "@/lib/utils";
 import { useAppStore } from "@/state";
 import { VirtualDevice } from "@/types";
+
+/**
+ * Persistent settings store backing user preferences (e.g. tray behavior).
+ * Lazily loaded the first time it is read or written.
+ */
+const settingsStore = new LazyStore("settings.json");
+const KEY_MINIMIZE_TO_TRAY = "minimizeToTrayEnabled";
 
 function DeviceItem({
   device,
@@ -201,6 +209,34 @@ export default function Menu() {
     renameVirtualDevice,
   } = useAppStore();
 
+  const [minimizeToTray, setMinimizeToTray] = useState(false);
+
+  // Hydrate the tray setting from the persistent store on mount. Default off.
+  useEffect(() => {
+    let cancelled = false;
+    settingsStore
+      .get<boolean>(KEY_MINIMIZE_TO_TRAY)
+      .then((value) => {
+        if (!cancelled && typeof value === "boolean") {
+          setMinimizeToTray(value);
+        }
+      })
+      .catch((e) => console.warn("Failed to load tray setting:", e));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleMinimizeToTrayChange = async (next: boolean) => {
+    setMinimizeToTray(next);
+    try {
+      await settingsStore.set(KEY_MINIMIZE_TO_TRAY, next);
+      await settingsStore.save();
+    } catch (e) {
+      console.warn("Failed to persist tray setting:", e);
+    }
+  };
+
   const renderDevices = virtualDevices.filter((d) => d.deviceType === "render");
   const captureDevices = virtualDevices.filter((d) => d.deviceType === "capture");
 
@@ -289,6 +325,23 @@ export default function Menu() {
               onRemove={removeVirtualDevice}
               onRename={renameVirtualDevice}
             />
+          </div>
+
+          {/* Separator */}
+          <div className="h-px bg-gray-200" />
+
+          {/* Settings */}
+          <div className="flex flex-col gap-2">
+            <span className="text-sm font-bold text-black">Settings</span>
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-black">
+              <input
+                type="checkbox"
+                className="cursor-pointer"
+                checked={minimizeToTray}
+                onChange={(e) => handleMinimizeToTrayChange(e.target.checked)}
+              />
+              <span className="flex-1">Keep running in tray when window is closed</span>
+            </label>
           </div>
         </div>
 
