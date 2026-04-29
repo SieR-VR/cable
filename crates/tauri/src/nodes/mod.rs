@@ -5,6 +5,7 @@ use crate::runtime::{Runtime, RuntimeState};
 pub mod app_audio_capture;
 pub mod audio_input_device;
 pub mod audio_output_device;
+pub mod channel_merge;
 pub mod channel_split;
 pub mod compressor;
 pub mod delay;

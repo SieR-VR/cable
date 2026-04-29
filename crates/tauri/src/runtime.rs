@@ -10,6 +10,7 @@ use tauri::State;
 use crate::nodes::app_audio_capture::AppAudioCaptureNode;
 use crate::nodes::audio_input_device::AudioInputDeviceNode;
 use crate::nodes::audio_output_device::AudioOutputDeviceNode;
+use crate::nodes::channel_merge::ChannelMergeNode;
 use crate::nodes::channel_split::ChannelSplitNode;
 use crate::nodes::compressor::CompressorNode;
 use crate::nodes::delay::DelayNode;
@@ -44,6 +45,7 @@ pub(crate) enum AudioNode {
   AppAudioCapture(AppAudioCaptureNode),
   Mixer(MixerNode),
   Gain(GainNode),
+  ChannelMerge(ChannelMergeNode),
   ChannelSplit(ChannelSplitNode),
   Delay(DelayNode),
   Compressor(CompressorNode),
@@ -64,6 +66,7 @@ impl AudioNode {
       AudioNode::AppAudioCapture(n) => n.id(),
       AudioNode::Mixer(n) => n.id(),
       AudioNode::Gain(n) => n.id(),
+      AudioNode::ChannelMerge(n) => n.id(),
       AudioNode::ChannelSplit(n) => n.id(),
       AudioNode::Delay(n) => n.id(),
       AudioNode::Compressor(n) => n.id(),
@@ -84,6 +87,7 @@ impl AudioNode {
       AudioNode::AppAudioCapture(n) => n.command(data),
       AudioNode::Mixer(n) => n.command(data),
       AudioNode::Gain(n) => n.command(data),
+      AudioNode::ChannelMerge(n) => n.command(data),
       AudioNode::ChannelSplit(n) => n.command(data),
       AudioNode::Delay(n) => n.command(data),
       AudioNode::Compressor(n) => n.command(data),
@@ -104,6 +108,7 @@ impl AudioNode {
       AudioNode::AppAudioCapture(n) => n.init(runtime),
       AudioNode::Mixer(n) => n.init(runtime),
       AudioNode::Gain(n) => n.init(runtime),
+      AudioNode::ChannelMerge(n) => n.init(runtime),
       AudioNode::ChannelSplit(n) => n.init(runtime),
       AudioNode::Delay(n) => n.init(runtime),
       AudioNode::Compressor(n) => n.init(runtime),
@@ -124,6 +129,7 @@ impl AudioNode {
       AudioNode::AppAudioCapture(n) => n.dispose(runtime),
       AudioNode::Mixer(n) => n.dispose(runtime),
       AudioNode::Gain(n) => n.dispose(runtime),
+      AudioNode::ChannelMerge(n) => n.dispose(runtime),
       AudioNode::ChannelSplit(n) => n.dispose(runtime),
       AudioNode::Delay(n) => n.dispose(runtime),
       AudioNode::Compressor(n) => n.dispose(runtime),
@@ -148,6 +154,7 @@ impl AudioNode {
       AudioNode::AppAudioCapture(n) => n.process(runtime, state),
       AudioNode::Mixer(n) => n.process(runtime, state),
       AudioNode::Gain(n) => n.process(runtime, state),
+      AudioNode::ChannelMerge(n) => n.process(runtime, state),
       AudioNode::ChannelSplit(n) => n.process(runtime, state),
       AudioNode::Delay(n) => n.process(runtime, state),
       AudioNode::Compressor(n) => n.process(runtime, state),

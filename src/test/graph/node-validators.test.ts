@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { audioType, frequencyType, NONE } from "@/graph/edge-type";
 import audioInputDeviceDef from "@/nodes/AudioInputDevice";
 import audioOutputDeviceDef from "@/nodes/AudioOutputDevice";
+import channelMergeDef from "@/nodes/ChannelMerge";
 import channelSplitDef from "@/nodes/ChannelSplit";
 import gainDef from "@/nodes/Gain";
 import mixerDef from "@/nodes/Mixer";
@@ -86,6 +87,59 @@ describe("per-node validators", () => {
     expect(r.producedOutputs["ch-0"]).toEqual(audioType(1, 48000, 16));
     expect(r.producedOutputs["ch-1"]).toEqual(audioType(1, 48000, 16));
   });
+
+  it("ChannelMerge merges 2 mono inputs into stereo output", () => {
+    const r = channelMergeDef.validate!(
+      { inputCount: 2 } as any,
+      {
+        "ch-0": audioType(1, 48000, 16),
+        "ch-1": audioType(1, 48000, 16),
+      },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.producedOutputs["ChannelMerge-source"]).toEqual(audioType(2, 48000, 16));
+  });
+
+  it("ChannelMerge ok=false when inputs have mismatched format", () => {
+    const r = channelMergeDef.validate!(
+      { inputCount: 2 } as any,
+      {
+        "ch-0": audioType(1, 48000, 16),
+        "ch-1": audioType(1, 44100, 16),
+      },
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("ChannelMerge ok=false when inputs are not mono", () => {
+    const r = channelMergeDef.validate!(
+      { inputCount: 2 } as any,
+      {
+        "ch-0": audioType(2, 48000, 16),
+        "ch-1": audioType(1, 48000, 16),
+      },
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("ChannelMerge produces none when all inputs are none", () => {
+    const r = channelMergeDef.validate!(
+      { inputCount: 2 } as any,
+      { "ch-0": NONE, "ch-1": NONE },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.producedOutputs["ChannelMerge-source"]).toEqual(NONE);
+  });
+
+  it("ChannelMerge merges 4 mono inputs into 4ch output", () => {
+    const inputs = Object.fromEntries(
+      [0, 1, 2, 3].map((i) => [`ch-${i}`, audioType(1, 48000, 32)]),
+    );
+    const r = channelMergeDef.validate!({ inputCount: 4 } as any, inputs);
+    expect(r.ok).toBe(true);
+    expect(r.producedOutputs["ChannelMerge-source"]).toEqual(audioType(4, 48000, 32));
+  });
+
 
   it("SpectrumAnalyzer passes audio through (FFT output is rendered, not edge-carried)", () => {
     const r = spectrumAnalyzerDef.validate!(

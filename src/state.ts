@@ -95,6 +95,7 @@ export interface AppState {
       | "appAudioCapture"
       | "mixer"
       | "gain"
+      | "channelMerge"
       | "channelSplit"
       | "delay"
       | "compressor"
@@ -215,6 +216,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     const isAppAudioCapture = type === "appAudioCapture";
     const isMixer = type === "mixer";
     const isGain = type === "gain";
+    const isChannelMerge = type === "channelMerge";
     const isChannelSplit = type === "channelSplit";
     const isDelay = type === "delay";
     const isCompressor = type === "compressor";
@@ -234,9 +236,11 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
               ? { edgeType: null }
               : isGain
                 ? { gain: 1.0, edgeType: null }
-                : isChannelSplit
-                  ? { edgeType: null }
-                  : isDelay
+                : isChannelMerge
+                  ? { inputCount: 2 as const }
+                  : isChannelSplit
+                    ? { edgeType: null }
+                    : isDelay
                     ? { delayMs: 250, edgeType: null }
                     : isCompressor
                       ? { thresholdDb: -12, ratio: 4, attackMs: 5, releaseMs: 50, makeUpDb: 0, edgeType: null }

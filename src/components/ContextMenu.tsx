@@ -40,6 +40,7 @@ const NODE_CATEGORIES: NodeCategory[] = [
       { type: "mixer", label: "Mixer" },
       { type: "gain", label: "Gain" },
       { type: "channelSplit", label: "Channel Split" },
+      { type: "channelMerge", label: "Channel Merge" },
       { type: "delay", label: "Delay" },
       { type: "compressor", label: "Compressor" },
       { type: "reverb", label: "Reverb" },

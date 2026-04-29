@@ -74,6 +74,7 @@ export const NODE_ACCENTS = {
   vst: "#8b5cf6", // violet-500
   gain: "#f59e0b", // amber-400
   channelSplit: "#06b6d4", // cyan-500
+  channelMerge: "#0891b2", // cyan-600
   delay: "#38bdf8", // sky-400
   compressor: "#fb7185", // rose-400
   reverb: "#22d3ee", // cyan-400

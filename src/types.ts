@@ -5,6 +5,7 @@ import { NodeDefinition } from "./node-definition";
 import appAudioCaptureDef from "./nodes/AppAudioCapture";
 import audioInputDeviceDef from "./nodes/AudioInputDevice";
 import audioOutputDeviceDef from "./nodes/AudioOutputDevice";
+import channelMergeDef from "./nodes/ChannelMerge";
 import channelSplitDef from "./nodes/ChannelSplit";
 import compressorDef from "./nodes/Compressor";
 import delayDef from "./nodes/Delay";
@@ -70,6 +71,7 @@ export const nodeDefs = {
   appAudioCapture: appAudioCaptureDef,
   mixer: mixerDef,
   gain: gainDef,
+  channelMerge: channelMergeDef,
   channelSplit: channelSplitDef,
   delay: delayDef,
   compressor: compressorDef,
