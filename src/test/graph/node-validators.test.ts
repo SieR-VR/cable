@@ -80,12 +80,31 @@ describe("per-node validators", () => {
 
   it("ChannelSplit fans out a stereo input into two mono outputs", () => {
     const r = channelSplitDef.validate!(
-      {} as any,
+      { outputCount: 2 } as any,
       { "ChannelSplit-target": audioType(2, 48000, 16) },
     );
     expect(r.ok).toBe(true);
     expect(r.producedOutputs["ch-0"]).toEqual(audioType(1, 48000, 16));
     expect(r.producedOutputs["ch-1"]).toEqual(audioType(1, 48000, 16));
+  });
+
+  it("ChannelSplit ok=false when outputCount exceeds input channels", () => {
+    const r = channelSplitDef.validate!(
+      { outputCount: 4 } as any,
+      { "ChannelSplit-target": audioType(2, 48000, 16) },
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("ChannelSplit 4ch fans out a quad input into four mono outputs", () => {
+    const r = channelSplitDef.validate!(
+      { outputCount: 4 } as any,
+      { "ChannelSplit-target": audioType(4, 48000, 32) },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.producedOutputs["ch-2"]).toEqual(audioType(1, 48000, 32));
+    expect(r.producedOutputs["ch-3"]).toEqual(audioType(1, 48000, 32));
+    expect(r.producedOutputs["ch-4"]).toBeUndefined();
   });
 
   it("ChannelMerge merges 2 mono inputs into stereo output", () => {

@@ -265,7 +265,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
                 : isChannelMerge
                   ? { inputCount: 2 as const }
                   : isChannelSplit
-                    ? { edgeType: null }
+                    ? { outputCount: 2 as const }
                     : isDelay
                     ? { delayMs: 250, edgeType: null }
                     : isCompressor

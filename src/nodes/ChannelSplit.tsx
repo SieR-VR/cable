@@ -1,55 +1,80 @@
 import { Node, NodeProps, Position } from "@xyflow/react";
+import { useCallback } from "react";
 
 import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { NodeDefinition } from "@/node-definition";
 import { EdgeType, NONE, NodeTypeRecord, audioType } from "@/graph/edge-type";
+import { useAppStore } from "@/state";
 
 export type ChannelSplitNodeData = {
-  edgeType: string | null;
+  outputCount: 2 | 4 | 6 | 8;
 };
 
 export type ChannelSplitNodeType = Node<ChannelSplitNodeData, "channelSplit">;
 
-const OUTPUTS = [
-  { id: "ch-0", label: "L / Ch 0" },
-  { id: "ch-1", label: "R / Ch 1" },
-] as const;
-
+const COUNTS = [2, 4, 6, 8] as const;
 const ROW_HEIGHT = 24;
 
 export function ChannelSplit({ id, data }: NodeProps<ChannelSplitNodeType>) {
-  void id;
+  const updateNode = useAppStore((s) => s.updateNode);
+
+  const setCount = useCallback(
+    (count: 2 | 4 | 6 | 8) => {
+      updateNode(id, { outputCount: count });
+    },
+    [id, updateNode],
+  );
+
+  const count = data.outputCount ?? 2;
+  const outputHandles = Array.from({ length: count }, (_, i) => ({
+    id: `ch-${i}`,
+    label: count === 2 ? (i === 0 ? "L / Ch 0" : "R / Ch 1") : `Ch ${i}`,
+  }));
+
   return (
     <NodeShell accent={NODE_ACCENTS.channelSplit} title="Channel Split" invalid={(data as any)?.invalid}>
-      {/*
-        Negative horizontal margin mirrors the Mixer pattern: removes NodeShell's
-        `p-2` body padding so handles sit flush with the card edges.
-      */}
-      <div
-        className="relative -mx-2"
-        style={{ height: OUTPUTS.length * ROW_HEIGHT }}
-      >
-        {OUTPUTS.map((out, i) => {
+      {/* Segmented control for output count */}
+      <div className="flex rounded overflow-hidden border border-gray-600 text-xs self-center">
+        {COUNTS.map((c) => (
+          <button
+            key={c}
+            className={[
+              "px-2 py-0.5 font-mono transition-colors",
+              c === count
+                ? "bg-gray-500 text-white"
+                : "bg-transparent text-gray-400 hover:bg-gray-700",
+            ].join(" ")}
+            onClick={() => setCount(c)}
+          >
+            {c}ch
+          </button>
+        ))}
+      </div>
+
+      {/* Output channel handles */}
+      <div className="relative -mx-2" style={{ height: count * ROW_HEIGHT }}>
+        {outputHandles.map((handle, i) => {
           const top = i * ROW_HEIGHT + ROW_HEIGHT / 2;
           return (
-            <div key={out.id}>
+            <div key={handle.id}>
               <span
                 className="absolute text-xs text-gray-300"
                 style={{ top, right: 16, transform: "translateY(-50%)" }}
               >
-                {out.label}
+                {handle.label}
               </span>
               <AudioHandle
                 type="source"
                 position={Position.Right}
-                id={out.id}
+                id={handle.id}
                 style={{ top }}
               />
             </div>
           );
         })}
       </div>
+
       <AudioHandle type="target" position={Position.Left} id="ChannelSplit-target" />
     </NodeShell>
   );
@@ -63,13 +88,14 @@ const definition: NodeDefinition<ChannelSplitNodeType> = {
   }),
   handles: {
     inputs: ["ChannelSplit-target"],
-    outputs: OUTPUTS.map((o) => o.id),
+    outputs: ["ch-0", "ch-1", "ch-2", "ch-3", "ch-4", "ch-5", "ch-6", "ch-7"],
   },
-  validate: (_state, inputs) => {
+  validate: (state, inputs) => {
+    const count = (state as ChannelSplitNodeData).outputCount ?? 2;
     const incoming: EdgeType = inputs["ChannelSplit-target"] ?? NONE;
     const outputs: NodeTypeRecord = {};
-    for (const o of OUTPUTS) {
-      outputs[o.id] =
+    for (let i = 0; i < count; i++) {
+      outputs[`ch-${i}`] =
         incoming.kind === "audio"
           ? audioType(1, incoming.frequency, incoming.bitsPerSample)
           : NONE;
@@ -77,7 +103,7 @@ const definition: NodeDefinition<ChannelSplitNodeType> = {
     return {
       expectedInputs: { "ChannelSplit-target": incoming },
       producedOutputs: outputs,
-      ok: incoming.kind !== "audio" || incoming.channels >= OUTPUTS.length,
+      ok: incoming.kind !== "audio" || incoming.channels >= count,
     };
   },
 };
