@@ -2,6 +2,7 @@ import { Handle, Position, useNodeId } from "@xyflow/react";
 import { useState } from "react";
 
 import { STRAND_OFFSETS } from "@/components/AudioEdge";
+import { EdgeType, isCompatible } from "@/graph/edge-type";
 import { parseAudioEdgeType } from "@/lib/utils";
 import { useAppStore } from "@/state";
 
@@ -72,9 +73,57 @@ interface AudioHandleProps {
  *
  * Hover tooltip (only when not connected) shows `Nch . rate . bits`.
  */
+/**
+ * Pick the EdgeType this handle should visualize:
+ *  - For source handles: the validator's `producedOutputs[handleId]`.
+ *  - For target handles: the connected edge's actual carried type if any,
+ *    otherwise the validator's `expectedInputs[handleId]` (so an
+ *    unconnected sink still hints at what it wants to receive).
+ *
+ * Returns NONE / null when no validator entry exists yet.
+ */
+function audioFmtFromEdgeType(t: EdgeType | undefined | null) {
+  if (!t || t.kind !== "audio") return null;
+  return { channels: t.channels, frequency: t.frequency, bitsPerSample: t.bitsPerSample };
+}
+
 export function AudioHandle(props: AudioHandleProps) {
   const nodeId = useNodeId();
 
+  // Structured type from the validation engine (preferred).
+  const structured = useAppStore((s) => {
+    if (!nodeId) return null;
+    const v = s.validation[nodeId];
+    if (!v) return null;
+    if (props.type === "source") {
+      return v.producedOutputs[props.id ?? ""] ?? null;
+    }
+    // For target handles, prefer the actual edge-carried type so visuals
+    // reflect what's really flowing in (which may differ from `expected`
+    // when the connection is mid-mismatch).
+    const e = s.edges.find(
+      (edge) =>
+        edge.target === nodeId && (edge.targetHandle ?? null) === (props.id ?? null),
+    );
+    return e?.data?.edgeType ?? v.expectedInputs[props.id ?? ""] ?? null;
+  });
+
+  // Mismatch flag for target handles only: actual incoming != expected.
+  const mismatched = useAppStore((s) => {
+    if (!nodeId || props.type !== "target") return false;
+    const v = s.validation[nodeId];
+    const expected = v?.expectedInputs[props.id ?? ""];
+    const e = s.edges.find(
+      (edge) =>
+        edge.target === nodeId && (edge.targetHandle ?? null) === (props.id ?? null),
+    );
+    const actual = e?.data?.edgeType;
+    if (!expected || !actual) return false;
+    return !isCompatible(actual, expected);
+  });
+
+  // Legacy fallback so nodes that still expose data.edgeType keep working
+  // until they're migrated.
   const edgeTypeFromStore = useAppStore((s) => {
     if (!nodeId) return null;
     const node = s.nodes.find((n) => n.id === nodeId);
@@ -92,8 +141,12 @@ export function AudioHandle(props: AudioHandleProps) {
     );
   });
 
-  const edgeType = props.edgeType !== undefined ? props.edgeType : edgeTypeFromStore;
-  const fmt = parseAudioEdgeType(edgeType);
+  // Resolution order: explicit prop override > structured validation type >
+  // legacy node.data.edgeType string.
+  const fmt =
+    props.edgeType !== undefined
+      ? parseAudioEdgeType(props.edgeType)
+      : (audioFmtFromEdgeType(structured) ?? parseAudioEdgeType(edgeTypeFromStore));
 
   const channels = fmt?.channels;
   const sampleRate = fmt?.frequency;
@@ -104,7 +157,11 @@ export function AudioHandle(props: AudioHandleProps) {
 
   const offsets = dotOffsets(channels);
   const disabled = !fmt || offsets.length === 0;
-  const color = disabled ? DISABLED_COLOR : hueForRate(sampleRate);
+  const color = mismatched
+    ? "#f85149"
+    : disabled
+      ? DISABLED_COLOR
+      : hueForRate(sampleRate);
 
   // Dot center is at the handle DOM box center, which sits *inside* the node
   // visually. ReactFlow's connection point (sourceX/targetX) is at the handle
