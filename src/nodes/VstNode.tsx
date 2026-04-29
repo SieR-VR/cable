@@ -5,6 +5,7 @@ import { useState } from "react";
 import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { NodeDefinition } from "@/node-definition";
+import { EdgeType, NONE, NodeTypeRecord, audioType, isCompatible } from "@/graph/edge-type";
 import { useAppStore } from "@/state";
 
 export type VstNodeData = {
@@ -151,6 +152,35 @@ const definition: NodeDefinition<VstNodeType> = {
       params: node.data.params,
     },
   }),
+  // VST handle keys are dynamic (depend on numInputs / numOutputs), so the
+  // static `handles` hint is intentionally omitted — the validator computes
+  // them from the node state every run.
+  validate: (state, inputs) => {
+    const expected: NodeTypeRecord = {};
+    const produced: NodeTypeRecord = {};
+    let ok = true;
+    // Each input handle expects mono audio at whatever rate the upstream
+    // claims; we mirror the first concrete input as the produced format.
+    let referenceFormat: EdgeType = NONE;
+    for (let i = 0; i < state.numInputs; i++) {
+      const k = `vst-in-${i}`;
+      const t = inputs[k] ?? NONE;
+      expected[k] = t;
+      if (referenceFormat.kind === "none" && t.kind === "audio") referenceFormat = t;
+    }
+    for (let i = 0; i < state.numInputs; i++) {
+      const k = `vst-in-${i}`;
+      if (!isCompatible(inputs[k] ?? NONE, referenceFormat)) ok = false;
+    }
+    const outFormat: EdgeType =
+      referenceFormat.kind === "audio"
+        ? audioType(state.channels || referenceFormat.channels, referenceFormat.frequency, referenceFormat.bitsPerSample)
+        : NONE;
+    for (let i = 0; i < state.numOutputs; i++) {
+      produced[`vst-out-${i}`] = outFormat;
+    }
+    return { expectedInputs: expected, producedOutputs: produced, ok };
+  },
 };
 
 export default definition;

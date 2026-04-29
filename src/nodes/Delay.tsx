@@ -4,6 +4,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
+import { passthroughValidator } from "@/graph/edge-type";
 
 export type DelayNodeData = {
   /** Delay time in milliseconds (0 – 2000). Default: 250 */
@@ -45,6 +46,8 @@ const definition: NodeDefinition<DelayNodeType> = {
     type: "delay",
     data: { id: node.id, delayMs: node.data.delayMs ?? 250 },
   }),
+  handles: { inputs: ["Delay-target"], outputs: ["Delay-source"] },
+  validate: passthroughValidator("Delay-target", "Delay-source"),
 };
 
 export default definition;

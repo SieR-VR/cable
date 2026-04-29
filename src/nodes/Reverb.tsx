@@ -4,6 +4,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
+import { passthroughValidator } from "@/graph/edge-type";
 
 export type ReverbNodeData = {
   /** Room size (0.0 – 1.0). Controls comb-filter feedback. Default: 0.5 */
@@ -88,6 +89,8 @@ const definition: NodeDefinition<ReverbNodeType> = {
       damp: node.data.damp ?? 0.5,
     },
   }),
+  handles: { inputs: ["Reverb-target"], outputs: ["Reverb-source"] },
+  validate: passthroughValidator("Reverb-target", "Reverb-source"),
 };
 
 export default definition;

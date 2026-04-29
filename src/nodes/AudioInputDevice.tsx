@@ -6,6 +6,7 @@ import { formatAudioEdgeType } from "@/lib/utils";
 import { AppState, useAppStore } from "@/state";
 import { AudioDevice } from "@/types";
 import { NodeDefinition } from "@/node-definition";
+import { NONE, audioType } from "@/graph/edge-type";
 
 export type AudioInputDeviceNodeData = {
   device: AudioDevice | null;
@@ -65,6 +66,17 @@ const definition: NodeDefinition<AudioInputDeviceNode> = {
     type: "audioInputDevice",
     data: { id: node.id, device: node.data.device },
   }),
+  handles: { inputs: [], outputs: ["AudioInputDevice-source"] },
+  validate: (state) => {
+    const t = state.device
+      ? audioType(state.device.channels, state.device.frequency, state.device.bitsPerSample)
+      : NONE;
+    return {
+      expectedInputs: {},
+      producedOutputs: { "AudioInputDevice-source": t },
+      ok: true,
+    };
+  },
 };
 
 export default definition;

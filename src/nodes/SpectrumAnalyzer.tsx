@@ -5,6 +5,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "../state";
 import { NodeDefinition } from "@/node-definition";
+import { EdgeType, NONE, frequencyType } from "@/graph/edge-type";
 
 export type SpectrumAnalyzerNodeData = {
   /** FFT window size. Must be a power of two. Default: 1024 */
@@ -70,6 +71,30 @@ const definition: NodeDefinition<SpectrumAnalyzerNode> = {
     type: "spectrumAnalyzer",
     data: { id: node.id, fftSize: node.data.fftSize ?? 1024 },
   }),
+  handles: {
+    inputs: ["SpectrumAnalyzer-target"],
+    outputs: ["SpectrumAnalyzer-source"],
+  },
+  validate: (state, inputs) => {
+    const incoming: EdgeType = inputs["SpectrumAnalyzer-target"] ?? NONE;
+    const fftSize = state.fftSize ?? 1024;
+    // The source handle on SpectrumAnalyzer carries the audio passthrough,
+    // not the FFT result — the frequency-domain bins are an internal render
+    // output. We still expose `frequency` as the natural "produced" type for
+    // downstream frequency-aware nodes once they exist; today no edge actually
+    // consumes a non-audio source, so we propagate audio.
+    const produced: EdgeType =
+      incoming.kind === "audio"
+        ? incoming
+        : incoming.kind === "frequency"
+          ? frequencyType(incoming.channels, incoming.frequency, fftSize / 2)
+          : NONE;
+    return {
+      expectedInputs: { "SpectrumAnalyzer-target": incoming },
+      producedOutputs: { "SpectrumAnalyzer-source": produced },
+      ok: true,
+    };
+  },
 };
 
 export default definition;

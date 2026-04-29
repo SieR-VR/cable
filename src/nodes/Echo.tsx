@@ -4,6 +4,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
+import { passthroughValidator } from "@/graph/edge-type";
 
 export type EchoNodeData = {
   /** Delay time in milliseconds (0 – 2000). Default: 375 */
@@ -88,6 +89,8 @@ const definition: NodeDefinition<EchoNodeType> = {
       wet: node.data.wet ?? 0.5,
     },
   }),
+  handles: { inputs: ["Echo-target"], outputs: ["Echo-source"] },
+  validate: passthroughValidator("Echo-target", "Echo-source"),
 };
 
 export default definition;

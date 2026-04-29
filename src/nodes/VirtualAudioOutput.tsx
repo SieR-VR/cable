@@ -4,6 +4,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { AppState, useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
+import { NONE, audioType, isCompatible } from "@/graph/edge-type";
 
 export type VirtualAudioOutputNodeData = {
   deviceId: string;
@@ -61,6 +62,16 @@ const definition: NodeDefinition<VirtualAudioOutputNode> = {
       name: node.data.name || "",
     },
   }),
+  handles: { inputs: ["VirtualAudioOutput-target"], outputs: [] },
+  validate: (state, inputs) => {
+    const expected = state.deviceId ? audioType(2, 48000, 32) : NONE;
+    const actual = inputs["VirtualAudioOutput-target"] ?? NONE;
+    return {
+      expectedInputs: { "VirtualAudioOutput-target": expected },
+      producedOutputs: {},
+      ok: isCompatible(actual, expected),
+    };
+  },
 };
 
 export default definition;

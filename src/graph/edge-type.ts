@@ -68,6 +68,18 @@ export function equalEdgeType(a: EdgeType, b: EdgeType): boolean {
   return false;
 }
 
+/**
+ * Compatibility check used by validators when deciding `ok`. Treats `none` as a
+ * wildcard: a sink that doesn't know its expected format yet (or a source that
+ * hasn't claimed one) shouldn't trigger an invalid flag. Use `equalEdgeType`
+ * directly when you need strict equality (e.g. inside Mixer to compare two
+ * concrete audio inputs).
+ */
+export function isCompatible(actual: EdgeType, expected: EdgeType): boolean {
+  if (actual.kind === "none" || expected.kind === "none") return true;
+  return equalEdgeType(actual, expected);
+}
+
 /** Compact human-readable label, e.g. "audio 2ch 48k 24b" or "freq 1ch 48k 1024bins". */
 export function formatEdgeType(t: EdgeType): string {
   switch (t.kind) {
@@ -129,5 +141,24 @@ export function defaultPassthroughValidator(
     expectedInputs: inputs,
     producedOutputs,
     ok: true,
+  };
+}
+
+/**
+ * Build a 1-in / 1-out passthrough validator for effect nodes (Gain, Delay,
+ * Compressor, Reverb, Echo, WaveformMonitor): produced = input, no constraint
+ * on the input format.
+ */
+export function passthroughValidator(
+  inputHandle: string,
+  outputHandle: string,
+): (state: unknown, inputs: NodeTypeRecord) => ValidationResult {
+  return (_state, inputs) => {
+    const t = inputs[inputHandle] ?? NONE;
+    return {
+      expectedInputs: { [inputHandle]: t },
+      producedOutputs: { [outputHandle]: t },
+      ok: true,
+    };
   };
 }

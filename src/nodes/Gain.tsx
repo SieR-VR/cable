@@ -4,6 +4,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
+import { passthroughValidator } from "@/graph/edge-type";
 
 export type GainNodeData = {
   /** Linear gain multiplier (0.0 – 4.0). Default: 1.0 */
@@ -45,6 +46,8 @@ const definition: NodeDefinition<GainNodeType> = {
     type: "gain",
     data: { id: node.id, gain: node.data.gain ?? 1.0 },
   }),
+  handles: { inputs: ["Gain-target"], outputs: ["Gain-source"] },
+  validate: passthroughValidator("Gain-target", "Gain-source"),
 };
 
 export default definition;

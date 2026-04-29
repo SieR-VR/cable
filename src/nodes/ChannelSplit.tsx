@@ -3,6 +3,7 @@ import { Node, NodeProps, Position } from "@xyflow/react";
 import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { NodeDefinition } from "@/node-definition";
+import { EdgeType, NONE, NodeTypeRecord, audioType } from "@/graph/edge-type";
 
 export type ChannelSplitNodeData = {
   edgeType: string | null;
@@ -60,6 +61,25 @@ const definition: NodeDefinition<ChannelSplitNodeType> = {
     type: "channelSplit",
     data: { id: node.id },
   }),
+  handles: {
+    inputs: ["ChannelSplit-target"],
+    outputs: OUTPUTS.map((o) => o.id),
+  },
+  validate: (_state, inputs) => {
+    const incoming: EdgeType = inputs["ChannelSplit-target"] ?? NONE;
+    const outputs: NodeTypeRecord = {};
+    for (const o of OUTPUTS) {
+      outputs[o.id] =
+        incoming.kind === "audio"
+          ? audioType(1, incoming.frequency, incoming.bitsPerSample)
+          : NONE;
+    }
+    return {
+      expectedInputs: { "ChannelSplit-target": incoming },
+      producedOutputs: outputs,
+      ok: incoming.kind !== "audio" || incoming.channels >= OUTPUTS.length,
+    };
+  },
 };
 
 export default definition;

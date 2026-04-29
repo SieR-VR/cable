@@ -7,6 +7,7 @@ import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { AppState, useAppStore } from "@/state";
 import { WindowInfo } from "@/types";
 import { NodeDefinition } from "@/node-definition";
+import { NONE, audioType } from "@/graph/edge-type";
 
 export type AppAudioCaptureNodeData = {
   processId: number | null;
@@ -73,6 +74,18 @@ const definition: NodeDefinition<AppAudioCaptureNode> = {
       windowTitle: node.data.windowTitle ?? "",
     },
   }),
+  handles: { inputs: [], outputs: ["AppAudioCapture-source"] },
+  validate: (state) => {
+    // WASAPI loopback capture defaults to the engine's mix format
+    // (typically 48k stereo float32). Match the runtime-side default until
+    // we plumb negotiated format back to the frontend.
+    const t = state.processId ? audioType(2, 48000, 32) : NONE;
+    return {
+      expectedInputs: {},
+      producedOutputs: { "AppAudioCapture-source": t },
+      ok: true,
+    };
+  },
 };
 
 export default definition;

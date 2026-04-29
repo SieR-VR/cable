@@ -3,6 +3,7 @@ import { Node, NodeProps, Position } from "@xyflow/react";
 import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { NodeDefinition } from "@/node-definition";
+import { EdgeType, NONE, equalEdgeType } from "@/graph/edge-type";
 
 export type MixerNodeData = {
   edgeType: string | null;
@@ -61,6 +62,23 @@ const definition: NodeDefinition<MixerNodeType> = {
     type: "mixer",
     data: { id: node.id },
   }),
+  handles: { inputs: ["input-a", "input-b"], outputs: ["Mixer-source"] },
+  validate: (_state, inputs) => {
+    const a: EdgeType = inputs["input-a"] ?? NONE;
+    const b: EdgeType = inputs["input-b"] ?? NONE;
+    // Pick the first non-none input as the produced type. If both inputs are
+    // concrete and disagree, the mix is invalid but we still propagate `a`
+    // downstream so the rest of the graph can keep validating.
+    const produced: EdgeType =
+      a.kind !== "none" ? a : b.kind !== "none" ? b : NONE;
+    const ok =
+      a.kind === "none" || b.kind === "none" || equalEdgeType(a, b);
+    return {
+      expectedInputs: { "input-a": produced, "input-b": produced },
+      producedOutputs: { "Mixer-source": produced },
+      ok,
+    };
+  },
 };
 
 export default definition;

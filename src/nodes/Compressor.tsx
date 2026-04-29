@@ -4,6 +4,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
+import { passthroughValidator } from "@/graph/edge-type";
 
 export type CompressorNodeData = {
   /** Threshold in dB (−60 to 0). Default: −12 */
@@ -137,6 +138,8 @@ const definition: NodeDefinition<CompressorNodeType> = {
       makeUpDb: node.data.makeUpDb ?? 0,
     },
   }),
+  handles: { inputs: ["Compressor-target"], outputs: ["Compressor-source"] },
+  validate: passthroughValidator("Compressor-target", "Compressor-source"),
 };
 
 export default definition;

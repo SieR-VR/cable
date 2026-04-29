@@ -5,6 +5,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { useAppStore } from "../state";
 import { NodeDefinition } from "@/node-definition";
+import { passthroughValidator } from "@/graph/edge-type";
 
 export type WaveformMonitorNodeData = {
   /** Number of samples in the rolling display window. Default: 2048 */
@@ -86,6 +87,11 @@ const definition: NodeDefinition<WaveformMonitorNode> = {
     type: "waveformMonitor",
     data: { id: node.id, windowSize: node.data.windowSize ?? 2048 },
   }),
+  handles: {
+    inputs: ["WaveformMonitor-target"],
+    outputs: ["WaveformMonitor-source"],
+  },
+  validate: passthroughValidator("WaveformMonitor-target", "WaveformMonitor-source"),
 };
 
 export default definition;

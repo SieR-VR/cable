@@ -4,6 +4,7 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { AppState, useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
+import { NONE, audioType } from "@/graph/edge-type";
 
 export type VirtualAudioInputNodeData = {
   deviceId: string;
@@ -61,6 +62,18 @@ const definition: NodeDefinition<VirtualAudioInputNode> = {
       name: node.data.name || "",
     },
   }),
+  handles: { inputs: [], outputs: ["VirtualAudioInput-source"] },
+  validate: (state) => {
+    // Driver currently negotiates a fixed engine format; until that is exposed
+    // back to the UI we report `none` when no device is bound and a default
+    // 48k stereo 32-bit float when one is.
+    const t = state.deviceId ? audioType(2, 48000, 32) : NONE;
+    return {
+      expectedInputs: {},
+      producedOutputs: { "VirtualAudioInput-source": t },
+      ok: true,
+    };
+  },
 };
 
 export default definition;
