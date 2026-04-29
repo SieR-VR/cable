@@ -46,7 +46,7 @@ declare module "@tauri-apps/api/core" {
 
   declare function invoke(
     cmd: "replace_graph",
-    args: { graph: AudioGraph },
+    args: { nodes: AudioNode[]; edges: AudioEdge[] },
   ): Promise<void>;
 
   declare function invoke(

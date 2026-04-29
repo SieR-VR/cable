@@ -153,10 +153,8 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     if (!allOk) return;
     fireAndForget(
       invoke("replace_graph", {
-        graph: {
-          nodes: nodes.map(serializeNode),
-          edges: edges.map(serializeEdge),
-        },
+        nodes: nodes.map(serializeNode),
+        edges: edges.map(serializeEdge),
       }),
       "replace_graph (valid graph)",
     );
@@ -495,10 +493,8 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     set({ nodes, edges: typedEdges, validation: {} });
     fireAndForget(
       invoke("replace_graph", {
-        graph: {
-          nodes: nodes.map(serializeNode),
-          edges: typedEdges.map(serializeEdge),
-        },
+        nodes: nodes.map(serializeNode),
+        edges: typedEdges.map(serializeEdge),
       }),
       "replace_graph",
     );
