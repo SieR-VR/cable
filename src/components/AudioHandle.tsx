@@ -102,8 +102,7 @@ export function AudioHandle(props: AudioHandleProps) {
     // reflect what's really flowing in (which may differ from `expected`
     // when the connection is mid-mismatch).
     const e = s.edges.find(
-      (edge) =>
-        edge.target === nodeId && (edge.targetHandle ?? null) === (props.id ?? null),
+      (edge) => edge.target === nodeId && (edge.targetHandle ?? null) === (props.id ?? null),
     );
     return e?.data?.edgeType ?? v.expectedInputs[props.id ?? ""] ?? null;
   });
@@ -114,8 +113,7 @@ export function AudioHandle(props: AudioHandleProps) {
     const v = s.validation[nodeId];
     const expected = v?.expectedInputs[props.id ?? ""];
     const e = s.edges.find(
-      (edge) =>
-        edge.target === nodeId && (edge.targetHandle ?? null) === (props.id ?? null),
+      (edge) => edge.target === nodeId && (edge.targetHandle ?? null) === (props.id ?? null),
     );
     const actual = e?.data?.edgeType;
     if (!expected || !actual) return false;
@@ -157,11 +155,7 @@ export function AudioHandle(props: AudioHandleProps) {
 
   const offsets = dotOffsets(channels);
   const disabled = !fmt || offsets.length === 0;
-  const color = mismatched
-    ? "#f85149"
-    : disabled
-      ? DISABLED_COLOR
-      : hueForRate(sampleRate);
+  const color = mismatched ? "#f85149" : disabled ? DISABLED_COLOR : hueForRate(sampleRate);
 
   // Dot center is at the handle DOM box center, which sits *inside* the node
   // visually. ReactFlow's connection point (sourceX/targetX) is at the handle
@@ -308,9 +302,7 @@ export function AudioHandle(props: AudioHandleProps) {
             zIndex: 10,
           }}
         >
-          {fmt
-            ? `${channels}ch · ${rateLabel(sampleRate)} · ${(bits ?? 0) >= 32 ? "32f" : bits}`
-            : "no format"}
+          {fmt ? `${channels}ch · ${rateLabel(sampleRate)} · ${bits}b` : "no format"}
         </div>
       )}
     </Handle>

@@ -1,5 +1,5 @@
 import { EdgeLabelRenderer, EdgeProps, getBezierPath, Position } from "@xyflow/react";
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 import { formatEdgeType } from "@/graph/edge-type";
 import { parseAudioEdgeType } from "@/lib/utils";
@@ -95,19 +95,31 @@ function perpOffset(pos: Position, d: number): { dx: number; dy: number } {
 }
 
 /** Parse "M sx,sy C cx1,cy1 cx2,cy2 tx,ty" into the four control points. */
-function parseBezier(
-  path: string,
-): { sx: number; sy: number; cx1: number; cy1: number; cx2: number; cy2: number; tx: number; ty: number } | null {
-  const m = /M\s*([-\d.]+)[, ]([-\d.]+)\s*C\s*([-\d.]+)[, ]([-\d.]+)\s+([-\d.]+)[, ]([-\d.]+)\s+([-\d.]+)[, ]([-\d.]+)/.exec(
-    path,
-  );
+function parseBezier(path: string): {
+  sx: number;
+  sy: number;
+  cx1: number;
+  cy1: number;
+  cx2: number;
+  cy2: number;
+  tx: number;
+  ty: number;
+} | null {
+  const m =
+    /M\s*([-\d.]+)[, ]([-\d.]+)\s*C\s*([-\d.]+)[, ]([-\d.]+)\s+([-\d.]+)[, ]([-\d.]+)\s+([-\d.]+)[, ]([-\d.]+)/.exec(
+      path,
+    );
   if (!m) return null;
   const [, sx, sy, cx1, cy1, cx2, cy2, tx, ty] = m;
   return {
-    sx: +sx, sy: +sy,
-    cx1: +cx1, cy1: +cy1,
-    cx2: +cx2, cy2: +cy2,
-    tx: +tx, ty: +ty,
+    sx: +sx,
+    sy: +sy,
+    cx1: +cx1,
+    cy1: +cy1,
+    cx2: +cx2,
+    cy2: +cy2,
+    tx: +tx,
+    ty: +ty,
   };
 }
 
@@ -119,7 +131,16 @@ function parseBezier(
  * vertically-arranged nodes connect via Left/Right handles).
  */
 function offsetBezierPolyline(
-  ctrl: { sx: number; sy: number; cx1: number; cy1: number; cx2: number; cy2: number; tx: number; ty: number },
+  ctrl: {
+    sx: number;
+    sy: number;
+    cx1: number;
+    cy1: number;
+    cx2: number;
+    cy2: number;
+    tx: number;
+    ty: number;
+  },
   offset: number,
   samples = 48,
 ): string {
@@ -229,6 +250,8 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
     data,
   } = props;
 
+  const onEdgesChange = useAppStore((s) => s.onEdgesChange);
+
   const sourceEdgeType = useAppStore((s) => {
     const node = s.nodes.find((n) => n.id === source);
     return node?.data && "edgeType" in node.data
@@ -277,6 +300,29 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
   const [hovered, setHovered] = useState(false);
   const showChip = hovered || !!selected;
 
+  // Edge context menu (right-click to delete).
+  const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number } | null>(null);
+  const onContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEdgeMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+  // Close menu on any click/scroll outside.
+  useEffect(() => {
+    if (!edgeMenu) return;
+    const handler = () => setEdgeMenu(null);
+    window.addEventListener("click", handler, { once: true });
+    window.addEventListener("scroll", handler, { once: true, capture: true });
+    return () => {
+      window.removeEventListener("click", handler);
+    };
+  }, [edgeMenu]);
+
+  const deleteEdge = useCallback(() => {
+    onEdgesChange([{ id, type: "remove" }]);
+    setEdgeMenu(null);
+  }, [id, onEdgesChange]);
+
   const sp = sourcePosition as Position;
   const tp = targetPosition as Position;
 
@@ -299,7 +345,7 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
 
   const chipLabel = structuredType
     ? formatEdgeType(structuredType)
-    : `${channels}ch · ${rateLabel(sampleRate)} · ${bits >= 32 ? "32f" : bits}`;
+    : `${channels}ch · ${rateLabel(sampleRate)} · ${bits}b`;
   const showInlineCountBadge = channels > 4 && !showChip;
 
   return (
@@ -338,11 +384,10 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
         strokeWidth={20}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        onContextMenu={onContextMenu}
         style={{ cursor: "pointer" }}
       >
-        {isInvalid && (
-          <title>Type mismatch: {chipLabel}</title>
-        )}
+        {isInvalid && <title>Type mismatch: {chipLabel}</title>}
       </path>
 
       <EdgeLabelRenderer>
@@ -397,6 +442,27 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
               }}
             >
               {chipLabel}
+            </div>
+          </div>
+        )}
+
+        {edgeMenu && (
+          <div
+            style={{
+              position: "fixed",
+              top: edgeMenu.y,
+              left: edgeMenu.x,
+              zIndex: 1000,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="min-w-36 bg-white border border-gray-200 shadow-lg rounded-md py-1">
+              <button
+                className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-gray-100 cursor-pointer"
+                onClick={deleteEdge}
+              >
+                Delete Edge
+              </button>
             </div>
           </div>
         )}

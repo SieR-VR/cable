@@ -59,11 +59,7 @@ export function equalEdgeType(a: EdgeType, b: EdgeType): boolean {
     );
   }
   if (a.kind === "frequency" && b.kind === "frequency") {
-    return (
-      a.channels === b.channels &&
-      a.frequency === b.frequency &&
-      a.bins === b.bins
-    );
+    return a.channels === b.channels && a.frequency === b.frequency && a.bins === b.bins;
   }
   return false;
 }
@@ -86,9 +82,9 @@ export function formatEdgeType(t: EdgeType): string {
     case "none":
       return "none";
     case "audio":
-      return `audio ${t.channels}ch ${formatRate(t.frequency)} ${t.bitsPerSample}b`;
+      return `${t.channels}ch · ${formatRate(t.frequency)} · ${t.bitsPerSample}b`;
     case "frequency":
-      return `freq ${t.channels}ch ${formatRate(t.frequency)} ${t.bins}bins`;
+      return `freq ${t.channels}ch · ${formatRate(t.frequency)} · ${t.bins}bins`;
   }
 }
 
