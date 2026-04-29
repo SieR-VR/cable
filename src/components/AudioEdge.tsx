@@ -1,5 +1,6 @@
 import { EdgeLabelRenderer, EdgeProps, getBezierPath, Position } from "@xyflow/react";
 import { useState, useCallback, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 import { formatEdgeType } from "@/graph/edge-type";
 import { parseAudioEdgeType } from "@/lib/utils";
@@ -445,14 +446,16 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
             </div>
           </div>
         )}
+      </EdgeLabelRenderer>
 
-        {edgeMenu && (
+      {edgeMenu &&
+        createPortal(
           <div
             style={{
               position: "fixed",
               top: edgeMenu.y,
               left: edgeMenu.x,
-              zIndex: 1000,
+              zIndex: 9999,
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -464,9 +467,9 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
                 Delete Edge
               </button>
             </div>
-          </div>
+          </div>,
+          document.body,
         )}
-      </EdgeLabelRenderer>
     </>
   );
 }
