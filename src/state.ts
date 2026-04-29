@@ -140,8 +140,32 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     (type ? (nodeDefs as any)[type] : undefined);
 
   /**
+   * Push the graph to the Rust runtime only when every validated node passes.
+   * Nodes with no validation entry are assumed valid (not yet processed).
+   * Called after every cascade/full-validation pass.
+   */
+  function pushToRuntimeIfValid(
+    nodes: NodeType[],
+    edges: EdgeType[],
+    validation: Record<string, ValidationResult>,
+  ): void {
+    const allOk = Object.values(validation).every((v) => v.ok);
+    if (!allOk) return;
+    fireAndForget(
+      invoke("replace_graph", {
+        graph: {
+          nodes: nodes.map(serializeNode),
+          edges: edges.map(serializeEdge),
+        },
+      }),
+      "replace_graph (valid graph)",
+    );
+  }
+
+  /**
    * Run the validation cascade from `seedIds` against the current store state
    * and apply the resulting nodes/edges/validation atomically.
+   * If the resulting graph is fully valid, push it to the Rust runtime.
    */
   function applyCascade(seedIds: string[]): void {
     const { nodes, edges, validation } = get();
@@ -151,6 +175,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
       edges: out.edges as EdgeType[],
       validation: out.validation,
     });
+    pushToRuntimeIfValid(out.nodes as NodeType[], out.edges as EdgeType[], out.validation);
   }
 
   function applyFullValidation(): void {
@@ -161,6 +186,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
       edges: out.edges as EdgeType[],
       validation: out.validation,
     });
+    pushToRuntimeIfValid(out.nodes as NodeType[], out.edges as EdgeType[], out.validation);
   }
 
   return {
@@ -261,7 +287,6 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     } as NodeType;
 
     set({ nodes: [...nodes, newNode] });
-    fireAndForget(invoke("add_node", { node: serializeNode(newNode) }), "add_node");
     applyCascade([newNode.id]);
   },
 
@@ -288,10 +313,6 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
       ),
       validation: remainingValidation,
     });
-    fireAndForget(
-      invoke("remove_node", { nodeId: contextMenuTargetNodeId }),
-      "remove_node",
-    );
     applyCascade([...neighbors]);
   },
 
@@ -347,16 +368,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
       initDriver(),
     ]);
 
-    const { nodes, edges } = get();
-    fireAndForget(
-      invoke("replace_graph", {
-        graph: {
-          nodes: nodes.map(serializeNode),
-          edges: edges.map(serializeEdge),
-        },
-      }),
-      "replace_graph (initial sync)",
-    );
+    // applyFullValidation will call replace_graph if the initial graph is valid.
     applyFullValidation();
   },
 
@@ -402,18 +414,29 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
   onNodesChange: (changes) => {
     const prev = get().nodes;
     const next = applyNodeChanges<NodeType>(changes, prev);
-    set({ nodes: next });
 
+    // Remove stale validation entries for deleted nodes so they don't block
+    // the "all ok" check in pushToRuntimeIfValid.
+    const currentValidation = get().validation;
+    const newValidation = { ...currentValidation };
     const seeds: string[] = [];
+    let hasRemovals = false;
     for (const change of changes) {
       if (change.type === "remove") {
-        fireAndForget(invoke("remove_node", { nodeId: change.id }), "remove_node");
+        delete newValidation[change.id];
+        hasRemovals = true;
       }
-      // `replace` carries a new full node object, `select`/`position`/`dimensions`
+      // `replace` carries a new full node object; `select`/`position`/`dimensions`
       // never affect data, so we don't bother seeding them.
       if (change.type === "replace") seeds.push(change.id);
     }
-    if (seeds.length) applyCascade(seeds);
+    set({ nodes: next, validation: newValidation });
+    if (seeds.length) {
+      applyCascade(seeds);
+    } else if (hasRemovals) {
+      // No cascade seeds but nodes were removed — check validity with cleaned state.
+      pushToRuntimeIfValid(next, get().edges, newValidation);
+    }
   },
 
   onEdgesChange: (changes) => {
@@ -424,7 +447,6 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     const removedSeeds = new Set<string>();
     for (const change of changes) {
       if (change.type === "remove") {
-        fireAndForget(invoke("remove_edge", { edgeId: change.id }), "remove_edge");
         const removedEdge = prev.find((e) => e.id === change.id);
         if (removedEdge) {
           removedSeeds.add(removedEdge.source);
@@ -453,13 +475,6 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     const nextEdges = addEdge({ ...connection, type: "audio" }, edges);
     set({ edges: nextEdges });
 
-    const newEdge = nextEdges.find(
-      (e) => !edges.some((p) => p.id === e.id),
-    );
-    if (newEdge) {
-      fireAndForget(invoke("add_edge", { edge: serializeEdge(newEdge) }), "add_edge");
-    }
-
     // Cascade from both source and target — source's produced may now be
     // observable downstream, and target's expected may have shifted.
     applyCascade(
@@ -472,10 +487,6 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
       node.id === id ? { ...node, data: { ...node.data, ...data } } : node,
     );
     set({ nodes: nextNodes });
-    const updated = nextNodes.find((n) => n.id === id);
-    if (updated) {
-      fireAndForget(invoke("update_node", { node: serializeNode(updated) }), "update_node");
-    }
     applyCascade([id]);
   },
 
