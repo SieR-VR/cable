@@ -60,7 +60,7 @@ export interface VstParamInfo {
   value: number;
 }
 
-const nodeDefs = {
+export const nodeDefs = {
   audioInputDevice: audioInputDeviceDef,
   audioOutputDevice: audioOutputDeviceDef,
   virtualAudioInput: virtualAudioInputDef,

@@ -80,7 +80,7 @@ describe("validation engine", () => {
     ];
     const out = runFullValidation({ nodes, edges: [], validation: {}, getDef });
     expect(out.validation.out.expectedInputs["AudioOutputDevice-target"]).toEqual(audioType(2, 48000, 16));
-    expect((out.nodes[0]!.data as any).invalid).toBe(false);
+    expect((out.nodes[0]!.data as any).invalid).toBeFalsy();
   });
 
   it("Mixer flags invalid when its two inputs disagree", () => {

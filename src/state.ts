@@ -10,7 +10,9 @@ import {
 } from "@xyflow/react";
 import { createWithEqualityFn } from "zustand/traditional";
 
-import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice, VstPluginInfo, serializeEdge, serializeNode } from "./types";
+import { ValidationResult } from "./graph/edge-type";
+import { runCascade, runFullValidation, ValidationContext } from "./graph/validation";
+import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice, VstPluginInfo, nodeDefs, serializeEdge, serializeNode } from "./types";
 
 const fireAndForget = (p: Promise<unknown>, label: string) => {
   p.catch((e) => console.warn(`${label} failed:`, e));
@@ -67,6 +69,9 @@ export interface AppState {
   /** Latest per-frame render data for all active visualizer nodes. */
   nodeRenderData: Record<string, NodeRenderData>;
 
+  /** Latest per-node validation result, keyed by node id. */
+  validation: Record<string, ValidationResult>;
+
   nodes: NodeType[];
   edges: EdgeType[];
 
@@ -117,6 +122,9 @@ export interface AppState {
   /** Replace the entire graph with loaded nodes and edges. */
   loadGraph: (nodes: NodeType[], edges: EdgeType[]) => void;
 
+  /** Force a full type-check pass over the entire graph. */
+  runFullTypeCheck: () => void;
+
   /** Scan the system for VST3 plugins and cache the result. */
   scanVstPlugins: () => Promise<void>;
 
@@ -126,7 +134,35 @@ export interface AppState {
   stopRenderPolling: () => void;
 }
 
-export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
+export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
+  const ctxGetDef: ValidationContext["getDef"] = (type) =>
+    (type ? (nodeDefs as any)[type] : undefined);
+
+  /**
+   * Run the validation cascade from `seedIds` against the current store state
+   * and apply the resulting nodes/edges/validation atomically.
+   */
+  function applyCascade(seedIds: string[]): void {
+    const { nodes, edges, validation } = get();
+    const out = runCascade({ nodes, edges, validation, getDef: ctxGetDef }, seedIds);
+    set({
+      nodes: out.nodes as NodeType[],
+      edges: out.edges as EdgeType[],
+      validation: out.validation,
+    });
+  }
+
+  function applyFullValidation(): void {
+    const { nodes, edges } = get();
+    const out = runFullValidation({ nodes, edges, validation: {}, getDef: ctxGetDef });
+    set({
+      nodes: out.nodes as NodeType[],
+      edges: out.edges as EdgeType[],
+      validation: out.validation,
+    });
+  }
+
+  return {
   menuOpen: false,
 
   contextMenuOpen: false,
@@ -144,6 +180,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
   virtualDevices: [],
   vstPluginList: [],
   nodeRenderData: {},
+  validation: {},
 
   nodes: initialNodes,
   edges: [],
@@ -221,26 +258,37 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
 
     set({ nodes: [...nodes, newNode] });
     fireAndForget(invoke("add_node", { node: serializeNode(newNode) }), "add_node");
+    applyCascade([newNode.id]);
   },
 
   removeNodeAtContextMenu: () => {
-    const { nodes, edges, contextMenuTargetNodeId } = get();
+    const { nodes, edges, contextMenuTargetNodeId, validation } = get();
 
     if (!contextMenuTargetNodeId) {
       return;
     }
 
+    // Capture neighbors before deleting so we can re-validate them after.
+    const neighbors = new Set<string>();
+    for (const e of edges) {
+      if (e.source === contextMenuTargetNodeId) neighbors.add(e.target);
+      if (e.target === contextMenuTargetNodeId) neighbors.add(e.source);
+    }
+
+    const { [contextMenuTargetNodeId]: _removed, ...remainingValidation } = validation;
     set({
       nodes: nodes.filter((node) => node.id !== contextMenuTargetNodeId),
       edges: edges.filter(
         (edge) =>
           edge.source !== contextMenuTargetNodeId && edge.target !== contextMenuTargetNodeId,
       ),
+      validation: remainingValidation,
     });
     fireAndForget(
       invoke("remove_node", { nodeId: contextMenuTargetNodeId }),
       "remove_node",
     );
+    applyCascade([...neighbors]);
   },
 
   setSelectedAudioHost: (host: string) => set({ selectedAudioHost: host }),
@@ -305,6 +353,7 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       }),
       "replace_graph (initial sync)",
     );
+    applyFullValidation();
   },
 
   addVirtualDevice: async (name, deviceType) => {
@@ -351,11 +400,16 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     const next = applyNodeChanges<NodeType>(changes, prev);
     set({ nodes: next });
 
+    const seeds: string[] = [];
     for (const change of changes) {
       if (change.type === "remove") {
         fireAndForget(invoke("remove_node", { nodeId: change.id }), "remove_node");
       }
+      // `replace` carries a new full node object, `select`/`position`/`dimensions`
+      // never affect data, so we don't bother seeding them.
+      if (change.type === "replace") seeds.push(change.id);
     }
+    if (seeds.length) applyCascade(seeds);
   },
 
   onEdgesChange: (changes) => {
@@ -363,28 +417,22 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     const next = applyEdgeChanges<EdgeType>(changes, prev);
     set({ edges: next });
 
+    const removedSeeds = new Set<string>();
     for (const change of changes) {
       if (change.type === "remove") {
         fireAndForget(invoke("remove_edge", { edgeId: change.id }), "remove_edge");
+        const removedEdge = prev.find((e) => e.id === change.id);
+        if (removedEdge) {
+          removedSeeds.add(removedEdge.source);
+          removedSeeds.add(removedEdge.target);
+        }
       }
     }
+    if (removedSeeds.size) applyCascade([...removedSeeds]);
   },
 
   onConnect: (connection) => {
-    const { nodes, edges } = get();
-
-    const sourceNode = nodes.find((node) => node.id === connection.source);
-    const targetNode = nodes.find((node) => node.id === connection.target);
-
-    const fromType =
-      sourceNode?.data && "edgeType" in sourceNode.data ? sourceNode.data.edgeType : null;
-    const toType =
-      targetNode?.data && "edgeType" in targetNode.data ? targetNode.data.edgeType : null;
-
-    if (fromType && toType && fromType !== toType) {
-      console.warn(`Cannot connect nodes with different audio formats: ${fromType} -> ${toType}`);
-      return;
-    }
+    const { edges } = get();
 
     const isDuplicateInput = edges.some(
       (edge) =>
@@ -407,6 +455,12 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     if (newEdge) {
       fireAndForget(invoke("add_edge", { edge: serializeEdge(newEdge) }), "add_edge");
     }
+
+    // Cascade from both source and target — source's produced may now be
+    // observable downstream, and target's expected may have shifted.
+    applyCascade(
+      [connection.source, connection.target].filter((s): s is string => Boolean(s)),
+    );
   },
 
   updateNode: (id: string, data: any) => {
@@ -418,11 +472,12 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     if (updated) {
       fireAndForget(invoke("update_node", { node: serializeNode(updated) }), "update_node");
     }
+    applyCascade([id]);
   },
 
   loadGraph: (nodes: NodeType[], edges: EdgeType[]) => {
     const typedEdges = edges.map((e) => (e.type ? e : { ...e, type: "audio" }));
-    set({ nodes, edges: typedEdges });
+    set({ nodes, edges: typedEdges, validation: {} });
     fireAndForget(
       invoke("replace_graph", {
         graph: {
@@ -432,6 +487,11 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
       }),
       "replace_graph",
     );
+    applyFullValidation();
+  },
+
+  runFullTypeCheck: () => {
+    applyFullValidation();
   },
 
   scanVstPlugins: async () => {
@@ -461,4 +521,5 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => ({
     }
     set({ nodeRenderData: {} });
   },
-}));
+};
+});

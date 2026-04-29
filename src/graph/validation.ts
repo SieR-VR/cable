@@ -93,11 +93,15 @@ function validateOne(ctx: ValidationContext, nodeId: string): SingleStep {
     !prev || !equalTypeRecord(prev.producedOutputs, result.producedOutputs);
   const newValidation = { ...validation, [nodeId]: result };
 
-  const newNodes = nodes.map((n) =>
-    n.id !== nodeId
-      ? n
-      : ({ ...n, data: { ...n.data, invalid: !result.ok } } as AnyNode),
-  );
+  const newNodes = nodes.map((n) => {
+    if (n.id !== nodeId) return n;
+    if (result.ok) {
+      // Strip stale invalid flag if the node is now valid; keep the rest.
+      const { invalid: _drop, ...restData } = (n.data ?? {}) as Record<string, unknown>;
+      return { ...n, data: restData } as AnyNode;
+    }
+    return { ...n, data: { ...n.data, invalid: true } } as AnyNode;
+  });
 
   const newEdges = edges.map((e) => {
     if (e.source === nodeId && e.sourceHandle) {

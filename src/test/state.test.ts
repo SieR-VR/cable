@@ -172,7 +172,7 @@ describe("useAppStore — async virtual device actions", () => {
 });
 
 describe("useAppStore — onConnect edge type guard", () => {
-  it("blocks connections between nodes with mismatched edge types", () => {
+  it("allows mismatched connections but flags the resulting edge invalid", () => {
     useAppStore.setState({
       nodes: [
         {
@@ -180,28 +180,35 @@ describe("useAppStore — onConnect edge type guard", () => {
           type: "audioInputDevice",
           dragHandle: ".drag-handle__custom",
           position: { x: 0, y: 0 },
-          data: { device: null, edgeType: "pcm-16-48000" },
+          data: {
+            device: { id: "in-1", name: "In", channels: 2, defaultSampleRate: 48000, bitsPerSample: 16 },
+          },
         } as any,
         {
           id: "n2",
           type: "audioOutputDevice",
           dragHandle: ".drag-handle__custom",
           position: { x: 100, y: 0 },
-          data: { device: null, edgeType: "pcm-24-44100" },
+          data: {
+            device: { id: "out-1", name: "Out", channels: 2, defaultSampleRate: 44100, bitsPerSample: 24 },
+          },
         } as any,
       ],
       edges: [],
     });
 
+    // Pre-seed expected/produced via a full validation pass.
+    useAppStore.getState().runFullTypeCheck();
+
     useAppStore.getState().onConnect({
       source: "n1",
       target: "n2",
-      sourceHandle: null,
-      targetHandle: null,
+      sourceHandle: "AudioInputDevice-source",
+      targetHandle: "AudioOutputDevice-target",
     });
-
-    // Edge should NOT have been added
-    expect(useAppStore.getState().edges).toHaveLength(0);
+    const { edges } = useAppStore.getState();
+    expect(edges).toHaveLength(1);
+    expect(edges[0].data?.invalid).toBe(true);
   });
 
   it("allows connections when edge types match", () => {
