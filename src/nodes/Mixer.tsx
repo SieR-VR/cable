@@ -17,10 +17,10 @@ const INPUTS = [
 ] as const;
 const ROW_HEIGHT = 24;
 
-export function Mixer({ id }: NodeProps<MixerNodeType>) {
+export function Mixer({ id, data }: NodeProps<MixerNodeType>) {
   void id;
   return (
-    <NodeShell accent={NODE_ACCENTS.mixer} title="Mixer">
+    <NodeShell accent={NODE_ACCENTS.mixer} title="Mixer" invalid={(data as any)?.invalid}>
       {/*
         Negative horizontal margin cancels NodeShell's `p-2` body padding so
         the relative container spans the full card width. Handle dots then sit

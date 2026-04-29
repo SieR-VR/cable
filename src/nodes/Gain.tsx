@@ -18,7 +18,7 @@ export function Gain({ id, data }: NodeProps<GainNodeType>) {
   const updateNode = useAppStore((s) => s.updateNode);
 
   return (
-    <NodeShell accent={NODE_ACCENTS.gain} title="Gain">
+    <NodeShell accent={NODE_ACCENTS.gain} title="Gain" invalid={(data as any)?.invalid}>
       <div className="flex items-center gap-2">
         <label className="text-xs text-gray-300 w-10 shrink-0">Gain</label>
         <input

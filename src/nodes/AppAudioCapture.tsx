@@ -34,7 +34,7 @@ export function AppAudioCapture({ id, data }: NodeProps<AppAudioCaptureNode>) {
   }, []);
 
   return (
-    <NodeShell accent={NODE_ACCENTS.appAudioCapture} title="App Audio Capture">
+    <NodeShell accent={NODE_ACCENTS.appAudioCapture} title="App Audio Capture" invalid={(data as any)?.invalid}>
       {windowList !== null ? (
         <select
           className="w-full p-1 rounded bg-gray-600 text-white text-xs"

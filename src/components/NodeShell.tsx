@@ -23,6 +23,8 @@ interface NodeShellProps {
   className?: string;
   /** Extra inline styles on the outer wrapper. */
   style?: CSSProperties;
+  /** Render with a red border + warning glow when the node failed validation. */
+  invalid?: boolean;
   children?: ReactNode;
 }
 
@@ -32,13 +34,17 @@ export function NodeShell({
   minWidth = "11rem",
   className = "",
   style,
+  invalid = false,
   children,
 }: NodeShellProps) {
   const headerBg = `linear-gradient(135deg, ${accent}33, transparent)`;
+  const borderColor = invalid ? "#f85149" : undefined;
+  const boxShadow = invalid ? "0 0 0 1px #f85149aa, 0 0 12px #f8514955" : undefined;
   return (
     <div
-      className={`rounded-lg flex flex-col text-white shadow-md border border-gray-700 bg-gray-800 ${className}`}
-      style={{ minWidth, ...style }}
+      className={`rounded-lg flex flex-col text-white shadow-md border ${invalid ? "" : "border-gray-700"} bg-gray-800 ${className}`}
+      style={{ minWidth, ...(borderColor ? { borderColor, boxShadow } : {}), ...style }}
+      title={invalid ? "Type validation failed for this node" : undefined}
     >
       <div
         className="flex items-center gap-2 px-2 py-1.5 border-b border-gray-700 rounded-t-lg drag-handle__custom"

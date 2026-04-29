@@ -26,7 +26,7 @@ export function Echo({ id, data }: NodeProps<EchoNodeType>) {
   const wet = data.wet ?? 0.5;
 
   return (
-    <NodeShell accent={NODE_ACCENTS.echo} title="Echo">
+    <NodeShell accent={NODE_ACCENTS.echo} title="Echo" invalid={(data as any)?.invalid}>
       <div className="flex items-center gap-2">
         <label className="text-xs text-gray-300 w-14 shrink-0">Time</label>
         <input

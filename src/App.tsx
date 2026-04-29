@@ -25,6 +25,7 @@ function App() {
     onEdgesChange,
     onConnect,
     loadGraph,
+    runFullTypeCheck,
     startRenderPolling,
     stopRenderPolling,
   } = useAppStore();
@@ -77,6 +78,18 @@ function App() {
     document.title = "Cable";
     initializeApp();
   }, [initializeApp]);
+
+  // Ctrl+Shift+T → run full type check across the entire graph.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && (e.key === "T" || e.key === "t")) {
+        e.preventDefault();
+        runFullTypeCheck();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [runFullTypeCheck]);
 
   useEffect(() => {
     if (!selectedAudioHost) return;

@@ -57,7 +57,7 @@ function drawWaveform(canvas: HTMLCanvasElement | null, samples: number[]): void
   ctx.stroke();
 }
 
-export function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) {
+export function WaveformMonitor({ id, data }: NodeProps<WaveformMonitorNode>) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderData = useAppStore((s) => s.nodeRenderData[id]);
   const samples = renderData?.type === "waveformMonitor" ? renderData.data.samples : [];
@@ -67,7 +67,7 @@ export function WaveformMonitor({ id }: NodeProps<WaveformMonitorNode>) {
   }, [samples]);
 
   return (
-    <NodeShell accent={NODE_ACCENTS.waveformMonitor} title="Waveform Monitor" minWidth="16rem">
+    <NodeShell accent={NODE_ACCENTS.waveformMonitor} title="Waveform Monitor" minWidth="16rem" invalid={(data as any)?.invalid}>
       <canvas
         ref={canvasRef}
         width={CANVAS_WIDTH}

@@ -54,7 +54,7 @@ export function VstNode({ id, data }: NodeProps<VstNodeType>) {
   const maxHandles = Math.max(inputHandles.length, outputHandles.length, 1);
 
   return (
-    <NodeShell accent={NODE_ACCENTS.vst} title="VST Plugin" minWidth="14rem">
+    <NodeShell accent={NODE_ACCENTS.vst} title="VST Plugin" minWidth="14rem" invalid={(data as any)?.invalid}>
       {/* Plugin selector */}
       <div className="flex gap-1">
         <select

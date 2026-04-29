@@ -68,7 +68,7 @@ export function Compressor({ id, data }: NodeProps<CompressorNodeType>) {
   const makeup = data.makeUpDb ?? 0;
 
   return (
-    <NodeShell accent={NODE_ACCENTS.compressor} title="Compressor" minWidth="14rem">
+    <NodeShell accent={NODE_ACCENTS.compressor} title="Compressor" minWidth="14rem" invalid={(data as any)?.invalid}>
       <Row
         label="Threshold"
         value={threshold}

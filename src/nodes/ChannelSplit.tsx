@@ -18,10 +18,10 @@ const OUTPUTS = [
 
 const ROW_HEIGHT = 24;
 
-export function ChannelSplit({ id }: NodeProps<ChannelSplitNodeType>) {
+export function ChannelSplit({ id, data }: NodeProps<ChannelSplitNodeType>) {
   void id;
   return (
-    <NodeShell accent={NODE_ACCENTS.channelSplit} title="Channel Split">
+    <NodeShell accent={NODE_ACCENTS.channelSplit} title="Channel Split" invalid={(data as any)?.invalid}>
       {/*
         Negative horizontal margin mirrors the Mixer pattern: removes NodeShell's
         `p-2` body padding so handles sit flush with the card edges.

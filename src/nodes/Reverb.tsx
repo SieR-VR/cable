@@ -26,7 +26,7 @@ export function Reverb({ id, data }: NodeProps<ReverbNodeType>) {
   const damp = data.damp ?? 0.5;
 
   return (
-    <NodeShell accent={NODE_ACCENTS.reverb} title="Reverb">
+    <NodeShell accent={NODE_ACCENTS.reverb} title="Reverb" invalid={(data as any)?.invalid}>
       <div className="flex items-center gap-2">
         <label className="text-xs text-gray-300 w-14 shrink-0">Room</label>
         <input

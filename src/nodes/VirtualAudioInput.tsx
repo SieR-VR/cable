@@ -25,7 +25,7 @@ export function VirtualAudioInput({ id, data }: NodeProps<VirtualAudioInputNode>
   const captureDevices = virtualDevices.filter((d) => d.deviceType === "capture");
 
   return (
-    <NodeShell accent={NODE_ACCENTS.virtualAudioInput} title="Virtual Mic">
+    <NodeShell accent={NODE_ACCENTS.virtualAudioInput} title="Virtual Mic" invalid={(data as any)?.invalid}>
       <select
         className="w-full p-1 rounded bg-gray-600 text-white text-xs"
         value={data.deviceId || ""}

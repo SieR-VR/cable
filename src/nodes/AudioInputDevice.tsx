@@ -30,7 +30,7 @@ export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) 
   const { setDevice } = useAppStore(selector(id));
 
   return (
-    <NodeShell accent={NODE_ACCENTS.audioInputDevice} title="Audio Input">
+    <NodeShell accent={NODE_ACCENTS.audioInputDevice} title="Audio Input" invalid={(data as any)?.invalid}>
       <select
         className="w-full p-1 rounded bg-gray-600 text-white text-xs"
         onChange={(e) => {

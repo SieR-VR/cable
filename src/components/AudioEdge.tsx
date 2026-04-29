@@ -1,6 +1,7 @@
 import { EdgeLabelRenderer, EdgeProps, getBezierPath, Position } from "@xyflow/react";
 import { useState } from "react";
 
+import { formatEdgeType } from "@/graph/edge-type";
 import { parseAudioEdgeType } from "@/lib/utils";
 import { useAppStore } from "@/state";
 import { EdgeType } from "@/types";
@@ -235,21 +236,41 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
       : null;
   });
 
+  // Prefer the structured EdgeType carried by the edge itself (set by the
+  // validator); fall back to the legacy source-node string field, then to a
+  // hard-coded default.
+  const structuredType = data?.edgeType;
   const fmt =
-    parseAudioEdgeType(sourceEdgeType) ??
-    (data?.frequency && data?.channels && data?.bitsPerSample
+    structuredType && structuredType.kind === "audio"
       ? {
-          frequency: data.frequency,
-          channels: data.channels,
-          bitsPerSample: data.bitsPerSample,
+          frequency: structuredType.frequency,
+          channels: structuredType.channels,
+          bitsPerSample: structuredType.bitsPerSample,
         }
-      : FALLBACK_FORMAT);
+      : structuredType && structuredType.kind === "frequency"
+        ? {
+            frequency: structuredType.frequency,
+            channels: structuredType.channels,
+            bitsPerSample: 24,
+          }
+        : (parseAudioEdgeType(sourceEdgeType) ??
+          (data?.frequency && data?.channels && data?.bitsPerSample
+            ? {
+                frequency: data.frequency,
+                channels: data.channels,
+                bitsPerSample: data.bitsPerSample,
+              }
+            : FALLBACK_FORMAT));
+
+  const isFrequencyKind = structuredType?.kind === "frequency";
+  const isInvalid = !!data?.invalid;
+  const isNone = structuredType?.kind === "none";
 
   const channels = fmt.channels;
   const sampleRate = fmt.frequency;
   const bits = fmt.bitsPerSample;
 
-  const stroke = hueForRate(sampleRate);
+  const stroke = isInvalid ? "#f85149" : isNone ? "#8b949e" : hueForRate(sampleRate);
   const bs = bitStyle(bits);
   const offsets = strandOffsets(channels);
 
@@ -276,7 +297,9 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
 
   const hitPath = bezierAtOffset(sourceX, sourceY, targetX, targetY, sp, tp, 0);
 
-  const chipLabel = `${channels}ch · ${rateLabel(sampleRate)} · ${bits >= 32 ? "32f" : bits}`;
+  const chipLabel = structuredType
+    ? formatEdgeType(structuredType)
+    : `${channels}ch · ${rateLabel(sampleRate)} · ${bits >= 32 ? "32f" : bits}`;
   const showInlineCountBadge = channels > 4 && !showChip;
 
   return (
@@ -301,8 +324,8 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
           fill="none"
           stroke={stroke}
           strokeWidth={bs.width}
-          strokeOpacity={bs.opacity}
-          strokeDasharray={bs.dash}
+          strokeOpacity={isInvalid ? 1 : bs.opacity}
+          strokeDasharray={isInvalid ? "6 4" : isFrequencyKind ? "2 3" : bs.dash}
           pointerEvents="none"
         />
       ))}
@@ -316,7 +339,11 @@ export function AudioEdge(props: EdgeProps<EdgeType>) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{ cursor: "pointer" }}
-      />
+      >
+        {isInvalid && (
+          <title>Type mismatch: {chipLabel}</title>
+        )}
+      </path>
 
       <EdgeLabelRenderer>
         {showInlineCountBadge && (

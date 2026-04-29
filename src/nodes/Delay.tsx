@@ -18,7 +18,7 @@ export function Delay({ id, data }: NodeProps<DelayNodeType>) {
   const updateNode = useAppStore((s) => s.updateNode);
 
   return (
-    <NodeShell accent={NODE_ACCENTS.delay} title="Delay">
+    <NodeShell accent={NODE_ACCENTS.delay} title="Delay" invalid={(data as any)?.invalid}>
       <div className="flex items-center gap-2">
         <label className="text-xs text-gray-300 w-10 shrink-0">Time</label>
         <input

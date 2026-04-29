@@ -25,7 +25,7 @@ export function VirtualAudioOutput({ id, data }: NodeProps<VirtualAudioOutputNod
   const renderDevices = virtualDevices.filter((d) => d.deviceType === "render");
 
   return (
-    <NodeShell accent={NODE_ACCENTS.virtualAudioOutput} title="Virtual Speaker">
+    <NodeShell accent={NODE_ACCENTS.virtualAudioOutput} title="Virtual Speaker" invalid={(data as any)?.invalid}>
       <select
         className="w-full p-1 rounded bg-gray-600 text-white text-xs"
         value={data.deviceId || ""}

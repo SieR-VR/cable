@@ -41,7 +41,7 @@ function drawSpectrum(canvas: HTMLCanvasElement | null, bins: number[]): void {
   }
 }
 
-export function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>) {
+export function SpectrumAnalyzer({ id, data }: NodeProps<SpectrumAnalyzerNode>) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderData = useAppStore((s) => s.nodeRenderData[id]);
   const bins = renderData?.type === "spectrumAnalyzer" ? renderData.data.bins : [];
@@ -51,7 +51,7 @@ export function SpectrumAnalyzer({ id }: NodeProps<SpectrumAnalyzerNode>) {
   }, [bins]);
 
   return (
-    <NodeShell accent={NODE_ACCENTS.spectrumAnalyzer} title="Spectrum Analyzer" minWidth="16rem">
+    <NodeShell accent={NODE_ACCENTS.spectrumAnalyzer} title="Spectrum Analyzer" minWidth="16rem" invalid={(data as any)?.invalid}>
       <canvas
         ref={canvasRef}
         width={CANVAS_WIDTH}
