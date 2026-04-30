@@ -23,6 +23,7 @@ export const SETTING_KEYS = {
   bufferSize: "bufferSize",
   minimizeToTray: "minimizeToTrayEnabled",
   bluetoothBatteryEnabled: "bluetoothBatteryEnabled",
+  virtualDevices: "virtualDevices",
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];

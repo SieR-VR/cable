@@ -27,8 +27,27 @@ pub(crate) struct VirtualDevice {
   pub id: String,
   pub name: String,
   pub device_type: String,
+  /// Channel count for this device's expected audio format.
+  #[serde(default = "default_channels")]
+  pub channels: u32,
+  /// Sample rate for this device's expected audio format.
+  #[serde(default = "default_sample_rate")]
+  pub sample_rate: u32,
+  /// Bits per sample for this device's expected audio format.
+  #[serde(default = "default_bits_per_sample")]
+  pub bits_per_sample: u32,
   #[serde(skip)]
   pub endpoint_id: String,
+}
+
+fn default_channels() -> u32 {
+  2
+}
+fn default_sample_rate() -> u32 {
+  48000
+}
+fn default_bits_per_sample() -> u32 {
+  32
 }
 
 pub(crate) struct AppData {
@@ -343,6 +362,8 @@ pub fn run() {
       driver::commands::create_virtual_device,
       driver::commands::remove_virtual_device,
       driver::commands::rename_virtual_device,
+      driver::commands::restore_virtual_devices,
+      driver::commands::set_virtual_device_format,
       runtime::add_node,
       runtime::remove_node,
       runtime::update_node,

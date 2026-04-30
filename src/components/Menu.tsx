@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   PencilIcon,
   PlusIcon,
   Settings as SettingsIcon,
@@ -31,15 +33,22 @@ function DeviceItem({
   device,
   onRemove,
   onRename,
+  onSetFormat,
 }: {
   device: VirtualDevice;
   onRemove: () => void;
   onRename: (newName: string) => Promise<void>;
+  onSetFormat: (channels: number, sampleRate: number, bitsPerSample: number) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(device.name);
   const [renaming, setRenaming] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [formatOpen, setFormatOpen] = useState(false);
+
+  const channels = device.channels ?? 2;
+  const sampleRate = device.sampleRate ?? 48000;
+  const bitsPerSample = device.bitsPerSample ?? 32;
 
   const handleConfirm = async () => {
     if (!editName.trim() || editName === device.name) {
@@ -99,6 +108,13 @@ function DeviceItem({
             </span>
             <button
               className="p-0.5 text-gray-400 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={() => setFormatOpen((v) => !v)}
+              title="Format preset"
+            >
+              {formatOpen ? <ChevronUpIcon size={12} /> : <ChevronDownIcon size={12} />}
+            </button>
+            <button
+              className="p-0.5 text-gray-400 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
               onClick={() => {
                 setEditName(device.name);
                 setRenameError(null);
@@ -119,6 +135,56 @@ function DeviceItem({
         )}
       </div>
       {renameError && <span className="text-xs text-red-500 pl-1">{renameError}</span>}
+      {formatOpen && (
+        <div className="pl-1 pt-0.5 pb-1 flex flex-col gap-1 bg-gray-50 rounded border border-gray-200">
+          <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide px-1">
+            Format Preset
+          </span>
+          <div className="flex items-center gap-1 px-1">
+            <label className="text-[10px] text-gray-500 w-16 shrink-0">Channels</label>
+            <select
+              className="flex-1 text-[10px] border border-gray-300 rounded bg-white text-black px-0.5 py-0.5"
+              value={channels}
+              onChange={(e) => {
+                void onSetFormat(Number(e.target.value), sampleRate, bitsPerSample);
+              }}
+            >
+              <option value={1}>1 (Mono)</option>
+              <option value={2}>2 (Stereo)</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1 px-1">
+            <label className="text-[10px] text-gray-500 w-16 shrink-0">Sample Rate</label>
+            <select
+              className="flex-1 text-[10px] border border-gray-300 rounded bg-white text-black px-0.5 py-0.5"
+              value={sampleRate}
+              onChange={(e) => {
+                void onSetFormat(channels, Number(e.target.value), bitsPerSample);
+              }}
+            >
+              <option value={44100}>44100 Hz</option>
+              <option value={48000}>48000 Hz</option>
+              <option value={88200}>88200 Hz</option>
+              <option value={96000}>96000 Hz</option>
+              <option value={192000}>192000 Hz</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-1 px-1">
+            <label className="text-[10px] text-gray-500 w-16 shrink-0">Bit Depth</label>
+            <select
+              className="flex-1 text-[10px] border border-gray-300 rounded bg-white text-black px-0.5 py-0.5"
+              value={bitsPerSample}
+              onChange={(e) => {
+                void onSetFormat(channels, sampleRate, Number(e.target.value));
+              }}
+            >
+              <option value={16}>16-bit</option>
+              <option value={24}>24-bit</option>
+              <option value={32}>32-bit</option>
+            </select>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -131,6 +197,7 @@ function DeviceGroup({
   onAdd,
   onRemove,
   onRename,
+  onSetFormat,
 }: {
   title: string;
   color: string;
@@ -139,6 +206,7 @@ function DeviceGroup({
   onAdd: (name: string, type: "render" | "capture") => void;
   onRemove: (id: string) => void;
   onRename: (id: string, name: string) => Promise<void>;
+  onSetFormat: (id: string, channels: number, sampleRate: number, bitsPerSample: number) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -165,6 +233,7 @@ function DeviceGroup({
             device={device}
             onRemove={() => onRemove(device.id)}
             onRename={(name) => onRename(device.id, name)}
+            onSetFormat={(ch, sr, bps) => onSetFormat(device.id, ch, sr, bps)}
           />
         </div>
       ))}
@@ -308,6 +377,7 @@ function VirtualDevicesPane() {
     addVirtualDevice,
     removeVirtualDevice,
     renameVirtualDevice,
+    setVirtualDeviceFormat,
   } = useAppStore();
 
   const renderDevices = virtualDevices.filter((d) => d.deviceType === "render");
@@ -327,10 +397,6 @@ function VirtualDevicesPane() {
         </span>
       </div>
 
-      <p className="text-xs text-gray-400">
-        Virtual device configuration is not persisted to AppData yet.
-      </p>
-
       {!driverConnected && (
         <p className="text-xs text-gray-400">
           Driver not connected. Changes will not reach the driver.
@@ -345,6 +411,7 @@ function VirtualDevicesPane() {
         onAdd={addVirtualDevice}
         onRemove={removeVirtualDevice}
         onRename={renameVirtualDevice}
+        onSetFormat={setVirtualDeviceFormat}
       />
 
       <DeviceGroup
@@ -355,6 +422,7 @@ function VirtualDevicesPane() {
         onAdd={addVirtualDevice}
         onRemove={removeVirtualDevice}
         onRename={renameVirtualDevice}
+        onSetFormat={setVirtualDeviceFormat}
       />
     </div>
   );

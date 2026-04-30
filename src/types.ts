@@ -68,6 +68,12 @@ export interface VirtualDevice {
   name: string;
   /** "render" or "capture". */
   deviceType: string;
+  /** Channel count for the device's expected audio format. Defaults to 2. */
+  channels?: number;
+  /** Sample rate in Hz for the device's expected audio format. Defaults to 48000. */
+  sampleRate?: number;
+  /** Bits per sample for the device's expected audio format. Defaults to 32. */
+  bitsPerSample?: number;
 }
 
 /** VST3 plugin info returned by the scan command. */

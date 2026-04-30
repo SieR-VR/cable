@@ -150,6 +150,9 @@ pub async fn create_virtual_device(
       id: hex_id.clone(),
       name,
       device_type,
+      channels: 2,
+      sample_rate: 48000,
+      bits_per_sample: 32,
       endpoint_id,
     };
     // Re-acquire the lock to persist the new device entry.
@@ -302,4 +305,46 @@ pub(crate) fn hex_to_device_id(hex: &str) -> Result<crate::driver::types::Device
   let mut id = [0u8; 16];
   id.copy_from_slice(&bytes);
   Ok(id)
+}
+
+/// Restore a list of virtual devices into AppData from persisted frontend state.
+///
+/// Called on app startup after `connect_driver` succeeds to repopulate the
+/// in-memory device map from the frontend's persisted `settings.json`. Any
+/// device already present in AppData (by ID) is left untouched.
+#[tauri::command]
+pub async fn restore_virtual_devices(
+  state: State<'_, Mutex<AppData>>,
+  devices: Vec<VirtualDevice>,
+) -> Result<(), String> {
+  let mut app = state.lock().await;
+  for device in devices {
+    let id = device.id.clone();
+    app.virtual_devices.entry(id).or_insert(device);
+  }
+  Ok(())
+}
+
+/// Update the format preset for a virtual device.
+///
+/// Stores the preferred audio format (channels, sample rate, bits per sample)
+/// alongside the device entry so the graph validation engine can check that
+/// connected audio edges match the device's expected format.
+#[tauri::command]
+pub async fn set_virtual_device_format(
+  state: State<'_, Mutex<AppData>>,
+  device_id: String,
+  channels: u32,
+  sample_rate: u32,
+  bits_per_sample: u32,
+) -> Result<(), String> {
+  let mut app = state.lock().await;
+  let device = app
+    .virtual_devices
+    .get_mut(&device_id)
+    .ok_or_else(|| format!("Device {} not found", device_id))?;
+  device.channels = channels;
+  device.sample_rate = sample_rate;
+  device.bits_per_sample = bits_per_sample;
+  Ok(())
 }
