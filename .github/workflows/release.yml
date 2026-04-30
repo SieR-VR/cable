@@ -101,35 +101,79 @@ jobs:
 
       - name: Install Windows Driver Kit
         shell: pwsh
-        continue-on-error: true
         run: |
-          $url = "https://go.microsoft.com/fwlink/?linkid=2196230"
+          $ErrorActionPreference = "Stop"
+
+          # Try the Win11 24H2 (10.0.26100) WDK first to match the SDK preinstalled
+          # on windows-2025 runners; fall back to 22621 if that fails.
+          $candidates = @(
+            "https://go.microsoft.com/fwlink/?linkid=2272234",
+            "https://go.microsoft.com/fwlink/?linkid=2196230"
+          )
           $installer = "$env:RUNNER_TEMP\wdksetup.exe"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          $proc = Start-Process -FilePath $installer -ArgumentList "/quiet","/norestart","/features","+" -Wait -PassThru
-          Write-Host "WDK installer exit code: $($proc.ExitCode)"
-          $vsixDir = "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix"
-          if (Test-Path $vsixDir) {
-            $vsix = Get-ChildItem $vsixDir -Filter "*.vsix" -Recurse | Select-Object -First 1
-            if ($vsix) {
-              $vsixInstaller = "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\VSIXInstaller.exe"
-              if (-not (Test-Path $vsixInstaller)) {
-                $vsixInstaller = (Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\*\Common7\IDE\VSIXInstaller.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          $installed = $false
+          foreach ($url in $candidates) {
+            try {
+              Write-Host "Downloading WDK from $url ..."
+              Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing
+              $proc = Start-Process -FilePath $installer -ArgumentList "/quiet","/norestart","/features","+" -Wait -PassThru
+              Write-Host "WDK installer exit code: $($proc.ExitCode)"
+              if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                $installed = $true
+                break
               }
-              if ($vsixInstaller) {
-                & $vsixInstaller /quiet /admin $vsix.FullName
+            } catch {
+              Write-Host "WDK install attempt failed: $_"
+            }
+          }
+          if (-not $installed) {
+            throw "Failed to install the Windows Driver Kit."
+          }
+
+          # Install every WDK VSIX into every VS 2022 instance found, otherwise
+          # MSBuild cannot resolve the WindowsKernelModeDriver10.0 toolset.
+          $vsixDir = "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix"
+          if (-not (Test-Path $vsixDir)) {
+            $vsixDir = "${env:ProgramFiles}\Windows Kits\10\Vsix"
+          }
+          if (-not (Test-Path $vsixDir)) {
+            Write-Host "No WDK VSIX directory found under Windows Kits\10\Vsix"
+          } else {
+            $vsixFiles = Get-ChildItem $vsixDir -Filter "*.vsix" -Recurse -ErrorAction SilentlyContinue
+            Write-Host "Found $($vsixFiles.Count) WDK VSIX file(s)."
+            $vsInstalls = @(
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise",
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\Professional",
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community",
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools",
+              "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools"
+            ) | Where-Object { Test-Path "$_\Common7\IDE\VSIXInstaller.exe" }
+            foreach ($vs in $vsInstalls) {
+              $vsixInstaller = "$vs\Common7\IDE\VSIXInstaller.exe"
+              foreach ($vsix in $vsixFiles) {
+                Write-Host "Installing $($vsix.Name) into $vs ..."
+                & $vsixInstaller /quiet /admin $vsix.FullName | Out-Host
+                Write-Host "VSIXInstaller exit code: $LASTEXITCODE"
               }
             }
           }
 
       - name: Build driver
         shell: pwsh
-        continue-on-error: true
         run: |
           .\scripts\build.ps1 -Target Driver -Configuration Release
 
+      - name: Upload MSBuild log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: driver-msbuild-binlog
+          path: driver/msbuild.binlog
+          if-no-files-found: ignore
+
       - name: Stage driver artifacts
         id: stage
+        if: success()
         shell: pwsh
         continue-on-error: true
         run: |

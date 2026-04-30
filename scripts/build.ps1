@@ -149,18 +149,22 @@ function Build-Driver {
     # Clean
     if ($Clean) {
         Write-Host "  Cleaning driver..." -ForegroundColor Yellow
-        & $msbuild $solutionFile /t:Clean /p:Configuration=$Configuration /p:Platform=$Platform /verbosity:quiet 2>$null
+        & $msbuild $solutionFile /t:Clean /p:Configuration=$Configuration /p:Platform=$Platform /verbosity:quiet 2>&1 | Out-Host
     }
 
     # Build
     Write-Host "  Compiling ($Configuration|$Platform)..." -ForegroundColor Yellow
+
+    $verbosity = if ($env:CI -or $env:GITHUB_ACTIONS) { "normal" } else { "minimal" }
+    $binlogPath = Join-Path $ProjectRoot "driver\msbuild.binlog"
 
     $msbuildArgs = @(
         $solutionFile,
         "/p:Configuration=$Configuration",
         "/p:Platform=$Platform",
         "/p:Inf2CatUseLocalTime=true",
-        "/verbosity:minimal",
+        "/verbosity:$verbosity",
+        "/bl:$binlogPath",
         "/m"
     )
 
@@ -177,7 +181,7 @@ function Build-Driver {
         )
     }
 
-    & $msbuild @msbuildArgs
+    & $msbuild @msbuildArgs | Out-Host
     $buildResult = $LASTEXITCODE
 
     if ($buildResult -ne 0) {
@@ -216,7 +220,7 @@ function Build-Driver {
             return $true
         }
 
-        & $signTool sign /fd SHA256 /f $pfxFile /p $pfxPassword /t http://timestamp.digicert.com $sysFile 2>&1
+        & $signTool sign /fd SHA256 /f $pfxFile /p $pfxPassword /t http://timestamp.digicert.com $sysFile 2>&1 | Out-Host
         if ($LASTEXITCODE -eq 0) {
             Write-Host "  Driver signed successfully." -ForegroundColor Green
         } else {
