@@ -68,7 +68,7 @@ function Draw-MicIcon {
     $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
     $g.FillEllipse($brush, ($cx - 12), ($cy - 26), 24, 36)
     $g.DrawArc($pen, ($cx - 20), ($cy - 12), 40, 30, 20, 140)
-    $g.DrawLine($pen, $cx, ($cy + 14), $cx, ($cy + 26))
+    $g.DrawLine($pen, $cx, ($cy + 18), $cx, ($cy + 26))
     $g.DrawLine($pen, ($cx - 12), ($cy + 26), ($cx + 12), ($cy + 26))
 }
 
@@ -87,8 +87,8 @@ function Draw-SpeakerIcon {
         (New-Object System.Drawing.Point (($cx - 18), ($cy + 8)))
     )
     $g.FillPolygon($brush, $pts)
-    $g.DrawArc($pen, ($cx + 12), ($cy - 14), 14, 28, -60, 120)
-    $g.DrawArc($pen, ($cx + 18), ($cy - 22), 22, 44, -60, 120)
+    $g.DrawArc($pen, ($cx + 8), ($cy - 14), 14, 28, -60, 120)
+    $g.DrawArc($pen, ($cx + 14), ($cy - 22), 22, 44, -60, 120)
 }
 
 function Draw-MixerIcon {
@@ -155,7 +155,7 @@ Draw-Handle ($x3 + $cardW) ($y3 + $cardH/2) $accent4
 
 $x4 = 940;  $y4 = 80
 Draw-Card $x4 $y4 $cardW $cardH $accent3
-Draw-SpeakerIcon ($x4 + $cardW/2) ($y4 + $cardH/2 + 4)
+Draw-SpeakerIcon ($x4 + $cardW/2 - 12) ($y4 + $cardH/2)
 Draw-Handle $x4 ($y4 + $cardH/2) $accent3
 
 $x5 = 940;  $y5 = 320
