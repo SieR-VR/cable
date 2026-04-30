@@ -138,11 +138,14 @@ impl NodeTrait for VirtualAudioInputNode {
         None => return Ok(BTreeMap::new()),
       };
 
-      // Collect all incoming edge data and write to ring buffer
+      // Collect all incoming edge data and write to ring buffer.
+      // The driver-side ring buffer holds samples in the negotiated wire
+      // format (typically 32-bit PCM int stereo @ 48 kHz for the mic), so
+      // pass the source channel count to let the writer adapt and encode.
       for edge in &runtime.edges {
         if edge.to == self.id {
           if let Some(buf) = state.edge_values.get(&edge.id) {
-            ring_buffer.write_f32_samples(&buf.samples);
+            ring_buffer.write_f32_samples(&buf.samples, buf.channels);
           }
         }
       }

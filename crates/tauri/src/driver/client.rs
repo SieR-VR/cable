@@ -480,20 +480,120 @@ impl RingBufferMapping {
 
   /// Write f32 samples into the ring buffer (capture path – app is the producer).
   ///
-  /// The samples are reinterpreted as raw bytes and written into the circular
-  /// data buffer starting at the current `write_index`.  After writing,
-  /// `write_index` is advanced and a `Release` fence is issued so the kernel
-  /// consumer sees the data before the updated index.
-  pub fn write_f32_samples(&mut self, samples: &[f32]) {
+  /// `samples` is interleaved f32 audio with `src_channels` channels.  The
+  /// samples are converted to the wire format negotiated by the consumer
+  /// (read from the ring buffer header) before being written into the
+  /// circular data buffer:
+  ///
+  /// * Channel count is adapted (mono → stereo duplication, stereo → mono
+  ///   averaging, etc.) to match the consumer's expected channel layout.
+  /// * f32 samples in the range `[-1.0, 1.0]` are converted to the wire
+  ///   sample type (PCM16 / PCM24 / PCM32 / Float32) using standard
+  ///   normalisation.
+  ///
+  /// If the stream format header has not yet been initialised by the driver
+  /// (no consumer has opened the endpoint), the write is dropped — there is
+  /// no reader on the other side, so writing raw bytes would only corrupt
+  /// the next stream that gets opened.
+  ///
+  /// After writing, `write_index` is advanced and a `Release` fence is
+  /// issued so the kernel consumer sees the data before the updated index.
+  pub fn write_f32_samples(&mut self, samples: &[f32], src_channels: u16) {
     let buf_size = self.read_buf_size();
-    if buf_size == 0 {
+    if buf_size == 0 || samples.is_empty() {
       return;
     }
 
-    let data = self.data_ptr();
-    let bytes: &[u8] =
-      unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 4) };
+    // Without a negotiated wire format we cannot safely encode the samples.
+    // Drop the write – there is no consumer reading anyway.
+    let (_sample_rate, wire_channels, bits, data_type) = match self.read_stream_format_metadata() {
+      Some(meta) => meta,
+      None => return,
+    };
 
+    let src_channels = src_channels.max(1) as usize;
+    let wire_channels = wire_channels.max(1) as usize;
+    let bytes_per_sample = match (bits, data_type) {
+      (16, _) | (_, AudioDataType::PcmInt16) => 2usize,
+      (24, _) | (_, AudioDataType::PcmInt24) => 3usize,
+      (32, AudioDataType::PcmInt32) => 4usize,
+      _ => 4usize, // Float32 default
+    };
+
+    // Channel adaptation: rewrap interleaved frames to `wire_channels`.
+    let src_frames = samples.len() / src_channels;
+    if src_frames == 0 {
+      return;
+    }
+    let mut adapted_storage: Vec<f32>;
+    let frame_samples: &[f32] = if src_channels == wire_channels {
+      samples
+    } else {
+      adapted_storage = Vec::with_capacity(src_frames * wire_channels);
+      for f in 0..src_frames {
+        let base = f * src_channels;
+        if wire_channels == 1 {
+          // Down-mix: average all source channels.
+          let mut sum = 0.0f32;
+          for c in 0..src_channels {
+            sum += samples[base + c];
+          }
+          adapted_storage.push(sum / src_channels as f32);
+        } else if src_channels == 1 {
+          // Up-mix mono: duplicate across all wire channels.
+          let s = samples[base];
+          for _ in 0..wire_channels {
+            adapted_storage.push(s);
+          }
+        } else {
+          // General case: copy each wire channel from the corresponding
+          // source channel, clamping the index to `src_channels - 1` so
+          // missing channels mirror the last available one.
+          for c in 0..wire_channels {
+            let src_idx = c.min(src_channels - 1);
+            adapted_storage.push(samples[base + src_idx]);
+          }
+        }
+      }
+      &adapted_storage
+    };
+
+    // Encode f32 → wire bytes.
+    let total_samples = frame_samples.len();
+    let mut bytes = Vec::with_capacity(total_samples * bytes_per_sample);
+    match (bits, data_type) {
+      (16, _) | (_, AudioDataType::PcmInt16) => {
+        for &s in frame_samples {
+          let clamped = s.clamp(-1.0, 1.0);
+          let v = (clamped * 32767.0).round() as i16;
+          bytes.extend_from_slice(&v.to_le_bytes());
+        }
+      }
+      (24, _) | (_, AudioDataType::PcmInt24) => {
+        for &s in frame_samples {
+          let clamped = s.clamp(-1.0, 1.0);
+          let v = (clamped * 8_388_607.0).round() as i32;
+          bytes.push((v & 0xff) as u8);
+          bytes.push(((v >> 8) & 0xff) as u8);
+          bytes.push(((v >> 16) & 0xff) as u8);
+        }
+      }
+      (32, AudioDataType::PcmInt32) => {
+        for &s in frame_samples {
+          let clamped = s.clamp(-1.0, 1.0) as f64;
+          let v = (clamped * 2_147_483_647.0).round() as i32;
+          bytes.extend_from_slice(&v.to_le_bytes());
+        }
+      }
+      _ => {
+        // Float32
+        for &s in frame_samples {
+          bytes.extend_from_slice(&s.to_le_bytes());
+        }
+      }
+    }
+
+    let data = self.data_ptr();
     let write_idx = self.read_write_index();
 
     for (i, &byte) in bytes.iter().enumerate() {
