@@ -130,15 +130,15 @@ jobs:
             throw "Failed to install the Windows Driver Kit."
           }
 
-          # Install every WDK VSIX into every VS 2022 instance found, otherwise
-          # MSBuild cannot resolve the WindowsKernelModeDriver10.0 toolset.
+          # wdksetup integrates the WDK MSBuild targets and VSIX into every VS 2022
+          # instance it finds. We re-run VSIXInstaller defensively, but tolerate
+          # exit code 1001 (already installed) which is the expected response
+          # immediately after a successful wdksetup run.
           $vsixDir = "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix"
           if (-not (Test-Path $vsixDir)) {
             $vsixDir = "${env:ProgramFiles}\Windows Kits\10\Vsix"
           }
-          if (-not (Test-Path $vsixDir)) {
-            Write-Host "No WDK VSIX directory found under Windows Kits\10\Vsix"
-          } else {
+          if (Test-Path $vsixDir) {
             $vsixFiles = Get-ChildItem $vsixDir -Filter "*.vsix" -Recurse -ErrorAction SilentlyContinue
             Write-Host "Found $($vsixFiles.Count) WDK VSIX file(s)."
             $vsInstalls = @(
@@ -153,10 +153,39 @@ jobs:
               foreach ($vsix in $vsixFiles) {
                 Write-Host "Installing $($vsix.Name) into $vs ..."
                 & $vsixInstaller /quiet /admin $vsix.FullName | Out-Host
-                Write-Host "VSIXInstaller exit code: $LASTEXITCODE"
+                $code = $LASTEXITCODE
+                Write-Host "VSIXInstaller exit code: $code"
+                if ($code -ne 0 -and $code -ne 1001) {
+                  Write-Host "::warning::VSIXInstaller returned $code for $($vsix.FullName)"
+                }
               }
             }
+          } else {
+            Write-Host "No WDK VSIX directory found under Windows Kits\10\Vsix"
           }
+
+          # Verify the kernel-mode toolset is registered with at least one VS install.
+          $toolsetFound = $false
+          foreach ($vs in @(
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise",
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\Professional",
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community",
+              "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools",
+              "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools"
+            )) {
+            $toolset = "$vs\MSBuild\Microsoft\VC\v170\Platforms\x64\PlatformToolsets\WindowsKernelModeDriver10.0"
+            if (Test-Path $toolset) {
+              Write-Host "Found WindowsKernelModeDriver10.0 toolset at: $toolset"
+              $toolsetFound = $true
+            }
+          }
+          if (-not $toolsetFound) {
+            Write-Host "::warning::WindowsKernelModeDriver10.0 toolset directory not found in any VS 2022 install. The driver build will likely fail."
+          }
+
+          # Reset PowerShell's last exit code so a benign 1001 from VSIXInstaller
+          # doesn't fail this step.
+          $global:LASTEXITCODE = 0
 
       - name: Build driver
         shell: pwsh
