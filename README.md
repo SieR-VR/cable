@@ -2,7 +2,11 @@
 
 [한국어 README](./README-ko.md)
 
-A real-time audio routing desktop app for Windows. Build a node graph that connects physical and virtual audio devices, and create virtual audio endpoints on demand through a custom kernel driver.
+<p align="center">
+  <img src="./docs/images/readme-diagram.jpg" alt="Cable node graph diagram" width="720" />
+</p>
+
+A real-time audio routing desktop app for Windows.Build a node graph that connects physical and virtual audio devices, and create virtual audio endpoints on demand through a custom kernel driver.
 
 > **Warning**
 > Cable is in early development. The virtual audio device feature requires Windows test signing to be enabled.
