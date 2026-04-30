@@ -1,66 +1,135 @@
 # Cable
 
-Windows용 실시간 오디오 라우팅 데스크탑 앱입니다. 노드 그래프 UI로 물리적·가상 오디오 장치를 연결하고, 가상 오디오 장치를 동적으로 생성·관리할 수 있습니다.
+[한국어 README](./README-ko.md)
+
+A real-time audio routing desktop app for Windows. Build a node graph that connects physical and virtual audio devices, and create virtual audio endpoints on demand through a custom kernel driver.
 
 > **Warning**
-> 현재 개발 초기 단계입니다. 가상 오디오 장치 기능은 테스트 서명(test signing)이 활성화된 Windows 환경에서만 동작합니다.
+> Cable is in early development. The virtual audio device feature requires Windows test signing to be enabled.
 
-## 특징
+---
 
-- **노드 그래프 편집기** — React Flow 기반 UI로 오디오 소스와 출력 장치를 연결
-- **가상 오디오 장치** — 커널 드라이버(CableAudio.sys)를 통해 가상 입출력 장치를 동적으로 생성
-- **실시간 오디오 처리** — 서브밀리초 정밀도의 스핀루프 오디오 처리 스레드
-- **장치 이름 변경** — 가상 장치의 표시 이름을 UAC 권한 상승을 통해 변경
+## Project Summary
 
-## 요구 사항
+Cable lets you wire any audio source to any audio sink on Windows from a visual node graph. Built-in nodes cover physical input/output devices (via `cpal`), virtual devices created by the bundled CableAudio kernel driver, app loopback capture (WASAPI), VST3 plugin hosting, and a small library of utility processors (Mixer, Gain, Channel Split/Merge, Delay, Compressor, Reverb, Echo, Spectrum Analyzer, Waveform Monitor).
 
-- Windows 10 / 11
-- 가상 오디오 장치 사용 시: 테스트 서명 모드 활성화
+The app is built on Tauri v2: a React + React Flow frontend drives a Rust audio runtime that processes the graph in topological order on a sub-millisecond spin-loop thread. A type system on the frontend statically validates each connection (channels / sample rate / bit depth) before the graph is pushed to the runtime, so only fully-validated graphs ever reach the audio engine.
 
-## 빌드
+---
 
-의존성: [Rust](https://rustup.rs), [Node.js](https://nodejs.org), [pnpm](https://pnpm.io), [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) (C++ 워크로드 포함), [WDK](https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk) (드라이버 빌드 시)
+## Getting Started
+
+### Install a release
+
+1. Download the latest `Cable_<version>_x64-setup.exe` from the [Releases page](https://github.com/SieR-VR/cable/releases).
+2. Run the installer.
+3. (Optional, for virtual audio devices) Enable Windows test signing — see [Notes](#notes).
+4. Launch **Cable** from the Start Menu.
+
+The first launch creates two placeholder nodes (Audio Input Device → Audio Output Device). Right-click the canvas to add more nodes; drag from one handle to another to connect.
+
+### System requirements
+
+- Windows 10 (1809+) or Windows 11
+- x64 CPU
+- For virtual audio devices: test-signing mode enabled and the CableAudio driver installed
+
+---
+
+## Features
+
+- **Visual node graph** — React Flow canvas with drag-to-connect, right-click context menus, and per-edge type badges
+- **Physical I/O** — Enumerate and route any WASAPI / DirectSound / WDM device through `cpal`
+- **Virtual audio devices** — Create render and capture endpoints on the fly via the CableAudio kernel driver; rename them with UAC elevation
+- **App loopback capture** — Capture audio from a specific running process (per-app capture, Windows 10 2004+)
+- **VST3 host** — Load and run third-party VST3 plugins inside the graph
+- **Built-in processors** — Mixer, Gain, Channel Split / Merge (2/4/6/8 channels), Delay, Compressor, Reverb, Echo
+- **Visualizers** — Spectrum Analyzer (FFT) and Waveform Monitor (oscilloscope-style)
+- **Static type checking** — Every edge is validated against the format expected by its sink; mismatched edges are highlighted and the graph is held back from the runtime until valid
+- **Save / load** — Persist a graph as JSON and drag-and-drop to reload
+- **Sub-millisecond runtime** — Topological-order spin-loop processing thread for low-jitter audio routing
+
+---
+
+## Notes
+
+- **Test signing for virtual devices.** The CableAudio kernel driver is currently signed with a self-generated test certificate. To install it you must enable test mode:
+  ```powershell
+  bcdedit /set testsigning on
+  ```
+  followed by a reboot. A production-signed driver is on the roadmap.
+- **Buffer size.** The runtime defaults to a 512-frame buffer at the device's native sample rate. Smaller buffers reduce latency but increase the chance of underruns on heavily loaded graphs.
+- **Virtual device naming.** Renaming a virtual endpoint writes to `PKEY_Device_FriendlyName`, which requires administrator privileges. Cable re-launches itself with elevation only for the rename action; the main window does not need admin rights.
+- **Graph validity gate.** If any node fails validation (e.g. a stereo source feeding a mono sink), the runtime keeps running the last fully-valid graph. Fix the offending edge or node and the new graph is pushed automatically.
+- **Licensing.** App code (`src/`, `crates/`) is GPL-3.0; the kernel driver (`driver/`) is MS-PL, derived from the Microsoft WDK samples and [VirtualDrivers/Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver). See [LICENSE](./LICENSE).
+
+---
+
+## Build Instructions
+
+### Prerequisites
+
+- [Rust](https://rustup.rs) (stable, with `x86_64-pc-windows-msvc`)
+- [Node.js](https://nodejs.org) ≥ 20
+- [pnpm](https://pnpm.io) ≥ 10
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) with the **Desktop development with C++** workload
+- [Windows Driver Kit (WDK)](https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk) — only needed if you build the driver
+
+### Common workflows
 
 ```powershell
-# 앱 전체 빌드 (드라이버 제외)
-.\scripts\build.ps1 -Target App
+# Install JS deps
+pnpm install
 
-# 드라이버만 빌드 (WDK 필요)
-.\scripts\build.ps1 -Target Driver
+# Run the app in dev mode (frontend HMR + Tauri)
+pnpm tauri dev
 
-# 전체 빌드 (드라이버 + 앱)
+# Frontend-only dev server (no Rust)
+pnpm dev
+
+# Production app build
+pnpm tauri build
+
+# One-shot full build (driver + frontend + Tauri app)
 .\scripts\build.ps1
 
-# 개발 서버 실행
-pnpm tauri dev
+# Driver only (requires WDK)
+.\scripts\build.ps1 -Target Driver
+
+# App only (skip driver)
+.\scripts\build.ps1 -Target App
 ```
 
-## 아키텍처
+### Quality gates
 
-```
-Frontend (React + Zustand + React Flow)
-        │  invoke() IPC
-        ▼
-Tauri Commands  (crates/tauri)
-        ├── Runtime     — 위상 정렬 기반 오디오 그래프 처리 (스핀루프)
-        ├── Nodes       — AudioInputDevice / AudioOutputDevice (cpal)
-        │               VirtualAudioInput / VirtualAudioOutput (드라이버 링버퍼)
-        └── DriverClient — Win32 SetupDi + DeviceIoControl → CableAudio.sys
-
-crates/common  — #![no_std] 커널-유저 공유 ABI 타입
-driver/        — CableAudio.sys Windows 커널 드라이버 (C++)
+```powershell
+pnpm lint            # oxlint
+pnpm fmt:check       # oxfmt --check
+pnpm test            # Vitest (frontend)
+cargo test --workspace   # Rust unit + ABI tests
+cargo fmt            # rustfmt
 ```
 
-## 라이선스
+### VM-based driver tests
 
-이 프로젝트는 구성 요소에 따라 이중 라이선스로 배포됩니다:
+Driver integration tests run inside a VMware guest. Prerequisites: VMware Workstation + `vmrun` on PATH, driver build artifacts under `driver/x64/Debug/package/`, and a `.env` with `VM_PASSWORD=...`.
 
-| 구성 요소 | 라이선스 |
-|-----------|----------|
-| 앱 코드 (`src/`, `crates/`) | [GPL-3.0](./LICENSE-GPL) |
-| 커널 드라이버 (`driver/`) | [MS-PL](./LICENSE-MS-PL) |
+```powershell
+.\.vm\setup.ps1                      # one-time VM provisioning
+.\.vm\test.ps1                       # run all Pester suites
+.\.vm\test.ps1 -TestFilter "*IOCTL*" # filter by Pester FullName
+.\.vm\exec.ps1 "Get-PnpDevice -Class MEDIA"
+```
 
-드라이버 코드는 Microsoft의 WDK 샘플 및 [VirtualDrivers/Virtual-Audio-Driver](https://github.com/VirtualDrivers/Virtual-Audio-Driver)를 기반으로 합니다.  
-원본 저작권: Copyright (c) Microsoft Corporation. All Rights Reserved.
+---
 
-자세한 내용은 [LICENSE](./LICENSE)를 참고하세요.
+## Roadmap
+
+- [ ] Production-signed kernel driver (no more test-signing required)
+- [ ] Per-edge sample rate conversion and bit-depth dithering
+- [ ] MIDI-style modulation graph (control-rate edges) alongside audio edges
+- [ ] More built-in processors: parametric EQ, limiter, noise gate, convolution reverb
+- [ ] LV2 / CLAP plugin hosts in addition to VST3
+- [ ] Multi-graph project files with per-graph enable/disable
+- [ ] macOS port (Core Audio backend; virtual device support TBD)
+- [ ] Real-time CPU and latency telemetry per node
