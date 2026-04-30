@@ -110,6 +110,8 @@ function DeviceItem({
               className="p-0.5 text-gray-400 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
               onClick={() => setFormatOpen((v) => !v)}
               title="Format preset"
+              aria-label="Toggle format preset"
+              aria-expanded={formatOpen}
             >
               {formatOpen ? <ChevronUpIcon size={12} /> : <ChevronDownIcon size={12} />}
             </button>
@@ -141,8 +143,14 @@ function DeviceItem({
             Format Preset
           </span>
           <div className="flex items-center gap-1 px-1">
-            <label className="text-[10px] text-gray-500 w-16 shrink-0">Channels</label>
+            <label
+              htmlFor={`channels-${device.id}`}
+              className="text-[10px] text-gray-500 w-16 shrink-0"
+            >
+              Channels
+            </label>
             <select
+              id={`channels-${device.id}`}
               className="flex-1 text-[10px] border border-gray-300 rounded bg-white text-black px-0.5 py-0.5"
               value={channels}
               onChange={(e) => {
@@ -154,8 +162,14 @@ function DeviceItem({
             </select>
           </div>
           <div className="flex items-center gap-1 px-1">
-            <label className="text-[10px] text-gray-500 w-16 shrink-0">Sample Rate</label>
+            <label
+              htmlFor={`sampleRate-${device.id}`}
+              className="text-[10px] text-gray-500 w-16 shrink-0"
+            >
+              Sample Rate
+            </label>
             <select
+              id={`sampleRate-${device.id}`}
               className="flex-1 text-[10px] border border-gray-300 rounded bg-white text-black px-0.5 py-0.5"
               value={sampleRate}
               onChange={(e) => {
@@ -170,8 +184,14 @@ function DeviceItem({
             </select>
           </div>
           <div className="flex items-center gap-1 px-1">
-            <label className="text-[10px] text-gray-500 w-16 shrink-0">Bit Depth</label>
+            <label
+              htmlFor={`bitDepth-${device.id}`}
+              className="text-[10px] text-gray-500 w-16 shrink-0"
+            >
+              Bit Depth
+            </label>
             <select
+              id={`bitDepth-${device.id}`}
               className="flex-1 text-[10px] border border-gray-300 rounded bg-white text-black px-0.5 py-0.5"
               value={bitsPerSample}
               onChange={(e) => {
