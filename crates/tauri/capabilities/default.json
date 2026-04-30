@@ -4,6 +4,7 @@
   "platforms": ["windows", "macOS", "linux"],
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "store:default"
   ]
 }

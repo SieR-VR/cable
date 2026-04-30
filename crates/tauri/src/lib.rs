@@ -3,7 +3,13 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex as StdMutex};
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::{Deserialize, Serialize};
-use tauri::{async_runtime::Mutex, Builder, State};
+use tauri::{
+  async_runtime::Mutex,
+  menu::{Menu, MenuItem},
+  tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+  Builder, Manager, State, WindowEvent,
+};
+use tauri_plugin_store::StoreExt;
 
 pub(crate) mod driver;
 pub(crate) mod nodes;
@@ -235,9 +241,16 @@ async fn node_command(
   node.command(data)
 }
 
+/// Filename of the persisted settings store (relative to app data dir).
+const SETTINGS_STORE_FILE: &str = "settings.json";
+/// Settings key controlling whether closing the window minimizes the app
+/// to the system tray instead of exiting. Defaults to `false`.
+const KEY_MINIMIZE_TO_TRAY: &str = "minimizeToTrayEnabled";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   Builder::default()
+    .plugin(tauri_plugin_store::Builder::default().build())
     .plugin(tauri_plugin_opener::init())
     .manage(Mutex::new(AppData {
       runtime: Arc::new(StdMutex::new(runtime::Runtime::new_default())),
@@ -247,6 +260,55 @@ pub fn run() {
       driver_handle: None,
       virtual_devices: BTreeMap::new(),
     }))
+    .setup(|app| {
+      // System tray: lets the user restore the window after it has been
+      // hidden by the "minimize to tray" setting, or quit the app entirely.
+      let show_item = MenuItem::with_id(app, "show", "Show Cable", true, None::<&str>)?;
+      let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+      let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+      let _tray = TrayIconBuilder::with_id("main")
+        .icon(app.default_window_icon().cloned().ok_or("no default window icon")?)
+        .tooltip("Cable")
+        .menu(&tray_menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+          "show" => show_main_window(app),
+          "quit" => app.exit(0),
+          _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+          if let TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+          } = event
+          {
+            show_main_window(tray.app_handle());
+          }
+        })
+        .build(app)?;
+
+      Ok(())
+    })
+    .on_window_event(|window, event| {
+      if let WindowEvent::CloseRequested { api, .. } = event {
+        if window.label() != "main" {
+          return;
+        }
+        let app = window.app_handle();
+        let minimize_to_tray = app
+          .store(SETTINGS_STORE_FILE)
+          .ok()
+          .and_then(|store| store.get(KEY_MINIMIZE_TO_TRAY))
+          .and_then(|v| v.as_bool())
+          .unwrap_or(false);
+        if minimize_to_tray {
+          api.prevent_close();
+          let _ = window.hide();
+        }
+      }
+    })
     .invoke_handler(tauri::generate_handler![
       get_window_list,
       get_audio_hosts,
@@ -275,4 +337,14 @@ pub fn run() {
     ])
     .run(tauri::generate_context!())
     .unwrap();
+}
+
+/// Bring the main webview window back to the foreground after it has been
+/// hidden (e.g. by the "minimize to tray on close" setting).
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+  if let Some(window) = app.get_webview_window("main") {
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+  }
 }
