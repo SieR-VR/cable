@@ -12,7 +12,11 @@ import { createWithEqualityFn } from "zustand/traditional";
 
 import { ValidationResult } from "./graph/edge-type";
 import { runCascade, runFullValidation, ValidationContext } from "./graph/validation";
-import { AudioDevice, EdgeType, NodeRenderData, NodeType, VirtualDevice, VstPluginInfo, nodeDefs, serializeEdge, serializeNode } from "./types";
+import { persistSetting, readSetting, SETTING_KEYS } from "./settings";
+import { AudioDevice, BluetoothBatteryInfo, EdgeType, NodeRenderData, NodeType, VirtualDevice, VstPluginInfo, nodeDefs, serializeEdge, serializeNode } from "./types";
+
+export const BUFFER_SIZE_OPTIONS = [64, 128, 256, 512, 1024, 2048] as const;
+export const DEFAULT_BUFFER_SIZE = 512;
 
 const fireAndForget = (p: Promise<unknown>, label: string) => {
   p.catch((e) => console.warn(`${label} failed:`, e));
@@ -55,6 +59,9 @@ export interface AppState {
   availableAudioHosts: string[] | null;
   selectedAudioHost: string | null;
 
+  /** Audio buffer size in frames. Persisted in settings.json. */
+  bufferSize: number;
+
   availableAudioInputDevices: AudioDevice[] | null;
   availableAudioOutputDevices: AudioDevice[] | null;
 
@@ -68,6 +75,14 @@ export interface AppState {
 
   /** Latest per-frame render data for all active visualizer nodes. */
   nodeRenderData: Record<string, NodeRenderData>;
+
+  /** Live AirPods battery levels keyed by audio container_id. Transient. */
+  bluetoothBattery: Record<string, BluetoothBatteryInfo>;
+  /** Whether the BLE advertisement watcher should run. Persisted. */
+  bluetoothBatteryEnabled: boolean;
+
+  /** Whether closing the window minimizes to tray. Persisted. */
+  minimizeToTrayEnabled: boolean;
 
   /** Latest per-node validation result, keyed by node id. */
   validation: Record<string, ValidationResult>;
@@ -106,7 +121,12 @@ export interface AppState {
   removeNodeAtContextMenu: () => void;
 
   setSelectedAudioHost: (host: string) => void;
+  setBufferSize: (size: number) => void;
   setDriverConnected: (connected: boolean) => void;
+
+  setBluetoothBatteryEnabled: (enabled: boolean) => Promise<void>;
+  setBluetoothBattery: (info: BluetoothBatteryInfo) => void;
+  setMinimizeToTrayEnabled: (enabled: boolean) => Promise<void>;
 
   initializeApp: () => Promise<void>;
 
@@ -198,6 +218,8 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
   availableAudioHosts: null,
   selectedAudioHost: null,
 
+  bufferSize: DEFAULT_BUFFER_SIZE,
+
   availableAudioInputDevices: null,
   availableAudioOutputDevices: null,
 
@@ -205,6 +227,9 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
   virtualDevices: [],
   vstPluginList: [],
   nodeRenderData: {},
+  bluetoothBattery: {},
+  bluetoothBatteryEnabled: false,
+  minimizeToTrayEnabled: false,
   validation: {},
 
   nodes: initialNodes,
@@ -314,14 +339,84 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     applyCascade([...neighbors]);
   },
 
-  setSelectedAudioHost: (host: string) => set({ selectedAudioHost: host }),
+  setSelectedAudioHost: (host: string) => {
+    set({ selectedAudioHost: host });
+    fireAndForget(persistSetting(SETTING_KEYS.audioHost, host), "persist audio host");
+  },
+  setBufferSize: (size: number) => {
+    set({ bufferSize: size });
+    fireAndForget(persistSetting(SETTING_KEYS.bufferSize, size), "persist buffer size");
+  },
   setDriverConnected: (connected: boolean) => set({ driverConnected: connected }),
 
+  setBluetoothBatteryEnabled: async (enabled: boolean) => {
+    set({ bluetoothBatteryEnabled: enabled });
+    try {
+      await persistSetting(SETTING_KEYS.bluetoothBatteryEnabled, enabled);
+    } catch (e) {
+      console.warn("Failed to persist bluetoothBatteryEnabled:", e);
+    }
+    try {
+      if (enabled) {
+        await invoke("start_bluetooth_battery_watcher");
+      } else {
+        await invoke("stop_bluetooth_battery_watcher");
+        set({ bluetoothBattery: {} });
+      }
+    } catch (e) {
+      console.warn("Failed to toggle bluetooth battery watcher:", e);
+    }
+  },
+
+  setBluetoothBattery: (info: BluetoothBatteryInfo) =>
+    set((s) => ({ bluetoothBattery: { ...s.bluetoothBattery, [info.containerId]: info } })),
+
+  setMinimizeToTrayEnabled: async (enabled: boolean) => {
+    set({ minimizeToTrayEnabled: enabled });
+    try {
+      await persistSetting(SETTING_KEYS.minimizeToTray, enabled);
+    } catch (e) {
+      console.warn("Failed to persist minimizeToTrayEnabled:", e);
+    }
+  },
+
   initializeApp: async () => {
+    // Hydrate persisted preferences first so subsequent initialization picks
+    // them up. Failures fall through to defaults.
+    const [persistedHost, persistedBuffer, persistedBtBattery, persistedTray] =
+      await Promise.all([
+        readSetting<string>(SETTING_KEYS.audioHost),
+        readSetting<number>(SETTING_KEYS.bufferSize),
+        readSetting<boolean>(SETTING_KEYS.bluetoothBatteryEnabled),
+        readSetting<boolean>(SETTING_KEYS.minimizeToTray),
+      ]);
+
+    let savedHost: string | null = null;
+    if (typeof persistedHost === "string") savedHost = persistedHost;
+    if (typeof persistedBuffer === "number" &&
+        (BUFFER_SIZE_OPTIONS as readonly number[]).includes(persistedBuffer)) {
+      set({ bufferSize: persistedBuffer });
+    }
+    const btBatteryEnabled = typeof persistedBtBattery === "boolean" && persistedBtBattery;
+    if (typeof persistedBtBattery === "boolean") {
+      set({ bluetoothBatteryEnabled: persistedBtBattery });
+    }
+    if (typeof persistedTray === "boolean") {
+      set({ minimizeToTrayEnabled: persistedTray });
+    }
+
+    if (btBatteryEnabled) {
+      invoke("start_bluetooth_battery_watcher").catch((e) =>
+        console.warn("Failed to start bluetooth battery watcher:", e),
+      );
+    }
+
     async function initHosts() {
       const hosts = await invoke<string[]>("get_audio_hosts");
-      set({ availableAudioHosts: hosts, selectedAudioHost: hosts[0] || null });
-      return hosts[0] || null;
+      const initial =
+        savedHost && hosts.includes(savedHost) ? savedHost : hosts[0] || null;
+      set({ availableAudioHosts: hosts, selectedAudioHost: initial });
+      return initial;
     }
 
     async function initDevices(host: string | null) {

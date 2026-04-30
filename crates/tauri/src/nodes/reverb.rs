@@ -252,7 +252,12 @@ impl NodeTrait for ReverbNode {
       }
     }
 
-    let out_buf = AudioBuffer::new(out_samples, buf.channels, buf.sample_rate, buf.bits_per_sample);
+    let out_buf = AudioBuffer::new(
+      out_samples,
+      buf.channels,
+      buf.sample_rate,
+      buf.bits_per_sample,
+    );
     let mut output = BTreeMap::new();
     for edge in &runtime.edges {
       if edge.from == self.id {

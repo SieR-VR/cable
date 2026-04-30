@@ -47,3 +47,4 @@ export async function invoke<T = unknown>(
 // Re-export types/symbols that production code may import from this module.
 export const Channel = class {};
 export const PluginListener = class {};
+export const Resource = class {};

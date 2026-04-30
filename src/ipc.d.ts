@@ -11,6 +11,14 @@ declare module "@tauri-apps/api/core" {
     },
   ): Promise<[AudioDevice[], AudioDevice[]]>;
 
+  declare function invoke(
+    cmd: "get_audio_device_bluetooth",
+    args: { deviceId: string },
+  ): Promise<import("./types").BluetoothInfo | null>;
+
+  declare function invoke(cmd: "start_bluetooth_battery_watcher"): Promise<void>;
+  declare function invoke(cmd: "stop_bluetooth_battery_watcher"): Promise<void>;
+
   declare function invoke(cmd: "connect_driver"): Promise<boolean>;
 
   declare function invoke(cmd: "is_driver_connected"): Promise<boolean>;

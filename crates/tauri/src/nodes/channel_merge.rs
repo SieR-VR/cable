@@ -38,7 +38,12 @@ fn interleave(channels: &[Option<&[f32]>]) -> Vec<f32> {
   if count == 0 {
     return Vec::new();
   }
-  let frames = channels.iter().filter_map(|c| *c).next().map(|s| s.len()).unwrap_or(0);
+  let frames = channels
+    .iter()
+    .filter_map(|c| *c)
+    .next()
+    .map(|s| s.len())
+    .unwrap_or(0);
   if frames == 0 {
     return Vec::new();
   }

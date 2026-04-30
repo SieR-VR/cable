@@ -1,12 +1,13 @@
 import { Node, NodeProps, Position } from "@xyflow/react";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { BluetoothBatteryWidget, useBluetoothInfo } from "@/components/BluetoothBadge";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
+import { NONE, audioType, isCompatible } from "@/graph/edge-type";
 import { formatAudioEdgeType } from "@/lib/utils";
+import { NodeDefinition } from "@/node-definition";
 import { AppState, useAppStore } from "@/state";
 import { AudioDevice } from "@/types";
-import { NodeDefinition } from "@/node-definition";
-import { NONE, audioType, isCompatible } from "@/graph/edge-type";
 
 export type AudioOutputDeviceNodeData = {
   device: AudioDevice | null;
@@ -25,14 +26,19 @@ const selector = (id: string) => (store: AppState) => ({
 });
 
 export function AudioOutputDevice({ id, data }: NodeProps<AudioOutputDeviceNode>) {
-  void data;
   const { availableAudioOutputDevices } = useAppStore();
   const { setDevice } = useAppStore(selector(id));
+  const btInfo = useBluetoothInfo(data?.device ?? null);
 
   return (
-    <NodeShell accent={NODE_ACCENTS.audioOutputDevice} title="Audio Output" invalid={(data as any)?.invalid}>
+    <NodeShell
+      accent={NODE_ACCENTS.audioOutputDevice}
+      title="Audio Output"
+      invalid={(data as any)?.invalid}
+    >
       <select
         className="w-full p-1 rounded bg-gray-600 text-white text-xs"
+        value={data?.device?.id ?? ""}
         onChange={(e) => {
           setDevice(
             availableAudioOutputDevices?.find((device) => device.id === e.target.value) || null,
@@ -52,9 +58,8 @@ export function AudioOutputDevice({ id, data }: NodeProps<AudioOutputDeviceNode>
           <option disabled>Loading devices...</option>
         )}
       </select>
-      {!availableAudioOutputDevices && (
-        <div className="text-xs text-gray-400">{"Loading..."}</div>
-      )}
+      {!availableAudioOutputDevices && <div className="text-xs text-gray-400">{"Loading..."}</div>}
+      <BluetoothBatteryWidget info={btInfo} />
       <AudioHandle type="target" position={Position.Left} id="AudioOutputDevice-target" />
     </NodeShell>
   );

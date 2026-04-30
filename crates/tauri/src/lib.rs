@@ -11,6 +11,7 @@ use tauri::{
 };
 use tauri_plugin_store::StoreExt;
 
+pub(crate) mod bluetooth;
 pub(crate) mod driver;
 pub(crate) mod nodes;
 mod runtime;
@@ -173,6 +174,21 @@ fn get_audio_devices(host: String) -> (Vec<AudioDevice>, Vec<AudioDevice>) {
 }
 
 #[tauri::command]
+fn get_audio_device_bluetooth(device_id: String) -> Option<bluetooth::BluetoothInfo> {
+  bluetooth::resolve_bluetooth_info(&device_id)
+}
+
+#[tauri::command]
+fn start_bluetooth_battery_watcher(app: tauri::AppHandle) -> Result<(), String> {
+  bluetooth::start_battery_watcher(app)
+}
+
+#[tauri::command]
+fn stop_bluetooth_battery_watcher() -> Result<(), String> {
+  bluetooth::stop_battery_watcher()
+}
+
+#[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) {
   #[cfg(debug_assertions)]
   window.open_devtools();
@@ -268,7 +284,12 @@ pub fn run() {
       let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
       let _tray = TrayIconBuilder::with_id("main")
-        .icon(app.default_window_icon().cloned().ok_or("no default window icon")?)
+        .icon(
+          app
+            .default_window_icon()
+            .cloned()
+            .ok_or("no default window icon")?,
+        )
         .tooltip("Cable")
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
@@ -313,6 +334,9 @@ pub fn run() {
       get_window_list,
       get_audio_hosts,
       get_audio_devices,
+      get_audio_device_bluetooth,
+      start_bluetooth_battery_watcher,
+      stop_bluetooth_battery_watcher,
       driver::commands::connect_driver,
       driver::commands::is_driver_connected,
       driver::commands::list_virtual_devices,

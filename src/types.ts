@@ -34,6 +34,32 @@ export interface AudioDevice {
   bitsPerSample: number;
 }
 
+/** Bluetooth-side identity for an audio endpoint, surfaced via PnP container_id. */
+export interface BluetoothInfo {
+  containerId: string;
+  address: string | null;
+  vendorId: number | null;
+  productId: number | null;
+  category: string | null;
+  isBluetooth: boolean;
+}
+
+/**
+ * Live battery info pushed by the AppleCP advertisement watcher. All
+ * percent values are 0..100; null means the device didn't broadcast a
+ * value (15 in raw payload).
+ */
+export interface BluetoothBatteryInfo {
+  containerId: string;
+  modelId: number;
+  left: number | null;
+  right: number | null;
+  case: number | null;
+  chargingLeft: boolean;
+  chargingRight: boolean;
+  chargingCase: boolean;
+}
+
 /** A virtual audio device created in the CableAudio driver. */
 export interface VirtualDevice {
   /** Hex-encoded 16-byte device ID from the driver. */

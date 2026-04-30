@@ -52,7 +52,11 @@ impl NodeTrait for GainNode {
     };
 
     let gain = self.gain;
-    let samples: Vec<f32> = buf.samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect();
+    let samples: Vec<f32> = buf
+      .samples
+      .iter()
+      .map(|&s| (s * gain).clamp(-1.0, 1.0))
+      .collect();
     let out_buf = AudioBuffer::new(samples, buf.channels, buf.sample_rate, buf.bits_per_sample);
 
     let mut output = BTreeMap::new();
@@ -68,7 +72,10 @@ impl NodeTrait for GainNode {
 #[cfg(test)]
 mod tests {
   fn apply_gain(samples: &[f32], gain: f32) -> Vec<f32> {
-    samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect()
+    samples
+      .iter()
+      .map(|&s| (s * gain).clamp(-1.0, 1.0))
+      .collect()
   }
 
   #[test]

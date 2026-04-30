@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ReactFlow, Background, BackgroundVariant, Panel, ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -10,7 +11,7 @@ import { ContextMenu } from "./components/ContextMenu";
 import Menu from "./components/Menu";
 
 import { useAppStore } from "./state";
-import { CableGraphFile, EdgeType, NodeType, nodeTypes } from "./types";
+import { CableGraphFile, BluetoothBatteryInfo, EdgeType, NodeType, nodeTypes } from "./types";
 
 function App() {
   const {
@@ -18,6 +19,7 @@ function App() {
     setContextMenuOpen,
     initializeApp,
     selectedAudioHost,
+    bufferSize,
     driverConnected,
     nodes,
     edges,
@@ -28,6 +30,7 @@ function App() {
     runFullTypeCheck,
     startRenderPolling,
     stopRenderPolling,
+    setBluetoothBattery,
   } = useAppStore();
 
   const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
@@ -92,12 +95,24 @@ function App() {
   }, [runFullTypeCheck]);
 
   useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<BluetoothBatteryInfo>("bluetooth-battery-update", (e) => {
+      setBluetoothBattery(e.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [setBluetoothBattery]);
+
+  useEffect(() => {
     if (!selectedAudioHost) return;
     invoke("set_audio_config", {
       host: selectedAudioHost,
-      bufferSize: 512,
+      bufferSize,
     }).catch((e) => console.warn("set_audio_config failed:", e));
-  }, [selectedAudioHost]);
+  }, [selectedAudioHost, bufferSize]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;

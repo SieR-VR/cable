@@ -82,11 +82,7 @@ impl NodeTrait for ChannelSplitNode {
               AudioBuffer::new(mono_samples, 1, buf.sample_rate, buf.bits_per_sample)
             } else {
               // Channel index out of range — emit silence.
-              AudioBuffer::silence(
-                buf.samples.len() / total_ch.max(1),
-                1,
-                buf.sample_rate,
-              )
+              AudioBuffer::silence(buf.samples.len() / total_ch.max(1), 1, buf.sample_rate)
             }
           } else {
             buf.clone()

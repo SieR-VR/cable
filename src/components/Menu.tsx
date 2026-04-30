@@ -1,18 +1,31 @@
 import { invoke } from "@tauri-apps/api/core";
-import { LazyStore } from "@tauri-apps/plugin-store";
-import { MenuIcon, XIcon, PlusIcon, TrashIcon, PencilIcon, CheckIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  CheckIcon,
+  PencilIcon,
+  PlusIcon,
+  Settings as SettingsIcon,
+  TrashIcon,
+  XIcon,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { cn } from "@/lib/utils";
-import { useAppStore } from "@/state";
+import { BUFFER_SIZE_OPTIONS, useAppStore } from "@/state";
 import { VirtualDevice } from "@/types";
 
-/**
- * Persistent settings store backing user preferences (e.g. tray behavior).
- * Lazily loaded the first time it is read or written.
- */
-const settingsStore = new LazyStore("settings.json");
-const KEY_MINIMIZE_TO_TRAY = "minimizeToTrayEnabled";
+type CategoryId = "general" | "audio" | "virtualDevices" | "developer";
+
+interface Category {
+  id: CategoryId;
+  label: string;
+}
+
+const CATEGORIES: Category[] = [
+  { id: "general", label: "General" },
+  { id: "audio", label: "Audio" },
+  { id: "virtualDevices", label: "Virtual Devices" },
+  { id: "developer", label: "Developer" },
+];
 
 function DeviceItem({
   device,
@@ -40,7 +53,6 @@ function DeviceItem({
       setEditing(false);
     } catch (e: unknown) {
       const msg = String(e);
-      // ShellExecuteExW failure means the user cancelled the UAC prompt.
       if (msg.includes("cancelled UAC") || msg.includes("ShellExecuteExW")) {
         setRenameError("Rename cancelled (UAC denied)");
       } else {
@@ -195,166 +207,258 @@ function DeviceGroup({
   );
 }
 
-export default function Menu() {
+function GeneralPane() {
   const {
-    menuOpen,
+    bluetoothBatteryEnabled,
+    setBluetoothBatteryEnabled,
+    minimizeToTrayEnabled,
+    setMinimizeToTrayEnabled,
+  } = useAppStore();
+  return (
+    <div className="flex flex-col gap-3">
+      <h2 className="text-sm font-bold text-black">General</h2>
+      <label className="flex items-center gap-2 cursor-pointer text-xs text-black">
+        <input
+          type="checkbox"
+          className="cursor-pointer"
+          checked={minimizeToTrayEnabled}
+          onChange={(e) => {
+            void setMinimizeToTrayEnabled(e.target.checked);
+          }}
+        />
+        <span className="flex-1">Keep running in tray when window is closed</span>
+      </label>
+      <label className="flex items-center gap-2 cursor-pointer text-xs text-black">
+        <input
+          type="checkbox"
+          className="cursor-pointer"
+          checked={bluetoothBatteryEnabled}
+          onChange={(e) => {
+            void setBluetoothBatteryEnabled(e.target.checked);
+          }}
+        />
+        <span className="flex-1">
+          Show AirPods battery on Bluetooth audio nodes
+          <span className="block text-[10px] text-gray-500">
+            Listens to Apple Continuity BLE advertisements while enabled.
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
+function AudioPane() {
+  const {
     availableAudioHosts,
     selectedAudioHost,
+    bufferSize,
+    setSelectedAudioHost,
+    setBufferSize,
+  } = useAppStore();
+
+  return (
+    <div className="flex flex-col gap-4">
+      <h2 className="text-sm font-bold text-black">Audio</h2>
+
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-semibold text-gray-600">Audio Host</span>
+        <select
+          className="border border-gray-300 rounded text-black text-xs p-1"
+          onChange={(e) => setSelectedAudioHost(e.target.value)}
+          value={selectedAudioHost ?? ""}
+        >
+          {availableAudioHosts ? (
+            availableAudioHosts.map((host) => (
+              <option key={host} value={host}>
+                {host}
+              </option>
+            ))
+          ) : (
+            <option>Loading...</option>
+          )}
+        </select>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-semibold text-gray-600">Buffer Size</span>
+        <select
+          className="border border-gray-300 rounded text-black text-xs p-1"
+          value={bufferSize}
+          onChange={(e) => setBufferSize(Number(e.target.value))}
+        >
+          {BUFFER_SIZE_OPTIONS.map((size) => (
+            <option key={size} value={size}>
+              {size} frames
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-gray-400">
+          Smaller buffers reduce latency but may cause audio dropouts.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function VirtualDevicesPane() {
+  const {
     driverConnected,
     virtualDevices,
-    setMenuOpen,
-    setSelectedAudioHost,
     addVirtualDevice,
     removeVirtualDevice,
     renameVirtualDevice,
   } = useAppStore();
 
-  const [minimizeToTray, setMinimizeToTray] = useState(false);
-
-  // Hydrate the tray setting from the persistent store on mount. Default off.
-  useEffect(() => {
-    let cancelled = false;
-    settingsStore
-      .get<boolean>(KEY_MINIMIZE_TO_TRAY)
-      .then((value) => {
-        if (!cancelled && typeof value === "boolean") {
-          setMinimizeToTray(value);
-        }
-      })
-      .catch((e) => console.warn("Failed to load tray setting:", e));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleMinimizeToTrayChange = async (next: boolean) => {
-    setMinimizeToTray(next);
-    try {
-      await settingsStore.set(KEY_MINIMIZE_TO_TRAY, next);
-      await settingsStore.save();
-    } catch (e) {
-      console.warn("Failed to persist tray setting:", e);
-    }
-  };
-
   const renderDevices = virtualDevices.filter((d) => d.deviceType === "render");
   const captureDevices = virtualDevices.filter((d) => d.deviceType === "capture");
 
   return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold text-black">Virtual Devices</h2>
+        <span
+          className={cn(
+            "text-xs px-1.5 py-0.5 rounded",
+            driverConnected ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700",
+          )}
+        >
+          {driverConnected ? "connected" : "offline"}
+        </span>
+      </div>
+
+      <p className="text-xs text-gray-400">
+        Virtual device configuration is not persisted to AppData yet.
+      </p>
+
+      {!driverConnected && (
+        <p className="text-xs text-gray-400">
+          Driver not connected. Changes will not reach the driver.
+        </p>
+      )}
+
+      <DeviceGroup
+        title="Output (Speakers)"
+        color="bg-teal-400"
+        devices={renderDevices}
+        deviceType="render"
+        onAdd={addVirtualDevice}
+        onRemove={removeVirtualDevice}
+        onRename={renameVirtualDevice}
+      />
+
+      <DeviceGroup
+        title="Input (Microphones)"
+        color="bg-purple-400"
+        devices={captureDevices}
+        deviceType="capture"
+        onAdd={addVirtualDevice}
+        onRemove={removeVirtualDevice}
+        onRename={renameVirtualDevice}
+      />
+    </div>
+  );
+}
+
+function DeveloperPane() {
+  return (
+    <div className="flex flex-col gap-3">
+      <h2 className="text-sm font-bold text-black">Developer</h2>
+      <button
+        className="self-start text-xs text-black border border-gray-300 rounded px-2 py-1 hover:bg-gray-100 transition-colors"
+        onClick={() => invoke("open_devtools")}
+      >
+        Open Developer Tools
+      </button>
+    </div>
+  );
+}
+
+export default function Menu() {
+  const { menuOpen, setMenuOpen } = useAppStore();
+  const [activeCategory, setActiveCategory] = useState<CategoryId>("general");
+
+  // Close on Escape.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen, setMenuOpen]);
+
+  const pane = useMemo(() => {
+    switch (activeCategory) {
+      case "general":
+        return <GeneralPane />;
+      case "audio":
+        return <AudioPane />;
+      case "virtualDevices":
+        return <VirtualDevicesPane />;
+      case "developer":
+        return <DeveloperPane />;
+    }
+  }, [activeCategory]);
+
+  return (
     <>
-      <MenuIcon
-        className={cn(menuOpen && "hidden", "text-black absolute top-0 m-2 cursor-pointer")}
+      <SettingsIcon
+        className={cn(
+          menuOpen && "hidden",
+          "text-black absolute bottom-0 left-0 m-2 cursor-pointer",
+        )}
         onClick={() => setMenuOpen(true)}
       />
-      <div
-        className={cn(
-          menuOpen ? "transform-none" : "-translate-x-72",
-          "absolute top-0 h-full w-72 bg-white border-r border-gray-200 shadow-lg transition-transform flex flex-col",
-        )}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-3 border-b border-gray-200">
-          <span className="text-sm font-bold text-black">Cable</span>
-          <XIcon
-            className="text-gray-500 cursor-pointer hover:text-black"
-            size={18}
-            onClick={() => setMenuOpen(false)}
-          />
-        </div>
 
-        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
-          {/* Audio Host */}
-          <div className="flex flex-col gap-1">
-            <span className="text-xs font-semibold text-gray-600">Audio Host</span>
-            <select
-              className="border border-gray-300 rounded text-black text-xs p-1"
-              onChange={(e) => setSelectedAudioHost(e.target.value)}
-              value={selectedAudioHost ?? ""}
-            >
-              {availableAudioHosts ? (
-                availableAudioHosts.map((host) => (
-                  <option key={host} value={host}>
-                    {host}
-                  </option>
-                ))
-              ) : (
-                <option>Loading...</option>
-              )}
-            </select>
-          </div>
-
-          {/* Separator */}
-          <div className="h-px bg-gray-200" />
-
-          {/* Virtual Devices */}
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-bold text-black">Virtual Devices</span>
-              <span
-                className={cn(
-                  "text-xs px-1.5 py-0.5 rounded",
-                  driverConnected ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700",
-                )}
-              >
-                {driverConnected ? "connected" : "offline"}
-              </span>
+      {menuOpen && (
+        <div
+          className="absolute inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setMenuOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl border border-gray-200 flex overflow-hidden w-[640px] h-[420px] max-w-[90vw] max-h-[80vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Left: category list */}
+            <div className="w-44 bg-gray-50 border-r border-gray-200 flex flex-col">
+              <div className="px-3 py-2 border-b border-gray-200">
+                <span className="text-sm font-bold text-black">Settings</span>
+              </div>
+              <nav className="flex-1 overflow-y-auto py-1">
+                {CATEGORIES.map((cat) => (
+                  <button
+                    key={cat.id}
+                    className={cn(
+                      "w-full text-left px-3 py-1.5 text-xs transition-colors",
+                      activeCategory === cat.id
+                        ? "bg-blue-100 text-blue-900 font-semibold"
+                        : "text-gray-700 hover:bg-gray-100",
+                    )}
+                    onClick={() => setActiveCategory(cat.id)}
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </nav>
             </div>
 
-            {!driverConnected && (
-              <p className="text-xs text-gray-400">
-                Driver not connected. Changes will not reach the driver.
-              </p>
-            )}
-
-            <DeviceGroup
-              title="Output (Speakers)"
-              color="bg-teal-400"
-              devices={renderDevices}
-              deviceType="render"
-              onAdd={addVirtualDevice}
-              onRemove={removeVirtualDevice}
-              onRename={renameVirtualDevice}
-            />
-
-            <DeviceGroup
-              title="Input (Microphones)"
-              color="bg-purple-400"
-              devices={captureDevices}
-              deviceType="capture"
-              onAdd={addVirtualDevice}
-              onRemove={removeVirtualDevice}
-              onRename={renameVirtualDevice}
-            />
-          </div>
-
-          {/* Separator */}
-          <div className="h-px bg-gray-200" />
-
-          {/* Settings */}
-          <div className="flex flex-col gap-2">
-            <span className="text-sm font-bold text-black">Settings</span>
-            <label className="flex items-center gap-2 cursor-pointer text-xs text-black">
-              <input
-                type="checkbox"
-                className="cursor-pointer"
-                checked={minimizeToTray}
-                onChange={(e) => handleMinimizeToTrayChange(e.target.checked)}
-              />
-              <span className="flex-1">Keep running in tray when window is closed</span>
-            </label>
+            {/* Right: settings pane */}
+            <div className="flex-1 flex flex-col min-w-0">
+              <div className="flex items-center justify-end px-2 py-1 border-b border-gray-200">
+                <button
+                  className="p-1 text-gray-500 hover:text-black cursor-pointer"
+                  onClick={() => setMenuOpen(false)}
+                  title="Close"
+                >
+                  <XIcon size={16} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">{pane}</div>
+            </div>
           </div>
         </div>
-
-        {/* Footer: Dev Tools */}
-        <div className="border-t border-gray-200 p-2">
-          <button
-            className="w-full text-xs text-gray-400 hover:text-gray-700 py-1 rounded hover:bg-gray-50 transition-colors"
-            onClick={() => invoke("open_devtools")}
-          >
-            Developer Tools
-          </button>
-        </div>
-      </div>
+      )}
     </>
   );
 }

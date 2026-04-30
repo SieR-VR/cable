@@ -1,6 +1,7 @@
 import { Node, NodeProps, Position } from "@xyflow/react";
 
 import { AudioHandle } from "@/components/AudioHandle";
+import { BluetoothBadge, BluetoothBatteryWidget, useBluetoothInfo } from "@/components/BluetoothBadge";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { formatAudioEdgeType } from "@/lib/utils";
 import { AppState, useAppStore } from "@/state";
@@ -25,14 +26,15 @@ const selector = (id: string) => (store: AppState) => ({
 });
 
 export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) {
-  void data;
   const { availableAudioInputDevices } = useAppStore();
   const { setDevice } = useAppStore(selector(id));
+  const btInfo = useBluetoothInfo(data?.device ?? null);
 
   return (
     <NodeShell accent={NODE_ACCENTS.audioInputDevice} title="Audio Input" invalid={(data as any)?.invalid}>
       <select
         className="w-full p-1 rounded bg-gray-600 text-white text-xs"
+        value={data?.device?.id ?? ""}
         onChange={(e) => {
           setDevice(
             availableAudioInputDevices?.find((device) => device.id === e.target.value) || null,
@@ -55,6 +57,8 @@ export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) 
       {!availableAudioInputDevices && (
         <div className="text-xs text-gray-400">{"Loading..."}</div>
       )}
+      <BluetoothBadge info={btInfo} />
+      <BluetoothBatteryWidget info={btInfo} />
       <AudioHandle type="source" position={Position.Right} id="AudioInputDevice-source" />
     </NodeShell>
   );
