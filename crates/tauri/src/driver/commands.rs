@@ -6,7 +6,8 @@ use tauri::{async_runtime::Mutex, State};
 
 use super::client;
 use crate::driver::endpoint::{
-  elevated_set_endpoint_device_desc, endpoint_exists, find_new_endpoint_id, snapshot_endpoint_ids,
+  elevated_set_endpoint_device_desc, elevated_set_endpoint_device_format, endpoint_exists,
+  find_new_endpoint_id, snapshot_endpoint_ids,
 };
 use crate::{AppData, VirtualDevice};
 /// Try to open a handle to the CableAudio kernel driver.
@@ -330,6 +331,11 @@ pub async fn restore_virtual_devices(
 /// Stores the preferred audio format (channels, sample rate, bits per sample)
 /// alongside the device entry so the graph validation engine can check that
 /// connected audio edges match the device's expected format.
+///
+/// If the device has a known Windows MM endpoint ID the format change is also
+/// applied to the endpoint's `PKEY_AudioEngine_DeviceFormat` property via an
+/// elevated sub-process, so Windows Audio Engine uses the new format the next
+/// time the device is opened by a client application.
 #[tauri::command]
 pub async fn set_virtual_device_format(
   state: State<'_, Mutex<AppData>>,
@@ -338,13 +344,61 @@ pub async fn set_virtual_device_format(
   sample_rate: u32,
   bits_per_sample: u32,
 ) -> Result<(), String> {
-  let mut app = state.lock().await;
-  let device = app
-    .virtual_devices
-    .get_mut(&device_id)
-    .ok_or_else(|| format!("Device {} not found", device_id))?;
-  device.channels = channels;
-  device.sample_rate = sample_rate;
-  device.bits_per_sample = bits_per_sample;
+  // Validate parameters early.
+  if channels == 0 || channels > 8 {
+    return Err(format!("Unsupported channel count: {}", channels));
+  }
+  if bits_per_sample != 16 && bits_per_sample != 24 && bits_per_sample != 32 {
+    return Err(format!(
+      "Unsupported bits_per_sample: {}. Must be 16, 24, or 32.",
+      bits_per_sample
+    ));
+  }
+
+  // Retrieve the endpoint_id before releasing the lock, then update metadata.
+  let endpoint_id = {
+    let mut app = state.lock().await;
+    let device = app
+      .virtual_devices
+      .get_mut(&device_id)
+      .ok_or_else(|| format!("Device {} not found", device_id))?;
+    device.channels = channels;
+    device.sample_rate = sample_rate;
+    device.bits_per_sample = bits_per_sample;
+    device.endpoint_id.clone()
+  };
+
+  // Attempt to apply the format to the Windows MM endpoint via an elevated
+  // subprocess (requires UAC consent). This is a best-effort operation:
+  // if it fails (e.g. no endpoint yet, UAC cancelled) the metadata update
+  // above still takes effect for graph validation.
+  #[cfg(windows)]
+  if !endpoint_id.is_empty() {
+    let ep = endpoint_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+      elevated_set_endpoint_device_format(&ep, sample_rate, channels as u16, bits_per_sample as u16)
+    })
+    .await;
+
+    match result {
+      Ok(Ok(())) => {
+        println!(
+          "set_virtual_device_format: applied {} Hz / {} ch / {}-bit to endpoint '{}'",
+          sample_rate, channels, bits_per_sample, endpoint_id
+        );
+      }
+      Ok(Err(e)) => {
+        eprintln!(
+          "set_virtual_device_format: elevated format change failed (non-fatal): {}",
+          e
+        );
+        return Err(format!("Format applied locally but endpoint update failed: {}", e));
+      }
+      Err(e) => {
+        eprintln!("set_virtual_device_format: spawn_blocking error: {}", e);
+      }
+    }
+  }
+
   Ok(())
 }

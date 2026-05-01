@@ -20,6 +20,9 @@ pub(crate) mod vst3_common;
 #[cfg(windows)]
 pub use driver::endpoint::rename_endpoint_elevated;
 
+#[cfg(windows)]
+pub use driver::endpoint::set_endpoint_format_elevated;
+
 /// A virtual audio device managed by the driver, independent of the audio graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

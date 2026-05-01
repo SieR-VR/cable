@@ -25,6 +25,27 @@ fn main() {
         }
       }
     }
+
+    // -----------------------------------------------------------------------
+    // Elevated helper mode: Cable.exe --set-endpoint-format <endpoint_id>
+    //                                   <sample_rate> <channels> <bits>
+    //
+    // Writes PKEY_AudioEngine_DeviceFormat via IPropertyStore so Windows Audio
+    // Engine uses the requested format when opening the virtual device.
+    // -----------------------------------------------------------------------
+    if args.len() >= 6 && args[1] == "--set-endpoint-format" {
+      let endpoint_id = &args[2];
+      let sample_rate = args[3].parse::<u32>().unwrap_or(48000);
+      let channels = args[4].parse::<u16>().unwrap_or(2);
+      let bits_per_sample = args[5].parse::<u16>().unwrap_or(32);
+      match ui::set_endpoint_format_elevated(endpoint_id, sample_rate, channels, bits_per_sample) {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+          eprintln!("set-endpoint-format failed: {}", e);
+          std::process::exit(1);
+        }
+      }
+    }
   }
 
   ui::run();
