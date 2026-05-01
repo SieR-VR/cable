@@ -400,7 +400,17 @@ pub(crate) fn set_endpoint_device_format(
       .map_err(|e| format!("OpenPropertyStore(READWRITE) failed: {}", e))?;
 
     // Build VT_BLOB PROPVARIANT.
-    // Layout: vt (u16 at offset 0) + 6 reserved bytes + cbSize (u32) + pBlobData (*mut u8).
+    //
+    // PROPVARIANT memory layout (x86-64):
+    //   offset  0: vt              (u16)
+    //   offset  2: wReserved1-3    (3 × u16)
+    //   offset  8: blob.cbSize     (u32)
+    //   offset 12: [4-byte padding to align the 8-byte pointer]
+    //   offset 16: blob.pBlobData  (*mut u8)
+    //
+    // Using pointer arithmetic because windows-rs does not expose the
+    // BLOB sub-union directly and `std::mem::offset_of!` is stable only
+    // from Rust 1.77+.
     let buf = CoTaskMemAlloc(blob_size as usize) as *mut WaveFormatExtensible;
     if buf.is_null() {
       return Err("CoTaskMemAlloc for format blob failed".to_string());
@@ -410,8 +420,8 @@ pub(crate) fn set_endpoint_device_format(
     let mut pv = PROPVARIANT::default();
     let pv_ptr = &mut pv as *mut PROPVARIANT as *mut u8;
     *(pv_ptr as *mut u16) = 0x41u16; // VT_BLOB
-    *(pv_ptr.add(8) as *mut u32) = blob_size; // cbSize
-    *(pv_ptr.add(12) as *mut *mut u8) = buf as *mut u8; // pBlobData
+    *(pv_ptr.add(8) as *mut u32) = blob_size; // blob.cbSize
+    *(pv_ptr.add(16) as *mut *mut u8) = buf as *mut u8; // blob.pBlobData (8-byte aligned)
 
     let key = PROPERTYKEY {
       fmtid: PKEY_AUDIO_ENGINE_DEVICE_FORMAT_FMTID,
@@ -421,7 +431,7 @@ pub(crate) fn set_endpoint_device_format(
     let set_result = props.SetValue(&key, &pv);
 
     CoTaskMemFree(Some(buf as *const _));
-    *(pv_ptr.add(12) as *mut *mut u8) = std::ptr::null_mut();
+    *(pv_ptr.add(16) as *mut *mut u8) = std::ptr::null_mut();
 
     set_result.map_err(|e| {
       format!(

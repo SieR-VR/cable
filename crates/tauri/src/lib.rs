@@ -39,7 +39,7 @@ pub(crate) struct VirtualDevice {
   /// Bits per sample for this device's expected audio format.
   #[serde(default = "default_bits_per_sample")]
   pub bits_per_sample: u32,
-  #[serde(skip)]
+  #[serde(default)]
   pub endpoint_id: String,
 }
 

@@ -58,6 +58,28 @@ impl std::fmt::Debug for VirtualAudioOutputNode {
   }
 }
 
+#[cfg(windows)]
+impl Drop for VirtualAudioOutputNode {
+  fn drop(&mut self) {
+    // Ensure the ring buffer is unmapped even if dispose() was never called
+    // (e.g. when the app is closed while the runtime is still running).
+    // Without this the driver retains pMappedUserAddress from the old process
+    // and returns STATUS_ALREADY_REGISTERED on the next MapRingBuffer call.
+    if let (Some(driver), Some(device_id), Some(mapping)) = (
+      self.driver_handle.as_ref(),
+      self.parsed_device_id.as_ref(),
+      self.ring_buffer.take(),
+    ) {
+      if let Err(e) = driver.unmap_ring_buffer(device_id, mapping.user_address) {
+        eprintln!(
+          "VirtualAudioOutputNode drop: unmap_ring_buffer failed (non-fatal): {}",
+          e
+        );
+      }
+    }
+  }
+}
+
 impl NodeTrait for VirtualAudioOutputNode {
   fn id(&self) -> &str {
     &self.id
@@ -132,7 +154,6 @@ impl NodeTrait for VirtualAudioOutputNode {
 
     Ok(())
   }
-
   fn process(
     &mut self,
     runtime: &Runtime,

@@ -26,9 +26,16 @@ const selector = (id: string) => (store: AppState) => ({
 });
 
 export function AudioOutputDevice({ id, data }: NodeProps<AudioOutputDeviceNode>) {
-  const { availableAudioOutputDevices } = useAppStore();
+  const { availableAudioOutputDevices, virtualDevices } = useAppStore();
   const { setDevice } = useAppStore(selector(id));
   const btInfo = useBluetoothInfo(data?.device ?? null);
+
+  // Exclude Cable virtual audio devices from the dropdown — those are managed
+  // through the virtual device panel and should not be selectable as plain outputs.
+  const virtualEndpointIds = new Set(virtualDevices.map((d) => d.endpointId).filter(Boolean));
+  const filteredDevices = availableAudioOutputDevices?.filter(
+    (d) => !virtualEndpointIds.has(d.id),
+  );
 
   return (
     <NodeShell
@@ -41,14 +48,14 @@ export function AudioOutputDevice({ id, data }: NodeProps<AudioOutputDeviceNode>
         value={data?.device?.id ?? ""}
         onChange={(e) => {
           setDevice(
-            availableAudioOutputDevices?.find((device) => device.id === e.target.value) || null,
+            filteredDevices?.find((device) => device.id === e.target.value) || null,
           );
         }}
       >
-        {availableAudioOutputDevices ? (
+        {filteredDevices ? (
           <>
             <option value="">-- Select an audio output device --</option>
-            {availableAudioOutputDevices.map((device) => (
+            {filteredDevices.map((device) => (
               <option key={device.id} value={device.id}>
                 {device.descriptions?.join("\n")}
               </option>
@@ -58,7 +65,7 @@ export function AudioOutputDevice({ id, data }: NodeProps<AudioOutputDeviceNode>
           <option disabled>Loading devices...</option>
         )}
       </select>
-      {!availableAudioOutputDevices && <div className="text-xs text-gray-400">{"Loading..."}</div>}
+      {!filteredDevices && <div className="text-xs text-gray-400">{"Loading..."}</div>}
       <BluetoothBatteryWidget info={btInfo} />
       <AudioHandle type="target" position={Position.Left} id="AudioOutputDevice-target" />
     </NodeShell>
