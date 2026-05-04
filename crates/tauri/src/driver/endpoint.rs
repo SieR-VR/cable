@@ -326,6 +326,94 @@ const SPEAKER_FRONT_LEFT: u32 = 0x1;
 const SPEAKER_FRONT_RIGHT: u32 = 0x2;
 const SPEAKER_FRONT_CENTER: u32 = 0x4;
 
+/// Read the current `PKEY_AudioEngine_DeviceFormat` from the MM endpoint.
+///
+/// Returns `(sample_rate, channels, bits_per_sample)` parsed from the
+/// `WAVEFORMATEXTENSIBLE` blob stored in the property store.
+/// Does not require UAC elevation — property store is opened read-only.
+pub(crate) fn read_endpoint_device_format(
+  endpoint_id: &str,
+) -> Result<(u32, u16, u16), String> {
+  use windows::Win32::Foundation::PROPERTYKEY;
+  use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator};
+  use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+  use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, STGM,
+  };
+  use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+
+  const PKEY_AUDIO_ENGINE_DEVICE_FORMAT_FMTID: windows::core::GUID =
+    windows::core::GUID::from_values(
+      0xF19F064D,
+      0x082C,
+      0x4E27,
+      [0xBC, 0x73, 0x68, 0x82, 0xA1, 0xBB, 0x8E, 0x4C],
+    );
+
+  let ep_wide: Vec<u16> = endpoint_id
+    .encode_utf16()
+    .chain(std::iter::once(0))
+    .collect();
+
+  unsafe {
+    let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+    if hr.is_err() && hr != windows::Win32::Foundation::S_FALSE {
+      return Err(format!("CoInitializeEx failed: {:?}", hr));
+    }
+    let _coinit_guard = CoUninitGuard;
+
+    let enumerator: IMMDeviceEnumerator =
+      CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_INPROC_SERVER)
+        .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) failed: {}", e))?;
+
+    let device = enumerator
+      .GetDevice(windows::core::PCWSTR(ep_wide.as_ptr()))
+      .map_err(|e| format!("GetDevice('{}') failed: {}", endpoint_id, e))?;
+
+    // STGM_READ = 0
+    let props: IPropertyStore = device
+      .OpenPropertyStore(STGM(0))
+      .map_err(|e| format!("OpenPropertyStore(READ) failed: {}", e))?;
+
+    let key = PROPERTYKEY {
+      fmtid: PKEY_AUDIO_ENGINE_DEVICE_FORMAT_FMTID,
+      pid: 0,
+    };
+
+    let pv: PROPVARIANT = props
+      .GetValue(&key)
+      .map_err(|e| format!("IPropertyStore::GetValue(AudioEngineDeviceFormat) failed: {}", e))?;
+
+    // Read PROPVARIANT VT_BLOB fields using the same offset layout as set_endpoint_device_format:
+    //   offset  0: vt (u16) — must be VT_BLOB = 0x41
+    //   offset  8: blob.cbSize (u32)
+    //   offset 16: blob.pBlobData (*const u8)
+    let pv_ptr = &pv as *const PROPVARIANT as *const u8;
+    let vt = *(pv_ptr as *const u16);
+    if vt != 0x41u16 {
+      return Err(format!(
+        "PKEY_AudioEngine_DeviceFormat is not VT_BLOB (vt={:#x}), device may have no format set",
+        vt
+      ));
+    }
+
+    let cb_size = *(pv_ptr.add(8) as *const u32);
+    let blob_ptr = *(pv_ptr.add(16) as *const *const u8);
+
+    if blob_ptr.is_null()
+      || cb_size < std::mem::size_of::<WaveFormatExtensible>() as u32
+    {
+      return Err(format!(
+        "PKEY_AudioEngine_DeviceFormat blob is too small (cb_size={})",
+        cb_size
+      ));
+    }
+
+    let fmt = std::ptr::read_unaligned(blob_ptr as *const WaveFormatExtensible);
+    Ok((fmt.n_samples_per_sec, fmt.n_channels, fmt.w_bits_per_sample))
+  }
+}
+
 /// Write `PKEY_AudioEngine_DeviceFormat` on the MM endpoint identified by
 /// `endpoint_id`. This changes the preferred audio stream format that Windows
 /// Audio Engine uses when opening the endpoint.

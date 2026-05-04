@@ -7,7 +7,7 @@ use tauri::{async_runtime::Mutex, State};
 use super::client;
 use crate::driver::endpoint::{
   elevated_set_endpoint_device_desc, elevated_set_endpoint_device_format, endpoint_exists,
-  find_new_endpoint_id, snapshot_endpoint_ids,
+  find_new_endpoint_id, read_endpoint_device_format, snapshot_endpoint_ids,
 };
 use crate::{AppData, VirtualDevice};
 /// Try to open a handle to the CableAudio kernel driver.
@@ -401,4 +401,56 @@ pub async fn set_virtual_device_format(
   }
 
   Ok(())
+}
+
+/// Read the actual `PKEY_AudioEngine_DeviceFormat` from each virtual device's
+/// Windows MM endpoint and return the system-authoritative format values.
+///
+/// Called on startup after `restore_virtual_devices` so that format changes
+/// made via mmsys.cpl (or any other tool) while the app was closed are
+/// reflected in the UI state.
+///
+/// Returns a list of `(id, sample_rate, channels, bits_per_sample)` tuples for
+/// every device whose endpoint ID is known and whose format was read
+/// successfully. Devices without an endpoint ID or that fail the read are
+/// silently skipped.
+#[tauri::command]
+pub async fn sync_virtual_device_formats(
+  state: State<'_, Mutex<AppData>>,
+) -> Result<Vec<(String, u32, u32, u32)>, String> {
+  let endpoint_map: Vec<(String, String)> = {
+    let app = state.lock().await;
+    app
+      .virtual_devices
+      .values()
+      .filter(|d| !d.endpoint_id.is_empty())
+      .map(|d| (d.id.clone(), d.endpoint_id.clone()))
+      .collect()
+  };
+
+  let mut results: Vec<(String, u32, u32, u32)> = Vec::new();
+
+  #[cfg(windows)]
+  for (device_id, endpoint_id) in endpoint_map {
+    let ep = endpoint_id.clone();
+    let read_result =
+      tauri::async_runtime::spawn_blocking(move || read_endpoint_device_format(&ep)).await;
+
+    match read_result {
+      Ok(Ok((sample_rate, channels, bits_per_sample))) => {
+        results.push((device_id, sample_rate, channels as u32, bits_per_sample as u32));
+      }
+      Ok(Err(e)) => {
+        eprintln!(
+          "sync_virtual_device_formats: skipping '{}' (endpoint '{}'): {}",
+          device_id, endpoint_id, e
+        );
+      }
+      Err(e) => {
+        eprintln!("sync_virtual_device_formats: spawn_blocking error: {}", e);
+      }
+    }
+  }
+
+  Ok(results)
 }

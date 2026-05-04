@@ -367,6 +367,7 @@ pub fn run() {
       driver::commands::rename_virtual_device,
       driver::commands::restore_virtual_devices,
       driver::commands::set_virtual_device_format,
+      driver::commands::sync_virtual_device_formats,
       runtime::add_node,
       runtime::remove_node,
       runtime::update_node,

@@ -242,10 +242,51 @@ Arguments:
             return STATUS_BUFFER_TOO_SMALL;
         }
 
-        //Set ResultantFormat to be the only supported format for the MicArray endpoint. 
+        //
+        // Find the PCM format from our supported list that best matches the
+        // client's requested range (highest sample_rate * bits within the range).
+        // Skips IEEE_FLOAT entries since the ring buffer processes PCM only.
+        //
+        PKSDATARANGE_AUDIO clientAudioRange = (PKSDATARANGE_AUDIO)ClientDataRange;
+        PKSDATAFORMAT_WAVEFORMATEXTENSIBLE bestFormat = NULL;
+        ULONG bestQuality = 0;
+
+        for (ULONG i = 0; i < SIZEOF_ARRAY(MicArrayPinSupportedDeviceFormats); i++)
+        {
+            PKSDATAFORMAT_WAVEFORMATEXTENSIBLE candidate = &MicArrayPinSupportedDeviceFormats[i];
+
+            // Skip non-PCM entries (e.g. IEEE_FLOAT)
+            if (!IsEqualGUIDAligned(candidate->DataFormat.SubFormat,
+                                    KSDATAFORMAT_SUBTYPE_PCM))
+            {
+                continue;
+            }
+
+            ULONG rate = candidate->WaveFormatExt.Format.nSamplesPerSec;
+            ULONG bits = candidate->WaveFormatExt.Format.wBitsPerSample;
+
+            if (rate >= clientAudioRange->MinimumSampleFrequency &&
+                rate <= clientAudioRange->MaximumSampleFrequency &&
+                bits >= clientAudioRange->MinimumBitsPerSample &&
+                bits <= clientAudioRange->MaximumBitsPerSample)
+            {
+                ULONG quality = rate * bits;
+                if (quality > bestQuality)
+                {
+                    bestQuality = quality;
+                    bestFormat = candidate;
+                }
+            }
+        }
+
+        if (bestFormat == NULL)
+        {
+            return STATUS_NO_MATCH;
+        }
+
         PKSDATAFORMAT_WAVEFORMATEXTENSIBLE resultantFormat;
         resultantFormat = (PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat;
-        *resultantFormat = *MicArrayPinSupportedDeviceFormats;
+        *resultantFormat = *bestFormat;
         *ResultantFormatLength = requiredSize;
 
         return STATUS_SUCCESS;

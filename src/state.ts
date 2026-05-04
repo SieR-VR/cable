@@ -461,6 +461,24 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
           // Repopulate the backend's in-memory device map from the persisted
           // list so that remove/rename/ring-buffer commands work correctly.
           await invoke("restore_virtual_devices", { devices: persistedDevices });
+
+          // Sync actual format from system (reflects mmsys.cpl changes made
+          // while the app was closed or by other tools).
+          try {
+            const synced = await invoke("sync_virtual_device_formats");
+            if (synced.length > 0) {
+              const updated = get().virtualDevices.map((d) => {
+                const entry = synced.find(([id]) => id === d.id);
+                if (!entry) return d;
+                const [, sampleRate, channels, bitsPerSample] = entry;
+                return { ...d, sampleRate, channels, bitsPerSample };
+              });
+              set({ virtualDevices: updated });
+              persistSetting(SETTING_KEYS.virtualDevices, updated);
+            }
+          } catch (e) {
+            console.warn("sync_virtual_device_formats failed (non-fatal):", e);
+          }
         }
       } catch (e) {
         console.warn("Failed to connect to CableAudio driver:", e);
