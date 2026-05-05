@@ -67,7 +67,7 @@
 [CmdletBinding()]
 param(
     [string]$VmxPath        = ".vm/cable-vm/cable-vm.vmx",
-    [string]$SnapshotName   = "tiny11-winrm-enabled",
+    [string]$SnapshotName   = "tiny11-vmtest",
     [string]$ComputerName   = "192.168.23.128",
     [int]   $Port           = 5985,
     [string]$Username       = "cable",
