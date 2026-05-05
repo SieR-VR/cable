@@ -273,15 +273,15 @@ public static class AudioQualityProbe
             renderAc.Stop();
             captureAc.Stop();
 
-            // Write WAV for optional external analysis (e.g. ffmpeg silencedetect).
-            string wavPath = @"C:\CableAudio\quality-probe.wav";
-            WriteWav16Pcm(wavPath, captured, (int)captureFmt.nSamplesPerSec, captureFmt.nChannels);
-
             // Trim startup and teardown transients before running silence analysis.
             int skipSamples  = SKIP_FRAMES * captureFmt.nChannels;
             int totalSamples = captured.Count;
             int sliceLen     = Math.Max(0, totalSamples - 2 * skipSamples);
             var analysisSlice = captured.GetRange(skipSamples, sliceLen);
+
+            // Write the trimmed slice to WAV so ffmpeg sees the same window as the C# analysis.
+            string wavPath = @"C:\CableAudio\quality-probe.wav";
+            WriteWav16Pcm(wavPath, analysisSlice, (int)captureFmt.nSamplesPerSec, captureFmt.nChannels);
 
             double maxSilenceMs = MaxSilenceDurationMs(
                 analysisSlice, captureFmt.nChannels, (int)captureFmt.nSamplesPerSec);
