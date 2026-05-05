@@ -111,6 +111,8 @@ CableUnmapRingBufferForEntry(
         // cannot safely unmap the user-mode address from another context.
         ObDereferenceObject(pEntry->pMappingProcess);
         pEntry->pMappingProcess = NULL;
+        // Clear the address so MapRingBuffer can re-map for the new process.
+        pEntry->pMappedUserAddress = NULL;
         return;
     }
 
@@ -1414,9 +1416,27 @@ Return Value:
     //
     if (pEntry->pMappedUserAddress != NULL)
     {
-        DPF(D_TERSE, ("MapRingBuffer: already mapped at %p", pEntry->pMappedUserAddress));
-        ExReleaseFastMutex(&m_VirtualDeviceLock);
-        return STATUS_ALREADY_REGISTERED;
+        if (pEntry->pMappingProcess == PsGetCurrentProcess())
+        {
+            // Same process tried to map again — genuine double-map.
+            DPF(D_TERSE, ("MapRingBuffer: already mapped at %p in current process", pEntry->pMappedUserAddress));
+            ExReleaseFastMutex(&m_VirtualDeviceLock);
+            return STATUS_ALREADY_REGISTERED;
+        }
+
+        // Different process — stale mapping from a previous app instance that exited
+        // without calling UnmapRingBuffer (crash or kill).  Windows already freed
+        // that process's user-mode VA on exit, so MmUnmapLockedPages must NOT be
+        // called here (user-mode MDL mappings are not tracked in the MDL itself;
+        // the PTEs are gone with the old process address space).
+        // Simply clear the bookkeeping and fall through to create a fresh mapping.
+        DPF(D_TERSE, ("MapRingBuffer: clearing stale mapping from previous process (addr=%p)", pEntry->pMappedUserAddress));
+        if (pEntry->pMappingProcess != NULL)
+        {
+            ObDereferenceObject(pEntry->pMappingProcess);
+            pEntry->pMappingProcess = NULL;
+        }
+        pEntry->pMappedUserAddress = NULL;
     }
 
     //

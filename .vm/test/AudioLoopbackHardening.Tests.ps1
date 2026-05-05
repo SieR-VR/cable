@@ -1,15 +1,23 @@
 # Audio loopback regression test for virtual Cable endpoints.
-# Goal: verify that audio written to render endpoint is captured by virtual microphone path.
-# The driver creates endpoints dynamically via IOCTL, so this test creates
-# a speaker + mic pair before running the WASAPI loopback probe.
+# Goal: verify that audio written to a virtual render endpoint travels through
+# the Cable runtime and is captured by the virtual microphone endpoint.
+#
+# Signal path:
+#   C# WASAPI render → driver render ring buffer
+#   → VirtualAudioOutput (Cable runtime)
+#   → VirtualAudioInput
+#   → driver capture ring buffer → C# WASAPI capture
+#
+# The headless app serves both the device lifecycle (REST API) and the audio
+# runtime (POST /runtime/enable), giving this test real end-to-end coverage.
 
 BeforeAll {
     . (Join-Path $PSScriptRoot "common.ps1")
-    $script:ioctlCs  = Get-CSharpLib "CableIoctl"
-    $script:wasapiCs  = Get-CSharpLib "CableWasapi"
+    $script:wasapiCs = Get-CSharpLib "CableWasapi"
 
-    # Test-specific C# class: creates virtual devices via IOCTL, waits for
-    # WASAPI endpoints, runs render→capture loopback, then cleans up.
+    # C# helper: given the endpoint IDs of a virtual speaker and virtual mic
+    # already created and routed by the Cable runtime, render a short burst of
+    # non-zero audio and return how many absolute-deviation bytes were captured.
     $script:loopbackCs = @'
 public static class CableAudioLoopbackProbe
 {
@@ -34,129 +42,83 @@ public static class CableAudioLoopbackProbe
     {
         long totalAbs = 0;
         uint nextPacket;
-
         CableWasapi.ThrowIfFailed(captureClient.GetNextPacketSize(out nextPacket), "GetNextPacketSize");
         while (nextPacket > 0)
         {
             IntPtr pData;
-            uint frames;
-            uint flags;
+            uint frames, flags;
             ulong pos, qpc;
             CableWasapi.ThrowIfFailed(captureClient.GetBuffer(out pData, out frames, out flags, out pos, out qpc), "GetBuffer");
-
             int bytes = checked((int)(frames * format.nBlockAlign));
             if (bytes > 0)
             {
                 byte[] buf = new byte[bytes];
                 Marshal.Copy(pData, buf, 0, bytes);
                 for (int i = 0; i < buf.Length; i++)
-                {
                     totalAbs += Math.Abs((int)buf[i] - 128);
-                }
             }
-
             CableWasapi.ThrowIfFailed(captureClient.ReleaseBuffer(frames), "ReleaseBuffer");
             CableWasapi.ThrowIfFailed(captureClient.GetNextPacketSize(out nextPacket), "GetNextPacketSize(loop)");
         }
-
         return totalAbs;
     }
 
-    public static string Run(string endpointNameContains)
+    // renderEndpointId / captureEndpointId come from the REST API response.
+    public static string Run(string renderEndpointId, string captureEndpointId)
     {
-        // Step 1: Create virtual speaker (render=0) and mic (capture=1) via IOCTL
-        string createRender = CableIoctl.Create(0, "LoopbackTestSpeaker");
-        if (!createRender.StartsWith("CREATE OK"))
-            return "SETUP_FAIL: render create: " + createRender;
-        string renderId = CableIoctl.ParseCreateId(createRender);
+        var enumerator = (IMMDeviceEnumerator)Activator.CreateInstance(
+            Type.GetTypeFromCLSID(CableWasapi.CLSID_MMDeviceEnumerator));
 
-        string createCapture = CableIoctl.Create(1, "LoopbackTestMic");
-        if (!createCapture.StartsWith("CREATE OK"))
-        {
-            CableIoctl.Remove(renderId);
-            return "SETUP_FAIL: capture create: " + createCapture;
-        }
-        string captureId = CableIoctl.ParseCreateId(createCapture);
+        IMMDevice renderDev, captureDev;
+        CableWasapi.ThrowIfFailed(enumerator.GetDevice(renderEndpointId,  out renderDev),  "GetDevice(render)");
+        CableWasapi.ThrowIfFailed(enumerator.GetDevice(captureEndpointId, out captureDev), "GetDevice(capture)");
 
+        var renderClient  = CableWasapi.ActivateAudioClient(renderDev);
+        var captureClient = CableWasapi.ActivateAudioClient(captureDev);
+
+        IntPtr pRenderFormat  = CableWasapi.GetMixFormatPtr(renderClient);
+        IntPtr pCaptureFormat = CableWasapi.GetMixFormatPtr(captureClient);
+        WAVEFORMATEX renderFormat  = (WAVEFORMATEX)Marshal.PtrToStructure(pRenderFormat,  typeof(WAVEFORMATEX));
+        WAVEFORMATEX captureFormat = (WAVEFORMATEX)Marshal.PtrToStructure(pCaptureFormat, typeof(WAVEFORMATEX));
+
+        long hnsBuffer = 2000000;
+        CableWasapi.ThrowIfFailed(renderClient.Initialize( CableWasapi.AUDCLNT_SHAREMODE_SHARED, 0, hnsBuffer, 0, pRenderFormat,  IntPtr.Zero), "Render Initialize");
+        CableWasapi.ThrowIfFailed(captureClient.Initialize(CableWasapi.AUDCLNT_SHAREMODE_SHARED, 0, hnsBuffer, 0, pCaptureFormat, IntPtr.Zero), "Capture Initialize");
+
+        uint renderBufferFrames, captureBufferFrames;
+        CableWasapi.ThrowIfFailed(renderClient.GetBufferSize( out renderBufferFrames),  "Render GetBufferSize");
+        CableWasapi.ThrowIfFailed(captureClient.GetBufferSize(out captureBufferFrames), "Capture GetBufferSize");
+
+        IntPtr pRenderService, pCaptureService;
+        CableWasapi.ThrowIfFailed(renderClient.GetService( ref CableWasapi.IID_IAudioRenderClient,  out pRenderService),  "Render GetService");
+        CableWasapi.ThrowIfFailed(captureClient.GetService(ref CableWasapi.IID_IAudioCaptureClient, out pCaptureService), "Capture GetService");
+        var renderSvc  = (IAudioRenderClient) Marshal.GetObjectForIUnknown(pRenderService);
+        var captureSvc = (IAudioCaptureClient)Marshal.GetObjectForIUnknown(pCaptureService);
+
+        CableWasapi.ThrowIfFailed(captureClient.Start(), "Capture Start");
+        CableWasapi.ThrowIfFailed(renderClient.Start(),  "Render Start");
+
+        long capturedAbs = 0;
         try
         {
-            // Step 2: Wait for WASAPI endpoints to appear
-            IMMDevice renderDev = null;
-            IMMDevice captureDev = null;
-            for (int attempt = 0; attempt < 40; attempt++)
+            for (int i = 0; i < 12; i++)
             {
-                Thread.Sleep(500);
-                if (renderDev == null)
-                    renderDev = CableWasapi.FindDeviceByName(0, endpointNameContains);
-                if (captureDev == null)
-                    captureDev = CableWasapi.FindDeviceByName(1, endpointNameContains);
-                if (renderDev != null && captureDev != null) break;
+                FillRenderBuffer(renderSvc, Math.Min(renderBufferFrames / 2, 480u), renderFormat);
+                Thread.Sleep(35);
+                capturedAbs += CaptureSignalBytes(captureSvc, captureFormat);
             }
-
-            if (renderDev == null || captureDev == null)
-            {
-                string msg = "ENDPOINT_NOT_FOUND: render=" + (renderDev != null) + " capture=" + (captureDev != null);
-                msg += "\nAll render: " + CableWasapi.ListAllDevices(0);
-                msg += "\nAll capture: " + CableWasapi.ListAllDevices(1);
-                return msg;
-            }
-
-            // Step 3: Run loopback probe
-            var renderClient = CableWasapi.ActivateAudioClient(renderDev);
-            var captureClient = CableWasapi.ActivateAudioClient(captureDev);
-
-            IntPtr pRenderFormat = CableWasapi.GetMixFormatPtr(renderClient);
-            IntPtr pCaptureFormat = CableWasapi.GetMixFormatPtr(captureClient);
-            WAVEFORMATEX renderFormat = (WAVEFORMATEX)Marshal.PtrToStructure(pRenderFormat, typeof(WAVEFORMATEX));
-            WAVEFORMATEX captureFormat = (WAVEFORMATEX)Marshal.PtrToStructure(pCaptureFormat, typeof(WAVEFORMATEX));
-
-            long hnsBuffer = 2000000;
-            CableWasapi.ThrowIfFailed(renderClient.Initialize(CableWasapi.AUDCLNT_SHAREMODE_SHARED, 0, hnsBuffer, 0, pRenderFormat, IntPtr.Zero), "Render Initialize");
-            CableWasapi.ThrowIfFailed(captureClient.Initialize(CableWasapi.AUDCLNT_SHAREMODE_SHARED, 0, hnsBuffer, 0, pCaptureFormat, IntPtr.Zero), "Capture Initialize");
-
-            uint renderBufferFrames;
-            CableWasapi.ThrowIfFailed(renderClient.GetBufferSize(out renderBufferFrames), "Render GetBufferSize");
-
-            uint captureBufferFrames;
-            CableWasapi.ThrowIfFailed(captureClient.GetBufferSize(out captureBufferFrames), "Capture GetBufferSize");
-
-            IntPtr pRenderService;
-            CableWasapi.ThrowIfFailed(renderClient.GetService(ref CableWasapi.IID_IAudioRenderClient, out pRenderService), "Render GetService");
-            var renderSvc = (IAudioRenderClient)Marshal.GetObjectForIUnknown(pRenderService);
-
-            IntPtr pCaptureService;
-            CableWasapi.ThrowIfFailed(captureClient.GetService(ref CableWasapi.IID_IAudioCaptureClient, out pCaptureService), "Capture GetService");
-            var captureSvc = (IAudioCaptureClient)Marshal.GetObjectForIUnknown(pCaptureService);
-
-            CableWasapi.ThrowIfFailed(captureClient.Start(), "Capture Start");
-            CableWasapi.ThrowIfFailed(renderClient.Start(), "Render Start");
-
-            long capturedAbs = 0;
-            try
-            {
-                for (int i = 0; i < 12; i++)
-                {
-                    FillRenderBuffer(renderSvc, Math.Min(renderBufferFrames / 2, 480u), renderFormat);
-                    Thread.Sleep(35);
-                    capturedAbs += CaptureSignalBytes(captureSvc, captureFormat);
-                }
-            }
-            finally
-            {
-                renderClient.Stop();
-                captureClient.Stop();
-                CableWasapi.CoTaskMemFree(pRenderFormat);
-                CableWasapi.CoTaskMemFree(pCaptureFormat);
-            }
-
-            return "LOOPBACK PROBE: CapturedAbs=" + capturedAbs + ", RenderFrames=" + renderBufferFrames + ", CaptureFrames=" + captureBufferFrames;
         }
         finally
         {
-            // Step 4: Cleanup virtual devices
-            CableIoctl.RemoveWithRetry(captureId, 5, 500);
-            CableIoctl.RemoveWithRetry(renderId, 5, 500);
+            renderClient.Stop();
+            captureClient.Stop();
+            CableWasapi.CoTaskMemFree(pRenderFormat);
+            CableWasapi.CoTaskMemFree(pCaptureFormat);
         }
+
+        return "LOOPBACK PROBE: CapturedAbs=" + capturedAbs +
+               " RenderFrames=" + renderBufferFrames +
+               " CaptureFrames=" + captureBufferFrames;
     }
 }
 '@
@@ -165,26 +127,69 @@ public static class CableAudioLoopbackProbe
 Describe "Audio hardening: loopback virtual endpoint signal path" {
     BeforeAll {
         $script:Session = Reset-Vm @VmContext
+        Copy-GuestAppExe -Session $script:Session -ExePath $VmContext.AppExePath -ReuseVm $VmContext.ReuseVm
+        Start-GuestHeadlessApp -Session $script:Session
+        Invoke-AppRpc -Session $script:Session -Method POST -Path "/driver/connect" | Out-Null
     }
 
     AfterAll {
+        Stop-GuestHeadlessApp -Session $script:Session
         if ($script:Session) {
             Assert-NoGuestBugCheck -ComputerName $VmContext.ComputerName -Port $VmContext.Port -Username $VmContext.Username -Password $VmContext.Password -Context "Audio loopback hardening"
             Remove-PSSession $script:Session -ErrorAction SilentlyContinue
         }
     }
 
-    It "plays render data and observes non-zero capture activity" {
-        $result = Invoke-GuestCSharpTest -Session $script:Session `
-            -CSharpSources @($script:ioctlCs, $script:wasapiCs, $script:loopbackCs) `
-            -Script {
-                [CableAudioLoopbackProbe]::Run("Cable Virtual Audio")
-            } `
-            -TempFileName "audio-loopback-probe"
+    It "plays render data through Cable runtime and observes non-zero capture" {
+        $renderDevice  = $null
+        $captureDevice = $null
+        try {
+            $renderDevice = Invoke-AppRpc -Session $script:Session -Method POST -Path "/virtual-devices" `
+                -Body @{ name = "LoopbackTestSpeaker"; deviceType = "render" }
+            $captureDevice = Invoke-AppRpc -Session $script:Session -Method POST -Path "/virtual-devices" `
+                -Body @{ name = "LoopbackTestMic"; deviceType = "capture" }
 
-        $result | Should -Match '^LOOPBACK PROBE: CapturedAbs='
+            $renderDevice.endpointId  | Should -Not -BeNullOrEmpty
+            $captureDevice.endpointId | Should -Not -BeNullOrEmpty
 
-        $capturedAbs = [long](($result -replace '^.*CapturedAbs=([0-9]+).*$','$1'))
-        $capturedAbs | Should -BeGreaterThan 0
+            # Build a routing graph: VirtualAudioOutput(render) → VirtualAudioInput(capture)
+            $graph = @{
+                nodes = @(
+                    @{ type = "virtualAudioOutput"; data = @{ id = "n-render";  deviceId = $renderDevice.id;  name = $renderDevice.name  } },
+                    @{ type = "virtualAudioInput";  data = @{ id = "n-capture"; deviceId = $captureDevice.id; name = $captureDevice.name } }
+                )
+                edges = @(
+                    @{ id = "e1"; from = "n-render"; to = "n-capture" }
+                )
+            }
+            Invoke-AppRpc -Session $script:Session -Method POST -Path "/graph" -Body $graph | Out-Null
+            Invoke-AppRpc -Session $script:Session -Method POST -Path "/runtime/enable" | Out-Null
+            Start-Sleep -Seconds 1
+
+            $renderEndpointId  = $renderDevice.endpointId
+            $captureEndpointId = $captureDevice.endpointId
+
+            $result = Invoke-GuestCSharpTest -Session $script:Session `
+                -CSharpSources @($script:wasapiCs, $script:loopbackCs) `
+                -Script ([scriptblock]::Create(
+                    "[CableAudioLoopbackProbe]::Run('$renderEndpointId', '$captureEndpointId')"
+                )) `
+                -TempFileName "audio-loopback-probe"
+
+            $result | Should -Match '^LOOPBACK PROBE: CapturedAbs='
+            $capturedAbs = [long]($result -replace '^.*CapturedAbs=([0-9]+).*$', '$1')
+            $capturedAbs | Should -BeGreaterThan 0
+        }
+        finally {
+            # Cleanup: stop runtime → empty graph → remove devices
+            try { Invoke-AppRpc -Session $script:Session -Method POST -Path "/runtime/disable" | Out-Null } catch { Write-Host "Cleanup warning (disable runtime): $_" }
+            try { Invoke-AppRpc -Session $script:Session -Method POST -Path "/graph" -Body @{ nodes = @(); edges = @() } | Out-Null } catch { Write-Host "Cleanup warning (empty graph): $_" }
+            if ($captureDevice) {
+                try { Invoke-AppRpc -Session $script:Session -Method DELETE -Path "/virtual-devices/$($captureDevice.id)" | Out-Null } catch { Write-Host "Cleanup warning (delete capture): $_" }
+            }
+            if ($renderDevice) {
+                try { Invoke-AppRpc -Session $script:Session -Method DELETE -Path "/virtual-devices/$($renderDevice.id)" | Out-Null } catch { Write-Host "Cleanup warning (delete render): $_" }
+            }
+        }
     }
 }

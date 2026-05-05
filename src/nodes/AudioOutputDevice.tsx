@@ -32,7 +32,13 @@ export function AudioOutputDevice({ id, data }: NodeProps<AudioOutputDeviceNode>
 
   // Exclude Cable virtual audio devices from the dropdown — those are managed
   // through the virtual device panel and should not be selectable as plain outputs.
-  const virtualEndpointIds = new Set(virtualDevices.map((d) => d.endpointId).filter(Boolean));
+  // cpal device IDs use the "wasapi:{endpoint_id}" format, while endpointId from the
+  // driver uses the raw "{endpoint_id}" format, so we prepend the host prefix to match.
+  const virtualEndpointIds = new Set(
+    virtualDevices
+      .map((d) => (d.endpointId ? `wasapi:${d.endpointId}` : null))
+      .filter((id): id is string => Boolean(id)),
+  );
   const filteredDevices = availableAudioOutputDevices?.filter(
     (d) => !virtualEndpointIds.has(d.id),
   );

@@ -13,6 +13,7 @@ use tauri_plugin_store::StoreExt;
 
 pub(crate) mod bluetooth;
 pub(crate) mod driver;
+pub mod headless;
 pub(crate) mod nodes;
 mod runtime;
 pub(crate) mod vst3_common;
@@ -22,6 +23,8 @@ pub use driver::endpoint::rename_endpoint_elevated;
 
 #[cfg(windows)]
 pub use driver::endpoint::set_endpoint_format_elevated;
+
+pub use headless::run_headless;
 
 /// A virtual audio device managed by the driver, independent of the audio graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]

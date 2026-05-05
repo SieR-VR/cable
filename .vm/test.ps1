@@ -69,7 +69,15 @@ param(
     [int]   $BootTimeoutSec = 240,
     [int]   $RenameLoopCount = 3,
     [string]$VmPassword,
-    [string]$TestFilter
+    [string]$TestFilter,
+    # Path to cable-tauri.exe on the host; required for tests that start the
+    # headless HTTP-RPC server inside the VM (e.g. ioctl, PKEY, loopback).
+    [string]$AppExePath = "",
+    # When set, skips snapshot revert and VM boot for the 2nd+ test suite in a
+    # run.  Cuts per-suite overhead from ~50s to ~2s; safe when tests clean up
+    # their own state (which all REST-based tests do).  Use the default (off)
+    # when you need strict isolation between every Describe block.
+    [switch]$ReuseVm
 )
 
 $ErrorActionPreference = "Stop"
@@ -120,6 +128,8 @@ $global:VmContext = @{
     StartMode       = $StartMode
     BootTimeoutSec  = $BootTimeoutSec
     RenameLoopCount = $RenameLoopCount
+    AppExePath      = $AppExePath
+    ReuseVm         = $ReuseVm.IsPresent
 }
 
 # ------------------------------------------------------------------

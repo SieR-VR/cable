@@ -80,6 +80,12 @@ impl Drop for VirtualAudioOutputNode {
   }
 }
 
+impl VirtualAudioOutputNode {
+  pub(crate) fn device_id(&self) -> &str {
+    &self.device_id
+  }
+}
+
 impl NodeTrait for VirtualAudioOutputNode {
   fn id(&self) -> &str {
     &self.id

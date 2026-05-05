@@ -48,5 +48,28 @@ fn main() {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Headless RPC mode: Cable.exe --headless [port]
+  //
+  // Starts a local HTTP server on 127.0.0.1:<port> (default 17285) that
+  // exposes app control commands as JSON-over-HTTP without opening the Tauri
+  // GUI window.  Used for driver integration testing from PowerShell / C#.
+  // -------------------------------------------------------------------------
+  {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "--headless" {
+      let port = args
+        .get(2)
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(17285);
+      tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build Tokio runtime")
+        .block_on(ui::run_headless(port));
+      return;
+    }
+  }
+
   ui::run();
 }

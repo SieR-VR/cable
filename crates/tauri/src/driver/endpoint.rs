@@ -38,8 +38,10 @@ pub(crate) fn snapshot_endpoint_ids() -> std::collections::HashSet<String> {
         }
       };
 
-    // Enumerate all endpoints (active/disabled/not-present/unplugged).
-    let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0xF)) {
+    // Enumerate only active endpoints. Inactive/not-present endpoints are
+    // excluded so that recycled GUIDs (a removed endpoint later reactivated
+    // on the same PnP slot) don't appear as "pre-existing" in the snapshot.
+    let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(1)) {
       Ok(c) => c,
       Err(e) => {
         eprintln!("snapshot_endpoint_ids: EnumAudioEndpoints failed: {}", e);
@@ -104,7 +106,10 @@ pub(crate) fn find_new_endpoint_id(
         eprintln!("find_new_endpoint_id: retry {}/{}", attempt, max_retries);
       }
 
-      let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(0xF)) {
+      // Poll for active endpoints only; a previously-NOTPRESENT endpoint that
+      // becomes active on the same PnP slot gets a recycled GUID that won't be
+      // in the snapshot (snapshot is active-only), so it's detected correctly.
+      let collection = match enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE(1)) {
         Ok(c) => c,
         Err(e) => return Err(format!("EnumAudioEndpoints failed: {}", e)),
       };

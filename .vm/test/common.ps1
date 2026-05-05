@@ -3,6 +3,16 @@ param()
 
 $ErrorActionPreference = "Stop"
 
+# ---------------------------------------------------------------------------
+# Per-process state used by ReuseVm mode.
+# These are script-scoped so they persist across Pester test files running in
+# the same PowerShell process (which Pester does by default).
+# ---------------------------------------------------------------------------
+# $global: scope is required so these flags survive across multiple .Tests.ps1
+# files that each dot-source common.ps1.  $script: would reset on every dot-source.
+if (-not (Test-Path variable:global:_cableVmBooted))   { $global:_cableVmBooted   = $false }
+if (-not (Test-Path variable:global:_cableVmExeReady)) { $global:_cableVmExeReady = $false }
+
 function Get-VMPassword {
     param(
         [string]$ProjectRoot,
@@ -280,6 +290,10 @@ function Install-DriverInGuest {
 
 # Revert VM to snapshot, start it, wait for WinRM, install driver.
 # Returns an open PSSession ready for testing.
+#
+# When ReuseVm is true and the VM has already been set up in this process,
+# skips snapshot revert / driver install and just opens a new PSSession.
+# This cuts per-suite overhead from ~50s to ~2s for the 2nd+ test suite.
 function Reset-Vm {
     param(
         [string]$VmxPath,
@@ -292,8 +306,21 @@ function Reset-Vm {
         [string]$Password,
         [string]$ProjectRoot,
         [string]$StartMode = "nogui",
-        [int]$BootTimeoutSec = 240
+        [int]$BootTimeoutSec = 240,
+        [bool]$ReuseVm = $false
     )
+
+    if ($ReuseVm -and $global:_cableVmBooted) {
+        Write-Host "  [VM] Reusing running VM (ReuseVm mode), waiting for audio subsystem to settle..." -ForegroundColor DarkCyan
+        $session = New-GuestSession -ComputerName $ComputerName -Port $Port -Username $Username -Password $Password
+        # After the previous suite deletes virtual devices, the AudioEndpointBuilder
+        # processes the endpoint-removal events asynchronously.  Without a pause,
+        # snapshot_endpoint_ids() captures a transitional state and the next
+        # find_new_endpoint_id() call either times out or matches a stale ID.
+        # 15 s is enough for all pending PnP / AudioEndpointBuilder work to drain.
+        Invoke-Guest -Session $session -Command { Start-Sleep -Seconds 15 }
+        return $session
+    }
 
     Write-Host "  [VM] Reverting to snapshot '$SnapshotName'..." -ForegroundColor DarkCyan
     Invoke-Vmrun -VmrunPath $VmrunPath -VmPass $VmPass -VmrunArgs @("revertToSnapshot", $VmxPath, $SnapshotName)
@@ -329,6 +356,10 @@ function Reset-Vm {
     # startup.  Individual tests that need WASAPI endpoints create their own
     # virtual devices.  No polling is needed here.
     Write-Host "  [VM] Ready." -ForegroundColor DarkCyan
+
+    if ($ReuseVm) {
+        $global:_cableVmBooted = $true
+    }
     return $session
 }
 
@@ -506,4 +537,104 @@ if ($fallback) { $fallback }
         throw "cable-tauri.exe not found after install."
     }
     return [string]$resolved
+}
+
+# ---------------------------------------------------------------------------
+# Headless app management helpers.
+# Used by tests that exercise the app's REST RPC server (--headless <port>).
+# ---------------------------------------------------------------------------
+
+function Copy-GuestAppExe {
+    param(
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+        [string]$ExePath,
+        [bool]$ReuseVm = $false
+    )
+
+    if ($ReuseVm -and $global:_cableVmExeReady) {
+        Write-Host "  [VM] Skipping exe copy (already present from this run)" -ForegroundColor DarkGray
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ExePath)) {
+        throw "AppExePath is not set. Pass -AppExePath to test.ps1 with the path to cable-tauri.exe."
+    }
+    if (-not (Test-Path $ExePath)) {
+        throw "App executable not found: $ExePath"
+    }
+
+    Copy-Item $ExePath -Destination "C:\CableAudio\cable-tauri.exe" -ToSession $Session -Force
+
+    if ($ReuseVm) {
+        $global:_cableVmExeReady = $true
+    }
+}
+
+function Start-GuestHeadlessApp {
+    param(
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+        [int]$Port = 17285,
+        [int]$TimeoutSec = 30
+    )
+
+    Invoke-Command -Session $Session -ScriptBlock {
+        param($p)
+        Start-Process -FilePath "C:\CableAudio\cable-tauri.exe" `
+            -ArgumentList "--headless", $p `
+            -WindowStyle Hidden
+    } -ArgumentList $Port
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 1
+        $alive = Invoke-Command -Session $Session -ScriptBlock {
+            param($port)
+            try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -Method GET -TimeoutSec 2 -ErrorAction Stop
+                return ($r.ok -eq "ok")
+            } catch { return $false }
+        } -ArgumentList $Port
+        if ($alive) { return }
+    }
+
+    throw "Headless app did not become ready within $TimeoutSec seconds on port $Port"
+}
+
+function Stop-GuestHeadlessApp {
+    param(
+        [System.Management.Automation.Runspaces.PSSession]$Session
+    )
+
+    Invoke-Command -Session $Session -ScriptBlock {
+        Get-Process -Name "cable-tauri" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    } | Out-Null
+}
+
+# Invoke a REST endpoint on the headless app running inside the guest VM.
+# Method and Path are relative to http://127.0.0.1:Port.
+# Body, if provided, is serialized to JSON on the host before being sent.
+# Returns the .ok field of the response.  Throws on HTTP errors.
+function Invoke-AppRpc {
+    param(
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+        [string]$Method = "GET",
+        [string]$Path,
+        [object]$Body = $null,
+        [int]$Port = 17285
+    )
+
+    $bodyJson = if ($null -ne $Body) { $Body | ConvertTo-Json -Compress -Depth 10 } else { $null }
+
+    return Invoke-Command -Session $Session -ScriptBlock {
+        param($method, $path, $bodyJson, $port)
+        $uri = "http://127.0.0.1:$port$path"
+        $params = @{ Uri = $uri; Method = $method; TimeoutSec = 30 }
+        if ($bodyJson) {
+            $params.Body    = $bodyJson
+            $params.ContentType = "application/json"
+        }
+        $r = Invoke-RestMethod @params
+        return $r.ok
+    } -ArgumentList $Method, $Path, $bodyJson, $Port
 }
