@@ -8,7 +8,7 @@
 #
 # Analysis:
 #   1. C# in-memory: measure max consecutive silence window (10 ms RMS buckets).
-#      Pass condition: max silence gap < 100 ms.
+#      Pass condition: max silence gap < 50 ms.
 #   2. ffmpeg silencedetect (optional): parse WAV file written by C# probe.
 #      Skipped when ffmpeg is unavailable; enable by passing -FfmpegExePath
 #      to test.ps1.
@@ -77,7 +77,7 @@ Describe "Audio quality: Cable routing signal continuity" {
         }
     }
 
-    It "renders a 5-second 440Hz tone through Cable without dropout gaps > 100ms" {
+    It "renders a 5-second 440Hz tone through Cable without dropout gaps > 50ms" {
         $renderEndpointId  = $script:RenderDevice.endpointId
         $captureEndpointId = $script:CaptureDevice.endpointId
 
@@ -91,11 +91,11 @@ Describe "Audio quality: Cable routing signal continuity" {
         $result | Should -Match '^QUALITY: '
 
         $maxSilenceMs = [double]($result -replace '^.*maxSilenceMs=([0-9.]+).*$', '$1')
-        $maxSilenceMs | Should -BeLessThan 100 `
-            -Because "dropout gaps over 100 ms indicate a routing failure or ring buffer underrun"
+        $maxSilenceMs | Should -BeLessThan 50 `
+            -Because "dropout gaps over 50 ms indicate a routing failure or ring buffer underrun"
     }
 
-    It "ffmpeg silencedetect reports no silence gaps >= 100ms in the captured tone" {
+    It "ffmpeg silencedetect reports no silence gaps >= 50ms in the captured tone" {
         # Determine whether ffmpeg is available inside the guest.
         $guestFfmpeg = Invoke-Command -Session $script:Session -ScriptBlock {
             if (Test-Path "C:\CableAudio\ffmpeg.exe") { "C:\CableAudio\ffmpeg.exe" }
@@ -127,8 +127,8 @@ Describe "Audio quality: Cable routing signal continuity" {
         $durations = [regex]::Matches($outputStr, 'silence_duration:\s*([\d.]+)') |
             ForEach-Object { [double]$_.Groups[1].Value }
 
-        $longSilences = @($durations | Where-Object { $_ -ge 0.1 })
+        $longSilences = @($durations | Where-Object { $_ -ge 0.05 })
         $longSilences | Should -BeNullOrEmpty `
-            -Because ("ffmpeg detected silence >= 100 ms: " + ($longSilences -join ", ") + " s")
+            -Because ("ffmpeg detected silence >= 50 ms: " + ($longSilences -join ", ") + " s")
     }
 }
