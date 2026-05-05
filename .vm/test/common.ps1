@@ -504,7 +504,9 @@ function Invoke-GuestCSharpTest {
     $usings = [System.Collections.Generic.List[string]]::new()
     $body   = [System.Collections.Generic.List[string]]::new()
     foreach ($line in $lines) {
-        if ($line.TrimStart() -match '^using\s+') {
+        # Match only namespace-import directives like "using System;" or
+        # "using System.IO;" — not using-statements like "using (var x = ...)".
+        if ($line.TrimStart() -match '^using\s+[A-Za-z_]') {
             $trimmed = $line.Trim()
             if (-not $usings.Contains($trimmed)) {
                 $usings.Add($trimmed)
