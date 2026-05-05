@@ -47,6 +47,11 @@
 .PARAMETER TestFilter
     Pester -FullNameFilter pattern. Runs all tests by default.
 
+.PARAMETER FfmpegExePath
+    Optional path to ffmpeg.exe on the host machine.  When provided, the
+    audio-quality test copies it into the guest and runs ffmpeg silencedetect
+    on the captured WAV file.  The ffmpeg test is skipped (Pending) when omitted.
+
 .EXAMPLE
     .vm\test.ps1
 
@@ -55,6 +60,9 @@
 
 .EXAMPLE
     .vm\test.ps1 -TestFilter "*PKEY*" -RenameLoopCount 1
+
+.EXAMPLE
+    .vm\test.ps1 -TestFilter "*quality*" -FfmpegExePath "C:\tools\ffmpeg.exe" -ReuseVm
 #>
 [CmdletBinding()]
 param(
@@ -77,7 +85,11 @@ param(
     # run.  Cuts per-suite overhead from ~50s to ~2s; safe when tests clean up
     # their own state (which all REST-based tests do).  Use the default (off)
     # when you need strict isolation between every Describe block.
-    [switch]$ReuseVm
+    [switch]$ReuseVm,
+    # Optional path to ffmpeg.exe on the host machine.  When provided, the
+    # audio-quality test copies it into the guest and runs ffmpeg silencedetect
+    # on the captured WAV file.  The test is skipped (Pending) when omitted.
+    [string]$FfmpegExePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -130,6 +142,7 @@ $global:VmContext = @{
     RenameLoopCount = $RenameLoopCount
     AppExePath      = $AppExePath
     ReuseVm         = $ReuseVm.IsPresent
+    FfmpegExePath   = $FfmpegExePath
 }
 
 # ------------------------------------------------------------------

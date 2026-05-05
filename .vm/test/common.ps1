@@ -452,6 +452,31 @@ function Assert-NoGuestBugCheck {
 # Shared C# interop library loader and guest test runner.
 # ---------------------------------------------------------------------------
 
+# Copy ffmpeg.exe from the host into C:\CableAudio\ffmpeg.exe inside the guest.
+# A global flag ensures the copy only happens once per test run even when
+# multiple test files call this function under -ReuseVm.
+function Install-GuestFfmpeg {
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory)]
+        [string]$HostFfmpegPath
+    )
+
+    if ($global:_cableGuestFfmpegInstalled) { return }
+
+    $alreadyPresent = Invoke-Command -Session $Session -ScriptBlock {
+        Test-Path "C:\CableAudio\ffmpeg.exe"
+    }
+
+    if (-not $alreadyPresent) {
+        Write-Host "Copying ffmpeg to guest C:\CableAudio\ffmpeg.exe ..."
+        Copy-Item -Path $HostFfmpegPath -Destination "C:\CableAudio\ffmpeg.exe" -ToSession $Session
+    }
+
+    $global:_cableGuestFfmpegInstalled = $true
+}
+
 function Get-CSharpLib {
     param([string]$Name)
     $path = Join-Path $PSScriptRoot "lib\$Name.cs"
