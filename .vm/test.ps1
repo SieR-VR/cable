@@ -47,6 +47,11 @@
 .PARAMETER TestFilter
     Pester -FullNameFilter pattern. Runs all tests by default.
 
+.PARAMETER FfmpegExePath
+    Optional path to ffmpeg.exe on the host machine.  When provided, the
+    audio-quality test copies it into the guest and runs ffmpeg silencedetect
+    on the captured WAV file.  The ffmpeg test is skipped (Pending) when omitted.
+
 .EXAMPLE
     .vm\test.ps1
 
@@ -55,11 +60,14 @@
 
 .EXAMPLE
     .vm\test.ps1 -TestFilter "*PKEY*" -RenameLoopCount 1
+
+.EXAMPLE
+    .vm\test.ps1 -TestFilter "*quality*" -FfmpegExePath "C:\tools\ffmpeg.exe" -ReuseVm
 #>
 [CmdletBinding()]
 param(
     [string]$VmxPath        = ".vm/cable-vm/cable-vm.vmx",
-    [string]$SnapshotName   = "tiny11-winrm-enabled",
+    [string]$SnapshotName   = "tiny11-vmtest",
     [string]$ComputerName   = "192.168.23.128",
     [int]   $Port           = 5985,
     [string]$Username       = "cable",
@@ -69,7 +77,19 @@ param(
     [int]   $BootTimeoutSec = 240,
     [int]   $RenameLoopCount = 3,
     [string]$VmPassword,
-    [string]$TestFilter
+    [string]$TestFilter,
+    # Path to cable-tauri.exe on the host; required for tests that start the
+    # headless HTTP-RPC server inside the VM (e.g. ioctl, PKEY, loopback).
+    [string]$AppExePath = "",
+    # When set, skips snapshot revert and VM boot for the 2nd+ test suite in a
+    # run.  Cuts per-suite overhead from ~50s to ~2s; safe when tests clean up
+    # their own state (which all REST-based tests do).  Use the default (off)
+    # when you need strict isolation between every Describe block.
+    [switch]$ReuseVm,
+    # Optional path to ffmpeg.exe on the host machine.  When provided, the
+    # audio-quality test copies it into the guest and runs ffmpeg silencedetect
+    # on the captured WAV file.  The test is skipped (Pending) when omitted.
+    [string]$FfmpegExePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -120,6 +140,9 @@ $global:VmContext = @{
     StartMode       = $StartMode
     BootTimeoutSec  = $BootTimeoutSec
     RenameLoopCount = $RenameLoopCount
+    AppExePath      = $AppExePath
+    ReuseVm         = $ReuseVm.IsPresent
+    FfmpegExePath   = $FfmpegExePath
 }
 
 # ------------------------------------------------------------------

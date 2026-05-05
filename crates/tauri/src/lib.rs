@@ -13,12 +13,18 @@ use tauri_plugin_store::StoreExt;
 
 pub(crate) mod bluetooth;
 pub(crate) mod driver;
+pub mod headless;
 pub(crate) mod nodes;
 mod runtime;
 pub(crate) mod vst3_common;
 
 #[cfg(windows)]
 pub use driver::endpoint::rename_endpoint_elevated;
+
+#[cfg(windows)]
+pub use driver::endpoint::set_endpoint_format_elevated;
+
+pub use headless::run_headless;
 
 /// A virtual audio device managed by the driver, independent of the audio graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,8 +33,27 @@ pub(crate) struct VirtualDevice {
   pub id: String,
   pub name: String,
   pub device_type: String,
-  #[serde(skip)]
+  /// Channel count for this device's expected audio format.
+  #[serde(default = "default_channels")]
+  pub channels: u32,
+  /// Sample rate for this device's expected audio format.
+  #[serde(default = "default_sample_rate")]
+  pub sample_rate: u32,
+  /// Bits per sample for this device's expected audio format.
+  #[serde(default = "default_bits_per_sample")]
+  pub bits_per_sample: u32,
+  #[serde(default)]
   pub endpoint_id: String,
+}
+
+fn default_channels() -> u32 {
+  2
+}
+fn default_sample_rate() -> u32 {
+  48000
+}
+fn default_bits_per_sample() -> u32 {
+  32
 }
 
 pub(crate) struct AppData {
@@ -343,6 +368,9 @@ pub fn run() {
       driver::commands::create_virtual_device,
       driver::commands::remove_virtual_device,
       driver::commands::rename_virtual_device,
+      driver::commands::restore_virtual_devices,
+      driver::commands::set_virtual_device_format,
+      driver::commands::sync_virtual_device_formats,
       runtime::add_node,
       runtime::remove_node,
       runtime::update_node,

@@ -87,6 +87,32 @@ declare module "@tauri-apps/api/core" {
     },
   ): Promise<void>;
 
+  declare function invoke(
+    cmd: "restore_virtual_devices",
+    args: {
+      devices: VirtualDevice[];
+    },
+  ): Promise<void>;
+
+  declare function invoke(
+    cmd: "set_virtual_device_format",
+    args: {
+      deviceId: string;
+      channels: number;
+      sampleRate: number;
+      bitsPerSample: number;
+    },
+  ): Promise<void>;
+
+  /**
+   * Read the current PKEY_AudioEngine_DeviceFormat from each virtual device's
+   * Windows MM endpoint. Returns system-authoritative format values.
+   * Each entry is [id, sampleRate, channels, bitsPerSample].
+   */
+  declare function invoke(
+    cmd: "sync_virtual_device_formats",
+  ): Promise<[string, number, number, number][]>;
+
   declare function invoke(cmd: "open_devtools"): Promise<void>;
 
   declare function invoke(cmd: "get_node_render_data"): Promise<Record<string, NodeRenderData>>;

@@ -68,6 +68,18 @@ export interface VirtualDevice {
   name: string;
   /** "render" or "capture". */
   deviceType: string;
+  /** Channel count for the device's expected audio format. Defaults to 2. */
+  channels?: number;
+  /** Sample rate in Hz for the device's expected audio format. Defaults to 48000. */
+  sampleRate?: number;
+  /** Bits per sample for the device's expected audio format. Defaults to 32. */
+  bitsPerSample?: number;
+  /**
+   * Windows MM audio endpoint ID (e.g. "{0.0.0.00000000}.{guid}").
+   * Set when the device is first created; persisted in settings.json so the
+   * frontend can filter virtual devices out of normal device dropdowns.
+   */
+  endpointId?: string;
 }
 
 /** VST3 plugin info returned by the scan command. */

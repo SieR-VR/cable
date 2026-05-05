@@ -23,7 +23,7 @@
     Path to the .vmx file (default: .vm/cable-vm/cable-vm.vmx).
 
 .PARAMETER SnapshotName
-    Snapshot to revert to (default: tiny11-winrm-enabled).
+    Snapshot to revert to (default: tiny11-vmtest).
 
 .PARAMETER ComputerName
     Guest IP address for WinRM (default: 192.168.23.128).
@@ -71,7 +71,7 @@
 [CmdletBinding()]
 param(
     [string]$VmxPath        = ".vm/cable-vm/cable-vm.vmx",
-    [string]$SnapshotName   = "tiny11-winrm-enabled",
+    [string]$SnapshotName   = "tiny11-vmtest",
     [string]$ComputerName   = "192.168.23.128",
     [int]   $Port           = 5985,
     [string]$Username       = "cable",

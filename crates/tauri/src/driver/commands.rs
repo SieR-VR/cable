@@ -6,7 +6,8 @@ use tauri::{async_runtime::Mutex, State};
 
 use super::client;
 use crate::driver::endpoint::{
-  elevated_set_endpoint_device_desc, endpoint_exists, find_new_endpoint_id, snapshot_endpoint_ids,
+  elevated_set_endpoint_device_desc, elevated_set_endpoint_device_format, endpoint_exists,
+  find_new_endpoint_id, read_endpoint_device_format, snapshot_endpoint_ids,
 };
 use crate::{AppData, VirtualDevice};
 /// Try to open a handle to the CableAudio kernel driver.
@@ -150,6 +151,9 @@ pub async fn create_virtual_device(
       id: hex_id.clone(),
       name,
       device_type,
+      channels: 2,
+      sample_rate: 48000,
+      bits_per_sample: 32,
       endpoint_id,
     };
     // Re-acquire the lock to persist the new device entry.
@@ -302,4 +306,151 @@ pub(crate) fn hex_to_device_id(hex: &str) -> Result<crate::driver::types::Device
   let mut id = [0u8; 16];
   id.copy_from_slice(&bytes);
   Ok(id)
+}
+
+/// Restore a list of virtual devices into AppData from persisted frontend state.
+///
+/// Called on app startup after `connect_driver` succeeds to repopulate the
+/// in-memory device map from the frontend's persisted `settings.json`. Any
+/// device already present in AppData (by ID) is left untouched.
+#[tauri::command]
+pub async fn restore_virtual_devices(
+  state: State<'_, Mutex<AppData>>,
+  devices: Vec<VirtualDevice>,
+) -> Result<(), String> {
+  let mut app = state.lock().await;
+  for device in devices {
+    let id = device.id.clone();
+    app.virtual_devices.entry(id).or_insert(device);
+  }
+  Ok(())
+}
+
+/// Update the format preset for a virtual device.
+///
+/// Stores the preferred audio format (channels, sample rate, bits per sample)
+/// alongside the device entry so the graph validation engine can check that
+/// connected audio edges match the device's expected format.
+///
+/// If the device has a known Windows MM endpoint ID the format change is also
+/// applied to the endpoint's `PKEY_AudioEngine_DeviceFormat` property via an
+/// elevated sub-process, so Windows Audio Engine uses the new format the next
+/// time the device is opened by a client application.
+#[tauri::command]
+pub async fn set_virtual_device_format(
+  state: State<'_, Mutex<AppData>>,
+  device_id: String,
+  channels: u32,
+  sample_rate: u32,
+  bits_per_sample: u32,
+) -> Result<(), String> {
+  // Validate parameters early.
+  if channels == 0 || channels > 8 {
+    return Err(format!("Unsupported channel count: {}", channels));
+  }
+  if bits_per_sample != 16 && bits_per_sample != 24 && bits_per_sample != 32 {
+    return Err(format!(
+      "Unsupported bits_per_sample: {}. Must be 16, 24, or 32.",
+      bits_per_sample
+    ));
+  }
+
+  // Retrieve the endpoint_id before releasing the lock, then update metadata.
+  let endpoint_id = {
+    let mut app = state.lock().await;
+    let device = app
+      .virtual_devices
+      .get_mut(&device_id)
+      .ok_or_else(|| format!("Device {} not found", device_id))?;
+    device.channels = channels;
+    device.sample_rate = sample_rate;
+    device.bits_per_sample = bits_per_sample;
+    device.endpoint_id.clone()
+  };
+
+  // Attempt to apply the format to the Windows MM endpoint via an elevated
+  // subprocess (requires UAC consent). This is a best-effort operation:
+  // if it fails (e.g. no endpoint yet, UAC cancelled) the metadata update
+  // above still takes effect for graph validation.
+  #[cfg(windows)]
+  if !endpoint_id.is_empty() {
+    let ep = endpoint_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+      elevated_set_endpoint_device_format(&ep, sample_rate, channels as u16, bits_per_sample as u16)
+    })
+    .await;
+
+    match result {
+      Ok(Ok(())) => {
+        println!(
+          "set_virtual_device_format: applied {} Hz / {} ch / {}-bit to endpoint '{}'",
+          sample_rate, channels, bits_per_sample, endpoint_id
+        );
+      }
+      Ok(Err(e)) => {
+        eprintln!(
+          "set_virtual_device_format: elevated format change failed (non-fatal): {}",
+          e
+        );
+        return Err(format!("Format applied locally but endpoint update failed: {}", e));
+      }
+      Err(e) => {
+        eprintln!("set_virtual_device_format: spawn_blocking error: {}", e);
+      }
+    }
+  }
+
+  Ok(())
+}
+
+/// Read the actual `PKEY_AudioEngine_DeviceFormat` from each virtual device's
+/// Windows MM endpoint and return the system-authoritative format values.
+///
+/// Called on startup after `restore_virtual_devices` so that format changes
+/// made via mmsys.cpl (or any other tool) while the app was closed are
+/// reflected in the UI state.
+///
+/// Returns a list of `(id, sample_rate, channels, bits_per_sample)` tuples for
+/// every device whose endpoint ID is known and whose format was read
+/// successfully. Devices without an endpoint ID or that fail the read are
+/// silently skipped.
+#[tauri::command]
+pub async fn sync_virtual_device_formats(
+  state: State<'_, Mutex<AppData>>,
+) -> Result<Vec<(String, u32, u32, u32)>, String> {
+  let endpoint_map: Vec<(String, String)> = {
+    let app = state.lock().await;
+    app
+      .virtual_devices
+      .values()
+      .filter(|d| !d.endpoint_id.is_empty())
+      .map(|d| (d.id.clone(), d.endpoint_id.clone()))
+      .collect()
+  };
+
+  let mut results: Vec<(String, u32, u32, u32)> = Vec::new();
+
+  #[cfg(windows)]
+  for (device_id, endpoint_id) in endpoint_map {
+    let ep = endpoint_id.clone();
+    let read_result =
+      tauri::async_runtime::spawn_blocking(move || read_endpoint_device_format(&ep)).await;
+
+    match read_result {
+      Ok(Ok((sample_rate, channels, bits_per_sample))) => {
+        results.push((device_id, sample_rate, channels as u32, bits_per_sample as u32));
+      }
+      Ok(Err(e)) => {
+        eprintln!(
+          "sync_virtual_device_formats: skipping '{}' (endpoint '{}'): {}",
+          device_id, endpoint_id, e
+        );
+      }
+      Err(e) => {
+        eprintln!("sync_virtual_device_formats: spawn_blocking error: {}", e);
+      }
+    }
+  }
+
+  Ok(results)
 }

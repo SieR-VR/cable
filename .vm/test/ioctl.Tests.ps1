@@ -1,29 +1,22 @@
-# IOCTL test suite for CableAudio driver.
-# Both capture and render create/remove are tested in one VM session since each
-# It block performs a clean create→remove cycle with no leftover state.
+# IOCTL create/remove tests via headless REST API.
+# Replaces the previous C# IOCTL-based test: virtual device lifecycle is now
+# exercised through the app's HTTP RPC server, which mirrors the production
+# code path used by the GUI.
 
 BeforeAll {
     . (Join-Path $PSScriptRoot "common.ps1")
-    $script:ioctlCs = Get-CSharpLib "CableIoctl"
-
-    $script:ioctlHelpers = @'
-function Run-CreateRemove {
-    param([int]$DeviceType, [string]$Name)
-    $create = [CableIoctl]::Create($DeviceType, $Name)
-    if ($create -notlike "CREATE OK: Id=*") { return @($create) }
-    $id = [CableIoctl]::ParseCreateId($create)
-    $remove = [CableIoctl]::Remove($id)
-    return @($create, $remove)
-}
-'@
 }
 
 Describe "IOCTL: device create/remove" {
     BeforeAll {
         $script:Session = Reset-Vm @VmContext
+        Copy-GuestAppExe -Session $script:Session -ExePath $VmContext.AppExePath -ReuseVm $VmContext.ReuseVm
+        Start-GuestHeadlessApp -Session $script:Session
+        Invoke-AppRpc -Session $script:Session -Method POST -Path "/driver/connect" | Out-Null
     }
 
     AfterAll {
+        Stop-GuestHeadlessApp -Session $script:Session
         if ($script:Session) {
             Assert-NoGuestBugCheck -ComputerName $VmContext.ComputerName -Port $VmContext.Port -Username $VmContext.Username -Password $VmContext.Password -Context "IOCTL device create/remove"
             Remove-PSSession $script:Session -ErrorAction SilentlyContinue
@@ -31,32 +24,24 @@ Describe "IOCTL: device create/remove" {
     }
 
     It "creates a capture (mic) device and removes it cleanly" {
-        $output = Invoke-GuestCSharpTest -Session $script:Session `
-            -CSharpSources @($script:ioctlCs) `
-            -HelperFunctions $script:ioctlHelpers `
-            -Script {
-                $results = @()
-                $results += Run-CreateRemove -DeviceType 1 -Name "IOCTL Mic Test"
-                $results
-            } `
-            -TempFileName "ioctl-suite"
+        $device = Invoke-AppRpc -Session $script:Session -Method POST -Path "/virtual-devices" `
+            -Body @{ name = "IOCTL Mic Test"; deviceType = "capture" }
 
-        $output | Should -Not -Match 'FAILED|ERR:'
-        $output | Should -Contain "REMOVE OK"
+        $device | Should -Not -BeNullOrEmpty
+        $device.id | Should -Not -BeNullOrEmpty
+        $device.deviceType | Should -Be "capture"
+
+        Invoke-AppRpc -Session $script:Session -Method DELETE -Path "/virtual-devices/$($device.id)" | Out-Null
     }
 
     It "creates a render (speaker) device and removes it cleanly" {
-        $output = Invoke-GuestCSharpTest -Session $script:Session `
-            -CSharpSources @($script:ioctlCs) `
-            -HelperFunctions $script:ioctlHelpers `
-            -Script {
-                $results = @()
-                $results += Run-CreateRemove -DeviceType 0 -Name "IOCTL Speaker Test"
-                $results
-            } `
-            -TempFileName "ioctl-suite"
+        $device = Invoke-AppRpc -Session $script:Session -Method POST -Path "/virtual-devices" `
+            -Body @{ name = "IOCTL Speaker Test"; deviceType = "render" }
 
-        $output | Should -Not -Match 'FAILED|ERR:'
-        $output | Should -Contain "REMOVE OK"
+        $device | Should -Not -BeNullOrEmpty
+        $device.id | Should -Not -BeNullOrEmpty
+        $device.deviceType | Should -Be "render"
+
+        Invoke-AppRpc -Session $script:Session -Method DELETE -Path "/virtual-devices/$($device.id)" | Out-Null
     }
 }

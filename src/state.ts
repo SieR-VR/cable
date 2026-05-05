@@ -134,6 +134,16 @@ export interface AppState {
   addVirtualDevice: (name: string, deviceType: "render" | "capture") => Promise<void>;
   removeVirtualDevice: (deviceId: string) => Promise<void>;
   renameVirtualDevice: (deviceId: string, newName: string) => Promise<void>;
+  /**
+   * Update the format preset for a virtual device and propagate the change to
+   * any graph nodes that reference that device, then re-validate.
+   */
+  setVirtualDeviceFormat: (
+    deviceId: string,
+    channels: number,
+    sampleRate: number,
+    bitsPerSample: number,
+  ) => Promise<void>;
 
   onNodesChange: (changes: NodeChange<NodeType>[]) => void;
   onEdgesChange: (changes: EdgeChange<EdgeType>[]) => void;
@@ -436,13 +446,39 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
     }
 
     async function initDriver() {
+      // Always load persisted virtual devices so they are available in the UI
+      // even when the driver is offline.
+      const persistedDevices = await readSetting<VirtualDevice[]>(SETTING_KEYS.virtualDevices);
+      if (Array.isArray(persistedDevices) && persistedDevices.length > 0) {
+        set({ virtualDevices: persistedDevices });
+      }
+
       try {
         const connected = await invoke<boolean>("connect_driver");
         set({ driverConnected: connected });
 
-        if (connected) {
-          const devices = await invoke<VirtualDevice[]>("list_virtual_devices");
-          set({ virtualDevices: devices });
+        if (connected && Array.isArray(persistedDevices) && persistedDevices.length > 0) {
+          // Repopulate the backend's in-memory device map from the persisted
+          // list so that remove/rename/ring-buffer commands work correctly.
+          await invoke("restore_virtual_devices", { devices: persistedDevices });
+
+          // Sync actual format from system (reflects mmsys.cpl changes made
+          // while the app was closed or by other tools).
+          try {
+            const synced = await invoke("sync_virtual_device_formats");
+            if (synced.length > 0) {
+              const updated = get().virtualDevices.map((d) => {
+                const entry = synced.find(([id]) => id === d.id);
+                if (!entry) return d;
+                const [, sampleRate, channels, bitsPerSample] = entry;
+                return { ...d, sampleRate, channels, bitsPerSample };
+              });
+              set({ virtualDevices: updated });
+              persistSetting(SETTING_KEYS.virtualDevices, updated);
+            }
+          } catch (e) {
+            console.warn("sync_virtual_device_formats failed (non-fatal):", e);
+          }
         }
       } catch (e) {
         console.warn("Failed to connect to CableAudio driver:", e);
@@ -471,7 +507,12 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
         name,
         deviceType,
       });
-      set({ virtualDevices: [...get().virtualDevices, device] });
+      const updated = [...get().virtualDevices, device];
+      set({ virtualDevices: updated });
+      fireAndForget(
+        persistSetting(SETTING_KEYS.virtualDevices, updated),
+        "persist virtual devices (add)",
+      );
     } catch (e) {
       console.error("Failed to create virtual device:", e);
       throw e;
@@ -481,9 +522,12 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
   removeVirtualDevice: async (deviceId) => {
     try {
       await invoke("remove_virtual_device", { deviceId });
-      set({
-        virtualDevices: get().virtualDevices.filter((d) => d.id !== deviceId),
-      });
+      const updated = get().virtualDevices.filter((d) => d.id !== deviceId);
+      set({ virtualDevices: updated });
+      fireAndForget(
+        persistSetting(SETTING_KEYS.virtualDevices, updated),
+        "persist virtual devices (remove)",
+      );
     } catch (e) {
       console.error("Failed to remove virtual device:", e);
       throw e;
@@ -493,15 +537,61 @@ export const useAppStore = createWithEqualityFn<AppState>((set, get) => {
   renameVirtualDevice: async (deviceId, newName) => {
     try {
       await invoke("rename_virtual_device", { deviceId, newName });
-      set({
-        virtualDevices: get().virtualDevices.map((d) =>
-          d.id === deviceId ? { ...d, name: newName } : d,
-        ),
-      });
+      const updated = get().virtualDevices.map((d) =>
+        d.id === deviceId ? { ...d, name: newName } : d,
+      );
+      set({ virtualDevices: updated });
+      fireAndForget(
+        persistSetting(SETTING_KEYS.virtualDevices, updated),
+        "persist virtual devices (rename)",
+      );
     } catch (e) {
       console.error("Failed to rename virtual device:", e);
       throw e;
     }
+  },
+
+  setVirtualDeviceFormat: async (deviceId, channels, sampleRate, bitsPerSample) => {
+    try {
+      await invoke("set_virtual_device_format", {
+        deviceId,
+        channels,
+        sampleRate,
+        bitsPerSample,
+      });
+    } catch (e) {
+      // Backend command may fail when the driver is not connected; proceed
+      // with updating local state regardless so the UI stays consistent.
+      console.warn("set_virtual_device_format backend call failed:", e);
+    }
+
+    // Update the device's format in the store.
+    const updated = get().virtualDevices.map((d) =>
+      d.id === deviceId ? { ...d, channels, sampleRate, bitsPerSample } : d,
+    );
+    set({ virtualDevices: updated });
+
+    // Propagate the new format to any graph nodes that reference this device
+    // so the validation engine picks up the change immediately.
+    const nodeIds: string[] = [];
+    const newNodes = get().nodes.map((n) => {
+      const data = n.data as any;
+      if (data?.deviceId === deviceId) {
+        nodeIds.push(n.id);
+        return { ...n, data: { ...data, channels, sampleRate, bitsPerSample } };
+      }
+      return n;
+    });
+    set({ nodes: newNodes as any });
+
+    if (nodeIds.length > 0) {
+      applyCascade(nodeIds);
+    }
+
+    fireAndForget(
+      persistSetting(SETTING_KEYS.virtualDevices, updated),
+      "persist virtual devices (format)",
+    );
   },
 
   onNodesChange: (changes) => {

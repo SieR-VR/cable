@@ -178,21 +178,50 @@ describe("per-node validators", () => {
     expect(r.producedOutputs["WaveformMonitor-source"]).toEqual(audioType(2, 48000, 24));
   });
 
-  it("VirtualAudioInput produces default audio when deviceId is set", () => {
+  it("VirtualAudioInput expects default audio format on its target handle when deviceId is set", () => {
     const r = virtualAudioInputDef.validate!(
       { deviceId: "abc", name: "Mic" } as any,
       {},
     );
     expect(r.ok).toBe(true);
-    expect(r.producedOutputs["VirtualAudioInput-source"]?.kind).toBe("audio");
+    expect(r.expectedInputs["VirtualAudioInput-target"]).toEqual(audioType(2, 48000, 32));
+    expect(Object.keys(r.producedOutputs)).toHaveLength(0);
   });
 
-  it("VirtualAudioOutput accepts the default audio format", () => {
-    const r = virtualAudioOutputDef.validate!(
-      { deviceId: "abc", name: "Speaker" } as any,
-      { "VirtualAudioOutput-target": audioType(2, 48000, 32) },
+  it("VirtualAudioInput uses custom format preset when provided", () => {
+    const r = virtualAudioInputDef.validate!(
+      { deviceId: "abc", name: "Mic", channels: 1, sampleRate: 44100, bitsPerSample: 16 } as any,
+      {},
     );
     expect(r.ok).toBe(true);
+    expect(r.expectedInputs["VirtualAudioInput-target"]).toEqual(audioType(1, 44100, 16));
+  });
+
+  it("VirtualAudioInput rejects mismatched format on its target handle", () => {
+    const r = virtualAudioInputDef.validate!(
+      { deviceId: "abc", name: "Mic" } as any,
+      { "VirtualAudioInput-target": audioType(2, 44100, 32) },
+    );
+    expect(r.ok).toBe(false);
+  });
+
+  it("VirtualAudioOutput produces default audio on its source handle when deviceId is set", () => {
+    const r = virtualAudioOutputDef.validate!(
+      { deviceId: "abc", name: "Speaker" } as any,
+      {},
+    );
+    expect(r.ok).toBe(true);
+    expect(r.producedOutputs["VirtualAudioOutput-source"]).toEqual(audioType(2, 48000, 32));
+    expect(Object.keys(r.expectedInputs)).toHaveLength(0);
+  });
+
+  it("VirtualAudioOutput uses custom format preset when provided", () => {
+    const r = virtualAudioOutputDef.validate!(
+      { deviceId: "abc", name: "Speaker", channels: 2, sampleRate: 96000, bitsPerSample: 24 } as any,
+      {},
+    );
+    expect(r.ok).toBe(true);
+    expect(r.producedOutputs["VirtualAudioOutput-source"]).toEqual(audioType(2, 96000, 24));
   });
 });
 

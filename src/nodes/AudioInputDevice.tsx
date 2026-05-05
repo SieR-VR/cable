@@ -26,9 +26,22 @@ const selector = (id: string) => (store: AppState) => ({
 });
 
 export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) {
-  const { availableAudioInputDevices } = useAppStore();
+  const { availableAudioInputDevices, virtualDevices } = useAppStore();
   const { setDevice } = useAppStore(selector(id));
   const btInfo = useBluetoothInfo(data?.device ?? null);
+
+  // Exclude Cable virtual audio devices from the dropdown — those are managed
+  // through the virtual device panel and should not be selectable as plain inputs.
+  // cpal device IDs use the "wasapi:{endpoint_id}" format, while endpointId from the
+  // driver uses the raw "{endpoint_id}" format, so we prepend the host prefix to match.
+  const virtualEndpointIds = new Set(
+    virtualDevices
+      .map((d) => (d.endpointId ? `wasapi:${d.endpointId}` : null))
+      .filter((id): id is string => Boolean(id)),
+  );
+  const filteredDevices = availableAudioInputDevices?.filter(
+    (d) => !virtualEndpointIds.has(d.id),
+  );
 
   return (
     <NodeShell accent={NODE_ACCENTS.audioInputDevice} title="Audio Input" invalid={(data as any)?.invalid}>
@@ -37,14 +50,14 @@ export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) 
         value={data?.device?.id ?? ""}
         onChange={(e) => {
           setDevice(
-            availableAudioInputDevices?.find((device) => device.id === e.target.value) || null,
+            filteredDevices?.find((device) => device.id === e.target.value) || null,
           );
         }}
       >
-        {availableAudioInputDevices ? (
+        {filteredDevices ? (
           <>
             <option value="">-- Select an audio input device --</option>
-            {availableAudioInputDevices.map((device) => (
+            {filteredDevices.map((device) => (
               <option key={device.id} value={device.id}>
                 {device.descriptions?.join("\n")}
               </option>
@@ -54,7 +67,7 @@ export function AudioInputDevice({ id, data }: NodeProps<AudioInputDeviceNode>) 
           <option disabled>Loading devices...</option>
         )}
       </select>
-      {!availableAudioInputDevices && (
+      {!filteredDevices && (
         <div className="text-xs text-gray-400">{"Loading..."}</div>
       )}
       <BluetoothBadge info={btInfo} />

@@ -4,18 +4,25 @@ import { AudioHandle } from "@/components/AudioHandle";
 import { NODE_ACCENTS, NodeShell } from "@/components/NodeShell";
 import { AppState, useAppStore } from "@/state";
 import { NodeDefinition } from "@/node-definition";
-import { NONE, audioType } from "@/graph/edge-type";
+import { NONE, audioType, isCompatible } from "@/graph/edge-type";
 
 export type VirtualAudioInputNodeData = {
   deviceId: string;
   name: string;
   edgeType: string | null;
+  /** Channel count from the device's format preset. */
+  channels?: number;
+  /** Sample rate from the device's format preset. */
+  sampleRate?: number;
+  /** Bits per sample from the device's format preset. */
+  bitsPerSample?: number;
 };
 
 export type VirtualAudioInputNode = Node<VirtualAudioInputNodeData, "virtualAudioInput">;
 
 const selector = (id: string) => (store: AppState) => ({
-  setDevice: (deviceId: string, name: string) => store.updateNode(id, { deviceId, name }),
+  setDevice: (deviceId: string, name: string, channels?: number, sampleRate?: number, bitsPerSample?: number) =>
+    store.updateNode(id, { deviceId, name, channels, sampleRate, bitsPerSample }),
 });
 
 export function VirtualAudioInput({ id, data }: NodeProps<VirtualAudioInputNode>) {
@@ -31,7 +38,13 @@ export function VirtualAudioInput({ id, data }: NodeProps<VirtualAudioInputNode>
         value={data.deviceId || ""}
         onChange={(e) => {
           const device = captureDevices.find((d) => d.id === e.target.value);
-          setDevice(e.target.value, device?.name || "");
+          setDevice(
+            e.target.value,
+            device?.name || "",
+            device?.channels,
+            device?.sampleRate,
+            device?.bitsPerSample,
+          );
         }}
       >
         <option value="">-- Select virtual mic --</option>
@@ -62,16 +75,23 @@ const definition: NodeDefinition<VirtualAudioInputNode> = {
       name: node.data.name || "",
     },
   }),
-  handles: { inputs: [], outputs: ["VirtualAudioInput-source"] },
-  validate: (state) => {
-    // Driver currently negotiates a fixed engine format; until that is exposed
-    // back to the UI we report `none` when no device is bound and a default
-    // 48k stereo 32-bit float when one is.
-    const t = state.deviceId ? audioType(2, 48000, 32) : NONE;
+  // VirtualAudioInput is a SINK: receives audio from the graph and writes
+  // it to the virtual microphone ring buffer. The "target" handle accepts
+  // incoming audio; there is no output handle.
+  handles: { inputs: ["VirtualAudioInput-target"], outputs: [] },
+  validate: (state, inputs) => {
+    // Use the device's format preset for the expected input type.
+    // Falls back to the driver default (48kHz / stereo / 32-bit) when no
+    // preset is stored on the node data.
+    const channels = state.channels ?? 2;
+    const sampleRate = state.sampleRate ?? 48000;
+    const bitsPerSample = state.bitsPerSample ?? 32;
+    const expected = state.deviceId ? audioType(channels, sampleRate, bitsPerSample) : NONE;
+    const actual = inputs["VirtualAudioInput-target"] ?? NONE;
     return {
-      expectedInputs: {},
-      producedOutputs: { "VirtualAudioInput-source": t },
-      ok: true,
+      expectedInputs: { "VirtualAudioInput-target": expected },
+      producedOutputs: {},
+      ok: !state.deviceId || isCompatible(actual, expected),
     };
   },
 };
